@@ -26,10 +26,16 @@ def run_tests():
             
         # Проверяем ключевые поля
         errors = []
-        if result.intent.split('_')[0] != expected.get("intent", "").split('_')[0]:
-            # Упрощенная проверка (create_task == create)
-            errors.append(f"intent: ожидалось {expected.get('intent')}, получено {result.intent}")
-            
+        
+        # Умная проверка intent (чтобы create_task == create)
+        expected_intent = expected.get("intent", "")
+        actual_intent = result.intent
+        if expected_intent == "create":
+            if not actual_intent.startswith("create_"):
+                errors.append(f"intent: ожидалось create, получено {actual_intent}")
+        elif expected_intent != actual_intent:
+            errors.append(f"intent: ожидалось {expected_intent}, получено {actual_intent}")
+
         if expected.get("text") and result.text != expected.get("text"):
             errors.append(f"text: ожидалось '{expected.get('text')}', получено '{result.text}'")
             
