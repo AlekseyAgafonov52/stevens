@@ -14,8 +14,14 @@ class TaskType(str, enum.Enum):
 
 
 class TaskStatus(str, enum.Enum):
-    pending = "pending"
+    open = "open" 
     done = "done"
+
+
+class DateKind(str, enum.Enum):
+    exact = "exact"      # В этот момент
+    deadline = "deadline" # До этой даты
+    none = "none"        # Без срока
 
 
 class Task(Base):
@@ -25,16 +31,18 @@ class Task(Base):
     type: Mapped[TaskType] = mapped_column(
         Enum(TaskType, name="task_type"), default=TaskType.task, nullable=False
     )
-    title: Mapped[str] = mapped_column(String(255), nullable=False)
-    description: Mapped[str | None] = mapped_column(Text, nullable=True)
-    # Когда нужно напомнить / провести встречу
-    datetime: Mapped[dt | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    text: Mapped[str] = mapped_column(String(255), nullable=False) # <-- Было title, стало text
+    date: Mapped[str | None] = mapped_column(String(10), nullable=True) # "YYYY-MM-DD"
+    time: Mapped[str | None] = mapped_column(String(5), nullable=True)  # "HH:MM"
+    date_kind: Mapped[DateKind] = mapped_column(
+        Enum(DateKind, name="date_kind"), default=DateKind.none, nullable=False
+    )
     status: Mapped[TaskStatus] = mapped_column(
-        Enum(TaskStatus, name="task_status"), default=TaskStatus.pending, nullable=False
+        Enum(TaskStatus, name="task_status"), default=TaskStatus.open, nullable=False
     )
     created_at: Mapped[dt] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
 
     def __repr__(self) -> str:
-        return f"<Task id={self.id} title={self.title!r} type={self.type}>"
+        return f"<Task id={self.id} text={self.text!r} type={self.type}>"

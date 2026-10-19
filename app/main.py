@@ -5,7 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.database import engine, Base
 # Импортируем роутер задач
-from app.routers import tasks
+from app.routers import tasks, chat  # <-- Добавили chat
 # Импортируем модели, чтобы SQLAlchemy знала о них при создании таблиц
 from app import models  # noqa: F401 
 
@@ -44,6 +44,7 @@ app.add_middleware(
 
 # Подключаем наши роуты
 app.include_router(tasks.router)
+app.include_router(chat.router)  
 
 @app.get("/")
 async def root():
