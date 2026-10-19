@@ -16,8 +16,8 @@ async def lifespan(app: FastAPI):
     Всё, что до yield — выполняется при запуске.
     Всё, что после — при остановке.
     """
-    # Создаём таблицы в БД (если их нет)
-    async with engine.begin() as conn:
+   # Создаём таблицы в БД (если их нет)
+    async with engine.begin() as conn:  # type: ignore
         await conn.run_sync(Base.metadata.create_all)
     
     print("✅ База данных готова, таблицы созданы.")
