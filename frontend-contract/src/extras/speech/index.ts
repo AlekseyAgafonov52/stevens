@@ -1,17 +1,57 @@
 /** Д12: озвучка ответов на голосовые сообщения — 07-extras.md, раздел 7. */
+import { setHint } from '../../state/chat';
 import { emitSpeech, isSpeaking, onAssistantResponse, onUiActivity } from '../../state/events';
 
 let voice: SpeechSynthesisVoice | null = null;
+/** Держим ссылку: Chrome иначе может собрать фразу сборщиком мусора, и onend не придёт */
+let current: SpeechSynthesisUtterance | null = null;
+let endTimer: ReturnType<typeof setTimeout> | undefined;
+let startTimer: ReturnType<typeof setTimeout> | undefined;
+let warnedNoVoice = false;
 
 function pickVoice(): void {
   const voices = window.speechSynthesis.getVoices().filter((v) => v.lang.toLowerCase().startsWith('ru'));
   voice = voices.find((v) => v.localService) ?? voices[0] ?? null;
 }
 
+function finish(): void {
+  clearTimeout(endTimer);
+  current = null;
+  if (isSpeaking()) emitSpeech('end');
+}
+
 function stop(): void {
+  clearTimeout(startTimer);
   if (!isSpeaking()) return;
+  clearTimeout(endTimer);
+  current = null;
   window.speechSynthesis.cancel();
   emitSpeech('cancelled');
+}
+
+function say(text: string, chosen: SpeechSynthesisVoice): void {
+  const synth = window.speechSynthesis;
+  const utterance = new SpeechSynthesisUtterance(text);
+  utterance.voice = chosen;
+  utterance.lang = chosen.lang;
+  utterance.onend = () => current === utterance && finish();
+  utterance.onerror = (event) => {
+    if (current !== utterance) return;
+    // Без единого нажатия на странице (например, вызвали по имени сразу после загрузки) Chrome молчит
+    if (event.error === 'not-allowed') setHint('speech_blocked');
+    finish();
+  };
+  current = utterance;
+  emitSpeech('start');
+  // Если onend так и не придёт (бывает в Chrome), не держим «говорит» вечно: иначе не включатся автослушание и «Стивенс»
+  endTimer = setTimeout(finish, 3000 + text.length * 120);
+  // Chrome: speak сразу после cancel иногда теряет фразу — даём очереди очиститься
+  const busy = synth.speaking || synth.pending;
+  synth.cancel();
+  startTimer = setTimeout(() => {
+    synth.resume();
+    synth.speak(utterance);
+  }, busy ? 120 : 30);
 }
 
 export function init(): void {
@@ -20,17 +60,19 @@ export function init(): void {
   window.speechSynthesis.addEventListener('voiceschanged', pickVoice);
 
   onAssistantResponse((response, request) => {
-    if (request.source !== 'voice' || !voice) return;
+    if (request.source !== 'voice') return;
     const text = response.speech ?? response.text;
     if (!text) return;
-    window.speechSynthesis.cancel();
-    const utterance = new SpeechSynthesisUtterance(text);
-    utterance.voice = voice;
-    utterance.lang = voice.lang;
-    utterance.onend = () => isSpeaking() && emitSpeech('end');
-    utterance.onerror = () => isSpeaking() && emitSpeech('end');
-    emitSpeech('start');
-    window.speechSynthesis.speak(utterance);
+    // Голоса в Chrome подгружаются не сразу — переспрашиваем перед каждой фразой
+    if (!voice) pickVoice();
+    if (!voice) {
+      if (!warnedNoVoice) setHint('speech_no_voice');
+      warnedNoVoice = true;
+      return;
+    }
+    clearTimeout(startTimer);
+    clearTimeout(endTimer);
+    say(text, voice);
   });
 
   // Обрывает любое действие: кнопка, ввод, микрофон, «Новый диалог», сворачивание вкладки

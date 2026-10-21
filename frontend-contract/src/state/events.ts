@@ -32,7 +32,14 @@ export function onUiActivity(listener: ActivityListener): () => void {
 }
 
 export function emitResponse(response: ChatResponse, request: ChatRequest): void {
-  responseListeners.forEach((listener) => listener(response, request));
+  // Ошибка в допе (озвучка, персонаж) не должна превращать готовый ответ в «сбой на сервере»
+  responseListeners.forEach((listener) => {
+    try {
+      listener(response, request);
+    } catch (error) {
+      console.error(error);
+    }
+  });
 }
 
 export function emitActivity(kind: UiActivity): void {
