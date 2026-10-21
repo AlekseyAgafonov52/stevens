@@ -116,9 +116,17 @@ async def chat_endpoint(
         tasks = result.scalars().all()
         
         if not tasks:
+            period_key = intent.period or ""
+            period_ru = {
+                "today": "сегодня",
+                "tomorrow": "завтра",
+                "this_week": "на этой неделе",
+                "next_week": "на следующей неделе"
+            }.get(period_key, intent.period or "этот период")
+            
             return ChatResponse(
                 message_id=f"m-{uuid4().hex[:6]}", kind="list",
-                text=get_template("list_empty_none", period=intent.period or "этот период")
+                text=get_template("list_empty_none", period=period_ru)
             )
             
         records = [
@@ -128,9 +136,20 @@ async def chat_endpoint(
             ) for t in tasks
         ]
         
+        # Переводим период для красивого ответа
+        # Используем `or ""`, чтобы Pylance видел строку, а не None
+        period_key = intent.period or "" 
+        
+        period_ru = {
+            "today": "сегодня",
+            "tomorrow": "завтра",
+            "this_week": "на этой неделе",
+            "next_week": "на следующей неделе"
+        }.get(period_key, intent.period or "этот период")
+        
         return ChatResponse(
             message_id=f"m-{uuid4().hex[:6]}", kind="list",
-            text=get_template("list_some", period=intent.period or "на этот период", count=len(records)),
+            text=get_template("list_some", period=period_ru, count=len(records)),
             total=len(records), records=records
         )
 
@@ -208,12 +227,36 @@ async def chat_endpoint(
         await db.refresh(new_task)
 
         # Д) Формирование ответа по шаблону
-        when_str = format_date_for_user(date_str, intent.time)
+        # Переводим токены периодов на русский
+        period_map = {
+            "today": "сегодня",
+            "tomorrow": "завтра",
+            "this_week": "на этой неделе",
+            "next_week": "на следующей неделе"
+        }
         
-        template_key = f"created_{task_type.value}"
-        if intent.date_kind == "deadline":
-            template_key = "created_task_nodeadline" # Для дедлайнов
-            
+        # Форматируем дату для пользователя (без null)
+        if date_str:
+            # Если есть точная дата, можно вывести её красиво (пока просто YYYY-MM-DD)
+            # Но так как фронт сам отрисует карточку, в тексте лучше использовать русские слова
+            if intent.date in period_map:
+                when_str = period_map[intent.date]
+            else:
+                when_str = date_str
+            if intent.time:
+                when_str += f" в {intent.time}"
+        else:
+            when_str = "без срока"
+
+        # Выбираем правильный шаблон
+        if task_type == TaskType.task and intent.date_kind == "deadline":
+            template_key = "created_task_nodeadline"
+            when_str = f"до {date_str}" if date_str else "без срока"
+        elif not intent.time:
+            template_key = "created_no_time"
+        else:
+            template_key = f"created_{task_type.value}"
+
         return ChatResponse(
             message_id=f"m-{uuid4().hex[:6]}",
             kind="created",
