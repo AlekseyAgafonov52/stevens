@@ -136,6 +136,54 @@ def _parse_time(text: str) -> tuple[str | None, bool, list[tuple[int, int]]]:
     return None, False, spans
 
 
+# «через 11 минут», «через полчаса», «через 2 часа», «через неделю»
+REL_RE = re.compile(
+    r"\bчерез\s+(?:(\d+|одну|один|два|две|три|четыре|пять|десять|пятнадцать|двадцать|сорок)\s+)?"
+    r"(полчаса|полтора\s+часа|минут[уы]?|час(?:а|ов)?|д(?:ень|ня|ней)|недел[юи]|недель)\b",
+    I,
+)
+REL_NUMBERS = {"одну": 1, "один": 1, "два": 2, "две": 2, "три": 3, "четыре": 4, "пять": 5, "десять": 10,
+               "пятнадцать": 15, "двадцать": 20, "сорок": 40}
+
+
+def _relative(text: str, now: datetime) -> tuple[date | None, str | None, tuple[int, int] | None]:
+    m = REL_RE.search(text)
+    if not m:
+        return None, None, None
+    raw, unit = (m.group(1) or "").lower(), m.group(2).lower()
+    n = int(raw) if raw.isdigit() else REL_NUMBERS.get(raw, 1)
+    if unit == "полчаса":
+        delta = timedelta(minutes=30)
+    elif unit.startswith("полтора"):
+        delta = timedelta(minutes=90)
+    elif unit.startswith("минут"):
+        delta = timedelta(minutes=n)
+    elif unit.startswith("час"):
+        delta = timedelta(hours=n)
+    elif unit.startswith("д"):
+        return (now + timedelta(days=n)).date(), None, m.span()
+    else:
+        return (now + timedelta(weeks=n)).date(), None, m.span()
+    moment = now + delta
+    return moment.date(), moment.strftime("%H:%M"), m.span()
+
+
+def parse_when(text: str, now: datetime) -> tuple[str | None, bool, list[tuple[int, int]], "_DateInfo"]:
+    """Время и дата фразы, с относительными «через 20 минут» / «через 2 дня»."""
+    rel_date, rel_time, rel_span = _relative(text, now)
+    if rel_span:
+        rest = text[:rel_span[0]] + " " * (rel_span[1] - rel_span[0]) + text[rel_span[1]:]
+        time, ambiguous, time_spans = _parse_time(rest)
+        info = _parse_date(rest, now, time)
+        if rel_time:
+            time, ambiguous = rel_time, False
+        info.date = info.date or rel_date
+        time_spans.append(rel_span)
+        return time, ambiguous, time_spans, info
+    time, ambiguous, time_spans = _parse_time(text)
+    return time, ambiguous, time_spans, _parse_date(text, now, time)
+
+
 # ── Дата ──────────────────────────────────────────────
 
 def _weekday_index(word: str) -> int:
@@ -470,8 +518,7 @@ def parse(raw: str, now: datetime) -> Parse:
         text = rest
 
     lower = text.lower()
-    time, ambiguous, time_spans = _parse_time(text)
-    info = _parse_date(text, now, time)
+    time, ambiguous, time_spans, info = parse_when(text, now)
 
     if HELP_RE.search(lower):
         result.intent = "help"

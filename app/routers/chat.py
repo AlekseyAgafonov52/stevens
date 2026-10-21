@@ -480,8 +480,7 @@ def draft_from(p: nlu.Parse, today: date) -> dict:
 def merge_reply(pending: Pending, raw: str, now: datetime) -> dict | None:
     """Ответ на уточнение: «в 15», «завтра», «с Иваном». Не ответ — None."""
     draft = dict(pending.draft)
-    time, ambiguous, time_spans = nlu._parse_time(raw)
-    info = nlu._parse_date(raw, now, time)
+    time, ambiguous, time_spans, info = nlu.parse_when(raw, now)
     rest = " ".join(nlu._cut(raw, info.spans + time_spans).split()).strip(" ,.!?")
     changed = False
     if info.date:
