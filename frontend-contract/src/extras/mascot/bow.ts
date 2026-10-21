@@ -63,7 +63,8 @@ export function gestureSvg(kind: Gesture, k: number, night: boolean): string {
     `<path d="M58.6 43.4 Q60 41.4 61.4 43.4" fill="none" stroke="${T}" stroke-width="1.5"/>` +
     `<path d="M47.4 43.3 L42 41 M72.6 43.3 L78 41" stroke="${T}" stroke-width="1.5" stroke-linecap="round"/>` +
     mouth +
-    `</g><g transform="translate(0 ${f(7 * k)})">` +
+    // Бабочка на «шее» идёт за головой, но слабее: тело гнётся от макушки к низу
+    `</g><g transform="translate(${f(0.45 * shift)} ${f(7 * k)})">` +
     `<path d="M60 76 L54.24 72.688 Q53.14 76 54.24 79.312 Z M60 76 L65.76 72.688 Q66.86 76 65.76 79.312 Z" fill="${A}" stroke="${A}" stroke-width="1.1" stroke-linejoin="round"/>` +
     `<ellipse cx="60" cy="76" rx="1.5" ry="1.8" fill="${A}"/></g></svg>`
   );
