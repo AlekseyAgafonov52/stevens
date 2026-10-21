@@ -1,0 +1,6 @@
+packages:
+  - '.'
+
+# esbuild verifies its installed platform binary during installation.
+allowBuilds:
+  esbuild: true

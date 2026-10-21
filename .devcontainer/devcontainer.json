@@ -8,11 +8,16 @@
   },
   "forwardPorts": [
     8080,
+    8081,
     8000
   ],
   "portsAttributes": {
     "8080": {
       "label": "Stevens",
+      "onAutoForward": "openBrowser"
+    },
+    "8081": {
+      "label": "Stevens по контракту v1.4",
       "onAutoForward": "openBrowser"
     },
     "8000": {
