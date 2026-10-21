@@ -647,6 +647,8 @@ def parse(raw: str, now: datetime) -> Parse:
     body = re.sub(r"^\s*(?:новую\s+|новое\s+)?(?:задачу|задача|напоминание)\b", " ", body, flags=I)
     body = re.sub(r"\b(?:у\s+меня|мне|нужно|надо|необходимо|не\s+забыть|пожалуйста)\b", " ", body, flags=I)
     body = re.sub(r"\b(?:утром|вечером|днём|днем)\b", " ", body, flags=I)
+    # Мусор распознавания: «встретиться с вами с Иваном» → «встретиться с Иваном»
+    body = re.sub(r"\bс\s+вами\s+(?=со?\s)", " ", body, flags=I)
     body = " ".join(body.split()).strip(" ,.:;!—-")
     body = _clean_clause(body)
     if is_reminder:
