@@ -31,6 +31,8 @@ interface Recognition {
 type RecognitionCtor = new () => Recognition;
 
 const MAX_MS = 20000;
+/** Пауза, после которой считаем, что человек договорил: хватает, чтобы подумать посреди фразы */
+const SILENCE_MS = 2500;
 const STOP_WORD = /(?:^|\s)стоп[.!]?$/i;
 
 function ctor(): RecognitionCtor | null {
@@ -51,6 +53,7 @@ let stream: MediaStream | null = null;
 let audio: AudioContext | null = null;
 let levelTimer: ReturnType<typeof setInterval> | undefined;
 let maxTimer: ReturnType<typeof setTimeout> | undefined;
+let silenceTimer: ReturnType<typeof setTimeout> | undefined;
 let finalText = '';
 let interimText = '';
 let cancelled = false;
@@ -59,6 +62,7 @@ let permissionGranted = false;
 function cleanupAudio(): void {
   clearInterval(levelTimer);
   clearTimeout(maxTimer);
+  clearTimeout(silenceTimer);
   stream?.getTracks().forEach((t) => t.stop());
   stream = null;
   void audio?.close().catch(() => undefined);
@@ -121,12 +125,13 @@ export const voice = {
     recognition = rec;
     rec.lang = 'ru-RU';
     rec.interimResults = true;
-    rec.continuous = false;
+    // Слушаем сами до паузы SILENCE_MS: браузер в обычном режиме обрывает запись уже через ~1 с тишины
+    rec.continuous = true;
     rec.onresult = (event) => {
       let interim = '';
       for (let i = event.resultIndex; i < event.results.length; i += 1) {
         const result = event.results[i];
-        if (result.isFinal) finalText += result[0].transcript;
+        if (result.isFinal) finalText = `${finalText} ${result[0].transcript}`.trim();
         else interim += result[0].transcript;
       }
       interimText = interim;
@@ -138,6 +143,8 @@ export const voice = {
         return;
       }
       emit('interim', shown);
+      clearTimeout(silenceTimer);
+      if (shown) silenceTimer = setTimeout(() => rec.stop(), SILENCE_MS);
     };
     rec.onerror = (event) => {
       if (cancelled) return;
