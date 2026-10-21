@@ -1,0 +1,12 @@
+name: stevens-frontend
+
+services:
+  frontend:
+    image: stevens-frontend:local
+    build:
+      context: .
+      args:
+        VITE_API_URL: ${VITE_API_URL:?Set VITE_API_URL in .env.docker.local}
+    ports:
+      - "${FRONTEND_PORT:-8080}:80"
+    restart: unless-stopped

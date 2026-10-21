@@ -1,0 +1,2194 @@
+{
+  "meta": {
+    "about": "Заглушки ответов POST /api/chat для разработки без бэка. Формат ответа — контракт v1.2 (src/api/types.ts).",
+    "clock": "В режиме заглушек «сейчас» всегда ровно 2026-10-21T10:00:00+03:00 (среда) — тестовые часы контракта; часы стоят на месте. Даты и тексты ниже посчитаны от них.",
+    "matching": "Сравнение: text.trim().toLowerCase() с любым из match.text; для кнопок-действий — action.id с любым из match.action. Нет совпадения → ответ сценария not_understood. message_id делайте уникальным при каждой выдаче.",
+    "delay": "Обычная задержка ответа заглушки — 600–900 мс.",
+    "special_triggers": {
+      "#network": "имитировать отсутствие сети (fetch бросает ошибку)",
+      "#timeout": "не отвечать → через 25 с ошибка таймаута",
+      "#slow": "ответить через 10 с (виден «Думаю дольше обычного…»), ответ — как на «что у меня сегодня?»",
+      "#500": "ответ HTTP 500",
+      "#401": "ответ HTTP 401 (в режиме аккаунта → выход на экран входа с «Сессия закончилась»)",
+      "#wake": "имитировать спящий сервер: /api/health отвечает через 8 с"
+    },
+    "auth_mock": "Регистрация и вход принимают любые данные, кроме: логин «taken» при регистрации → 409 login_taken; пароль «wrong» при входе → 401 invalid_credentials. Токен — любая строка."
+  },
+  "scenarios": [
+    {
+      "note": "created_reminder",
+      "match": {
+        "text": [
+          "напомни завтра в 10 утра позвонить ивану",
+          "напомни завтра в 10 позвонить ивану"
+        ]
+      },
+      "response": {
+        "message_id": "mock-101",
+        "kind": "created",
+        "text": "Записал напоминание на завтра в 10:00: «Позвонить Ивану».",
+        "speech": "Напоминание — завтра в 10:00.",
+        "records": [
+          {
+            "id": 1001,
+            "type": "reminder",
+            "text": "Позвонить Ивану",
+            "date": "2026-10-22",
+            "time": "10:00",
+            "date_kind": "exact",
+            "status": "open",
+            "created_at": "2026-10-21T10:00:05+03:00",
+            "marks": ["new"],
+            "highlight": null
+          }
+        ],
+        "nearest": null,
+        "total": null,
+        "awaiting_reply": false,
+        "buttons": []
+      }
+    },
+    {
+      "note": "list_some, неделя, группировка по дням",
+      "match": {
+        "text": [
+          "что у меня на следующей неделе?",
+          "что у меня на следующей неделе"
+        ]
+      },
+      "response": {
+        "message_id": "mock-102",
+        "kind": "list",
+        "text": "На следующей неделе — 8 дел:",
+        "speech": "На следующей неделе — 8 дел.",
+        "records": [
+          {
+            "id": 695,
+            "type": "task",
+            "text": "Проверить коммерческое предложение по новому продукту",
+            "date": "2026-10-26",
+            "time": "16:45",
+            "date_kind": "exact",
+            "status": "open",
+            "created_at": null,
+            "marks": [],
+            "highlight": null
+          },
+          {
+            "id": 696,
+            "type": "task",
+            "text": "Проверить акт по аналитике",
+            "date": "2026-10-26",
+            "time": "20:30",
+            "date_kind": "exact",
+            "status": "open",
+            "created_at": null,
+            "marks": [],
+            "highlight": null
+          },
+          {
+            "id": 697,
+            "type": "task",
+            "text": "Передать отчёт на согласование",
+            "date": "2026-10-29",
+            "time": "15:30",
+            "date_kind": "exact",
+            "status": "open",
+            "created_at": null,
+            "marks": [],
+            "highlight": null
+          },
+          {
+            "id": 698,
+            "type": "meeting",
+            "text": "Созвон с Орбитой по презентации",
+            "date": "2026-10-29",
+            "time": "15:30",
+            "date_kind": "exact",
+            "status": null,
+            "created_at": null,
+            "marks": [],
+            "highlight": null
+          },
+          {
+            "id": 699,
+            "type": "task",
+            "text": "Проверить сроки по хакатону",
+            "date": "2026-10-30",
+            "time": "12:30",
+            "date_kind": "exact",
+            "status": "open",
+            "created_at": null,
+            "marks": [],
+            "highlight": null
+          },
+          {
+            "id": 700,
+            "type": "task",
+            "text": "Отправить итоги встречи Максимом",
+            "date": "2026-10-30",
+            "time": "20:30",
+            "date_kind": "exact",
+            "status": "open",
+            "created_at": null,
+            "marks": [],
+            "highlight": null
+          },
+          {
+            "id": 701,
+            "type": "meeting",
+            "text": "Созвон с Альфой по презентации",
+            "date": "2026-11-01",
+            "time": "15:15",
+            "date_kind": "exact",
+            "status": null,
+            "created_at": null,
+            "marks": [],
+            "highlight": null
+          },
+          {
+            "id": 702,
+            "type": "task",
+            "text": "Подготовить акт",
+            "date": "2026-11-01",
+            "time": "17:45",
+            "date_kind": "exact",
+            "status": "open",
+            "created_at": null,
+            "marks": [],
+            "highlight": null
+          }
+        ],
+        "nearest": null,
+        "total": 8,
+        "awaiting_reply": false,
+        "buttons": []
+      }
+    },
+    {
+      "note": "found_some: 50 в records, total 103 → сначала 5, «Показать ещё (10)», подпись лимита",
+      "match": {
+        "text": ["найди задачу про презентацию"]
+      },
+      "response": {
+        "message_id": "mock-103",
+        "kind": "found",
+        "text": "Нашёл 103 записи:",
+        "speech": "Нашёл 103 записи.",
+        "records": [
+          {
+            "id": 997,
+            "type": "task",
+            "text": "Проверить презентацию по бюджету",
+            "date": "2027-12-29",
+            "time": "18:30",
+            "date_kind": "exact",
+            "status": "open",
+            "created_at": null,
+            "marks": [],
+            "highlight": null
+          },
+          {
+            "id": 994,
+            "type": "task",
+            "text": "Собрать обратную связь по презентации",
+            "date": "2027-12-24",
+            "time": "16:30",
+            "date_kind": "exact",
+            "status": "open",
+            "created_at": null,
+            "marks": [],
+            "highlight": null
+          },
+          {
+            "id": 984,
+            "type": "task",
+            "text": "Передать презентацию на согласование",
+            "date": "2027-12-08",
+            "time": "18:00",
+            "date_kind": "exact",
+            "status": "open",
+            "created_at": null,
+            "marks": [],
+            "highlight": null
+          },
+          {
+            "id": 979,
+            "type": "task",
+            "text": "Проверить презентацию по новому продукту",
+            "date": "2027-12-03",
+            "time": "12:30",
+            "date_kind": "exact",
+            "status": "open",
+            "created_at": null,
+            "marks": [],
+            "highlight": null
+          },
+          {
+            "id": 973,
+            "type": "task",
+            "text": "Подготовить презентацию",
+            "date": "2027-11-22",
+            "time": "15:15",
+            "date_kind": "exact",
+            "status": "open",
+            "created_at": null,
+            "marks": [],
+            "highlight": null
+          },
+          {
+            "id": 953,
+            "type": "meeting",
+            "text": "Встреча с Анной по презентации",
+            "date": "2027-10-28",
+            "time": "12:45",
+            "date_kind": "exact",
+            "status": null,
+            "created_at": null,
+            "marks": [],
+            "highlight": null
+          },
+          {
+            "id": 948,
+            "type": "task",
+            "text": "Отправить презентацию Максимом",
+            "date": "2027-10-24",
+            "time": "16:30",
+            "date_kind": "exact",
+            "status": "open",
+            "created_at": null,
+            "marks": [],
+            "highlight": null
+          },
+          {
+            "id": 921,
+            "type": "task",
+            "text": "Обновить материалы по презентации",
+            "date": "2027-09-15",
+            "time": "11:30",
+            "date_kind": "exact",
+            "status": "open",
+            "created_at": null,
+            "marks": [],
+            "highlight": null
+          },
+          {
+            "id": 913,
+            "type": "task",
+            "text": "Обновить материалы по презентации",
+            "date": "2027-09-02",
+            "time": "08:00",
+            "date_kind": "exact",
+            "status": "open",
+            "created_at": null,
+            "marks": [],
+            "highlight": null
+          },
+          {
+            "id": 898,
+            "type": "task",
+            "text": "Собрать обратную связь по презентации",
+            "date": "2027-08-07",
+            "time": "19:45",
+            "date_kind": "exact",
+            "status": "open",
+            "created_at": null,
+            "marks": [],
+            "highlight": null
+          },
+          {
+            "id": 893,
+            "type": "task",
+            "text": "Проверить сроки по презентации",
+            "date": "2027-08-01",
+            "time": "08:30",
+            "date_kind": "exact",
+            "status": "open",
+            "created_at": null,
+            "marks": [],
+            "highlight": null
+          },
+          {
+            "id": 877,
+            "type": "task",
+            "text": "Согласовать презентацию с Иваном",
+            "date": "2027-07-06",
+            "time": "18:15",
+            "date_kind": "exact",
+            "status": "open",
+            "created_at": null,
+            "marks": [],
+            "highlight": null
+          },
+          {
+            "id": 870,
+            "type": "meeting",
+            "text": "Созвон с Маяком по презентации",
+            "date": "2027-06-29",
+            "time": "16:00",
+            "date_kind": "exact",
+            "status": null,
+            "created_at": null,
+            "marks": [],
+            "highlight": null
+          },
+          {
+            "id": 859,
+            "type": "meeting",
+            "text": "Созвон с Пульсом по презентации",
+            "date": "2027-06-14",
+            "time": "17:45",
+            "date_kind": "exact",
+            "status": null,
+            "created_at": null,
+            "marks": [],
+            "highlight": null
+          },
+          {
+            "id": 846,
+            "type": "task",
+            "text": "Обсудить бюджет по презентации",
+            "date": "2027-06-01",
+            "time": "11:30",
+            "date_kind": "exact",
+            "status": "open",
+            "created_at": null,
+            "marks": [],
+            "highlight": null
+          },
+          {
+            "id": 830,
+            "type": "task",
+            "text": "Напомнить Анной про презентации",
+            "date": "2027-04-28",
+            "time": "09:00",
+            "date_kind": "exact",
+            "status": "open",
+            "created_at": null,
+            "marks": [],
+            "highlight": null
+          },
+          {
+            "id": 825,
+            "type": "task",
+            "text": "Провести планёрку по презентации",
+            "date": "2027-04-18",
+            "time": "19:15",
+            "date_kind": "exact",
+            "status": "open",
+            "created_at": null,
+            "marks": [],
+            "highlight": null
+          },
+          {
+            "id": 806,
+            "type": "task",
+            "text": "Проверить презентацию по интеграции",
+            "date": "2027-03-23",
+            "time": "14:45",
+            "date_kind": "exact",
+            "status": "open",
+            "created_at": null,
+            "marks": [],
+            "highlight": null
+          },
+          {
+            "id": 803,
+            "type": "task",
+            "text": "Провести планёрку по презентации",
+            "date": "2027-03-19",
+            "time": "15:00",
+            "date_kind": "exact",
+            "status": "open",
+            "created_at": null,
+            "marks": [],
+            "highlight": null
+          },
+          {
+            "id": 798,
+            "type": "task",
+            "text": "Проверить протокол по презентации",
+            "date": "2027-03-11",
+            "time": "17:00",
+            "date_kind": "exact",
+            "status": "open",
+            "created_at": null,
+            "marks": [],
+            "highlight": null
+          },
+          {
+            "id": 792,
+            "type": "task",
+            "text": "Напомнить Максимом про презентации",
+            "date": "2027-02-26",
+            "time": "20:00",
+            "date_kind": "exact",
+            "status": "open",
+            "created_at": null,
+            "marks": [],
+            "highlight": null
+          },
+          {
+            "id": 778,
+            "type": "task",
+            "text": "Проверить сроки по презентации",
+            "date": "2027-02-07",
+            "time": "08:00",
+            "date_kind": "exact",
+            "status": "open",
+            "created_at": null,
+            "marks": [],
+            "highlight": null
+          },
+          {
+            "id": 773,
+            "type": "task",
+            "text": "Проверить презентацию по новому продукту",
+            "date": "2027-02-01",
+            "time": "14:00",
+            "date_kind": "exact",
+            "status": "open",
+            "created_at": null,
+            "marks": [],
+            "highlight": null
+          },
+          {
+            "id": 768,
+            "type": "task",
+            "text": "Подготовить презентацию",
+            "date": "2027-01-26",
+            "time": "16:30",
+            "date_kind": "exact",
+            "status": "open",
+            "created_at": null,
+            "marks": [],
+            "highlight": null
+          },
+          {
+            "id": 763,
+            "type": "task",
+            "text": "Напомнить Дмитрием про презентации",
+            "date": "2027-01-18",
+            "time": "13:30",
+            "date_kind": "exact",
+            "status": "open",
+            "created_at": null,
+            "marks": [],
+            "highlight": null
+          },
+          {
+            "id": 759,
+            "type": "task",
+            "text": "Отправить презентацию Натальей",
+            "date": "2027-01-15",
+            "time": "10:15",
+            "date_kind": "exact",
+            "status": "open",
+            "created_at": null,
+            "marks": [],
+            "highlight": null
+          },
+          {
+            "id": 757,
+            "type": "task",
+            "text": "Собрать обратную связь по презентации",
+            "date": "2027-01-10",
+            "time": "11:00",
+            "date_kind": "exact",
+            "status": "open",
+            "created_at": null,
+            "marks": [],
+            "highlight": null
+          },
+          {
+            "id": 756,
+            "type": "task",
+            "text": "Подготовить презентацию",
+            "date": "2027-01-10",
+            "time": "10:30",
+            "date_kind": "exact",
+            "status": "open",
+            "created_at": null,
+            "marks": [],
+            "highlight": null
+          },
+          {
+            "id": 755,
+            "type": "task",
+            "text": "Напомнить Сергеем про презентации",
+            "date": "2027-01-09",
+            "time": "20:15",
+            "date_kind": "exact",
+            "status": "open",
+            "created_at": null,
+            "marks": [],
+            "highlight": null
+          },
+          {
+            "id": 746,
+            "type": "task",
+            "text": "Проверить сроки по презентации",
+            "date": "2026-12-30",
+            "time": "16:45",
+            "date_kind": "exact",
+            "status": "open",
+            "created_at": null,
+            "marks": [],
+            "highlight": null
+          },
+          {
+            "id": 701,
+            "type": "meeting",
+            "text": "Созвон с Альфой по презентации",
+            "date": "2026-11-01",
+            "time": "15:15",
+            "date_kind": "exact",
+            "status": null,
+            "created_at": null,
+            "marks": [],
+            "highlight": null
+          },
+          {
+            "id": 698,
+            "type": "meeting",
+            "text": "Созвон с Орбитой по презентации",
+            "date": "2026-10-29",
+            "time": "15:30",
+            "date_kind": "exact",
+            "status": null,
+            "created_at": null,
+            "marks": [],
+            "highlight": null
+          },
+          {
+            "id": 694,
+            "type": "task",
+            "text": "Обновить материалы по презентации",
+            "date": "2026-10-25",
+            "time": "13:15",
+            "date_kind": "exact",
+            "status": "open",
+            "created_at": null,
+            "marks": [],
+            "highlight": null
+          },
+          {
+            "id": 688,
+            "type": "meeting",
+            "text": "Встреча с Марией по презентации",
+            "date": "2026-10-21",
+            "time": "08:00",
+            "date_kind": "exact",
+            "status": null,
+            "created_at": null,
+            "marks": [],
+            "highlight": null
+          },
+          {
+            "id": 687,
+            "type": "task",
+            "text": "Обсудить бюджет по презентации",
+            "date": "2026-10-20",
+            "time": "18:00",
+            "date_kind": "exact",
+            "status": "open",
+            "created_at": null,
+            "marks": [],
+            "highlight": null
+          },
+          {
+            "id": 675,
+            "type": "task",
+            "text": "Проверить презентацию по мобильному приложению",
+            "date": "2026-09-24",
+            "time": "16:00",
+            "date_kind": "exact",
+            "status": "open",
+            "created_at": null,
+            "marks": [],
+            "highlight": null
+          },
+          {
+            "id": 647,
+            "type": "task",
+            "text": "Проверить презентацию по CRM",
+            "date": "2026-08-11",
+            "time": "15:45",
+            "date_kind": "exact",
+            "status": "open",
+            "created_at": null,
+            "marks": [],
+            "highlight": null
+          },
+          {
+            "id": 646,
+            "type": "task",
+            "text": "Обсудить презентации с Еленой",
+            "date": "2026-08-10",
+            "time": "12:15",
+            "date_kind": "exact",
+            "status": "open",
+            "created_at": null,
+            "marks": [],
+            "highlight": null
+          },
+          {
+            "id": 641,
+            "type": "task",
+            "text": "Проверить сроки по презентации",
+            "date": "2026-08-04",
+            "time": "14:30",
+            "date_kind": "exact",
+            "status": "open",
+            "created_at": null,
+            "marks": [],
+            "highlight": null
+          },
+          {
+            "id": 625,
+            "type": "meeting",
+            "text": "Демо проекта по презентации",
+            "date": "2026-07-15",
+            "time": "09:00",
+            "date_kind": "exact",
+            "status": null,
+            "created_at": null,
+            "marks": [],
+            "highlight": null
+          },
+          {
+            "id": 614,
+            "type": "task",
+            "text": "Проверить договор по презентации",
+            "date": "2026-07-02",
+            "time": "17:45",
+            "date_kind": "exact",
+            "status": "open",
+            "created_at": null,
+            "marks": [],
+            "highlight": null
+          },
+          {
+            "id": 607,
+            "type": "task",
+            "text": "Провести планёрку по презентации",
+            "date": "2026-06-23",
+            "time": "11:45",
+            "date_kind": "exact",
+            "status": "open",
+            "created_at": null,
+            "marks": [],
+            "highlight": null
+          },
+          {
+            "id": 601,
+            "type": "meeting",
+            "text": "Демо проекта по презентации",
+            "date": "2026-06-19",
+            "time": "09:30",
+            "date_kind": "exact",
+            "status": null,
+            "created_at": null,
+            "marks": [],
+            "highlight": null
+          },
+          {
+            "id": 600,
+            "type": "task",
+            "text": "Отправить презентацию Анной",
+            "date": "2026-06-17",
+            "time": "11:00",
+            "date_kind": "exact",
+            "status": "open",
+            "created_at": null,
+            "marks": [],
+            "highlight": null
+          },
+          {
+            "id": 594,
+            "type": "task",
+            "text": "Подготовить презентацию",
+            "date": "2026-06-05",
+            "time": "16:00",
+            "date_kind": "exact",
+            "status": "open",
+            "created_at": null,
+            "marks": [],
+            "highlight": null
+          },
+          {
+            "id": 587,
+            "type": "task",
+            "text": "Согласовать презентацию с Максимом",
+            "date": "2026-05-24",
+            "time": "17:30",
+            "date_kind": "exact",
+            "status": "open",
+            "created_at": null,
+            "marks": [],
+            "highlight": null
+          },
+          {
+            "id": 586,
+            "type": "task",
+            "text": "Подготовить презентацию",
+            "date": "2026-05-22",
+            "time": "19:00",
+            "date_kind": "exact",
+            "status": "open",
+            "created_at": null,
+            "marks": [],
+            "highlight": null
+          },
+          {
+            "id": 582,
+            "type": "task",
+            "text": "Отправить презентацию Натальей",
+            "date": "2026-05-18",
+            "time": "19:45",
+            "date_kind": "exact",
+            "status": "open",
+            "created_at": null,
+            "marks": [],
+            "highlight": null
+          },
+          {
+            "id": 580,
+            "type": "meeting",
+            "text": "Созвон с Альфой по презентации",
+            "date": "2026-05-17",
+            "time": "13:30",
+            "date_kind": "exact",
+            "status": null,
+            "created_at": null,
+            "marks": [],
+            "highlight": null
+          },
+          {
+            "id": 553,
+            "type": "task",
+            "text": "Отправить презентацию Дмитрием",
+            "date": "2026-04-17",
+            "time": "18:45",
+            "date_kind": "exact",
+            "status": "open",
+            "created_at": null,
+            "marks": [],
+            "highlight": null
+          }
+        ],
+        "nearest": null,
+        "total": 103,
+        "awaiting_reply": false,
+        "buttons": []
+      }
+    },
+    {
+      "note": "clarify_meeting_time",
+      "match": {
+        "text": ["поставь встречу с иваном завтра"]
+      },
+      "response": {
+        "message_id": "mock-104",
+        "kind": "clarify",
+        "text": "Во сколько встреча?",
+        "speech": null,
+        "records": [],
+        "nearest": null,
+        "total": null,
+        "awaiting_reply": true,
+        "buttons": [
+          {
+            "label": "10:00",
+            "send": {
+              "text": "в 10:00"
+            }
+          },
+          {
+            "label": "15:00",
+            "send": {
+              "text": "в 15:00"
+            }
+          },
+          {
+            "label": "Отменить",
+            "send": {
+              "action": {
+                "id": "cancel"
+              }
+            },
+            "style": "secondary"
+          }
+        ]
+      }
+    },
+    {
+      "note": "ответ на уточнение → created_meeting (заглушка не помнит диалог)",
+      "match": {
+        "text": ["в 10:00"]
+      },
+      "response": {
+        "message_id": "mock-105",
+        "kind": "created",
+        "text": "Встреча записана: «Встреча с Иваном», завтра в 10:00.",
+        "speech": "Встреча — завтра в 10:00.",
+        "records": [
+          {
+            "id": 1002,
+            "type": "meeting",
+            "text": "Встреча с Иваном",
+            "date": "2026-10-22",
+            "time": "10:00",
+            "date_kind": "exact",
+            "status": null,
+            "created_at": "2026-10-21T10:00:05+03:00",
+            "marks": ["new"],
+            "highlight": null
+          }
+        ],
+        "nearest": null,
+        "total": null,
+        "awaiting_reply": false,
+        "buttons": []
+      }
+    },
+    {
+      "note": "ответ на уточнение → created_meeting (заглушка не помнит диалог)",
+      "match": {
+        "text": ["в 15:00"]
+      },
+      "response": {
+        "message_id": "mock-106",
+        "kind": "created",
+        "text": "Встреча записана: «Встреча с Иваном», завтра в 15:00.",
+        "speech": "Встреча — завтра в 15:00.",
+        "records": [
+          {
+            "id": 1002,
+            "type": "meeting",
+            "text": "Встреча с Иваном",
+            "date": "2026-10-22",
+            "time": "15:00",
+            "date_kind": "exact",
+            "status": null,
+            "created_at": "2026-10-21T10:00:05+03:00",
+            "marks": ["new"],
+            "highlight": null
+          }
+        ],
+        "nearest": null,
+        "total": null,
+        "awaiting_reply": false,
+        "buttons": []
+      }
+    },
+    {
+      "note": "ответ на уточнение → created_meeting (заглушка не помнит диалог)",
+      "match": {
+        "text": ["в 15"]
+      },
+      "response": {
+        "message_id": "mock-107",
+        "kind": "created",
+        "text": "Встреча записана: «Встреча с Иваном», завтра в 15:00.",
+        "speech": "Встреча — завтра в 15:00.",
+        "records": [
+          {
+            "id": 1002,
+            "type": "meeting",
+            "text": "Встреча с Иваном",
+            "date": "2026-10-22",
+            "time": "15:00",
+            "date_kind": "exact",
+            "status": null,
+            "created_at": "2026-10-21T10:00:05+03:00",
+            "marks": ["new"],
+            "highlight": null
+          }
+        ],
+        "nearest": null,
+        "total": null,
+        "awaiting_reply": false,
+        "buttons": []
+      }
+    },
+    {
+      "note": "ответ на уточнение → created_meeting (заглушка не помнит диалог)",
+      "match": {
+        "text": ["в 10"]
+      },
+      "response": {
+        "message_id": "mock-108",
+        "kind": "created",
+        "text": "Встреча записана: «Встреча с Иваном», завтра в 10:00.",
+        "speech": "Встреча — завтра в 10:00.",
+        "records": [
+          {
+            "id": 1002,
+            "type": "meeting",
+            "text": "Встреча с Иваном",
+            "date": "2026-10-22",
+            "time": "10:00",
+            "date_kind": "exact",
+            "status": null,
+            "created_at": "2026-10-21T10:00:05+03:00",
+            "marks": ["new"],
+            "highlight": null
+          }
+        ],
+        "nearest": null,
+        "total": null,
+        "awaiting_reply": false,
+        "buttons": []
+      }
+    },
+    {
+      "note": "help",
+      "match": {
+        "text": ["что ты умеешь?", "что ты умеешь"]
+      },
+      "response": {
+        "message_id": "mock-109",
+        "kind": "help",
+        "text": "Я Stevens. Записываю задачи, встречи и напоминания, нахожу их и подсказываю, что впереди.",
+        "speech": "Я Stevens: задачи, встречи, напоминания.",
+        "records": [],
+        "nearest": null,
+        "total": null,
+        "awaiting_reply": false,
+        "buttons": [
+          {
+            "label": "Напомни завтра в 10 утра позвонить Ивану",
+            "send": {
+              "text": "Напомни завтра в 10 утра позвонить Ивану"
+            }
+          },
+          {
+            "label": "Что у меня на следующей неделе?",
+            "send": {
+              "text": "Что у меня на следующей неделе?"
+            }
+          },
+          {
+            "label": "Найди задачу про презентацию",
+            "send": {
+              "text": "Найди задачу про презентацию"
+            }
+          },
+          {
+            "label": "Поставь встречу с Иваном завтра",
+            "send": {
+              "text": "Поставь встречу с Иваном завтра"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "note": "list_some: одно прошедшее (08:00) и одно будущее",
+      "match": {
+        "text": [
+          "что у меня сегодня?",
+          "что у меня сегодня",
+          "какие планы на сегодня?"
+        ]
+      },
+      "response": {
+        "message_id": "mock-110",
+        "kind": "list",
+        "text": "Сегодня — 2 дела:",
+        "speech": "Сегодня — 2 дела.",
+        "records": [
+          {
+            "id": 688,
+            "type": "meeting",
+            "text": "Встреча с Марией по презентации",
+            "date": "2026-10-21",
+            "time": "08:00",
+            "date_kind": "exact",
+            "status": null,
+            "created_at": null,
+            "marks": [],
+            "highlight": null
+          },
+          {
+            "id": 689,
+            "type": "task",
+            "text": "Подготовиться к встрече с Пульсом",
+            "date": "2026-10-21",
+            "time": "10:15",
+            "date_kind": "exact",
+            "status": "open",
+            "created_at": null,
+            "marks": [],
+            "highlight": null
+          }
+        ],
+        "nearest": null,
+        "total": 2,
+        "awaiting_reply": false,
+        "buttons": []
+      }
+    },
+    {
+      "note": "list_empty_nearest",
+      "match": {
+        "text": ["что у меня 6 ноября?", "что у меня 6 ноября"]
+      },
+      "response": {
+        "message_id": "mock-111",
+        "kind": "list",
+        "text": "На пт, 6 ноя планов нет. Ближайшее — сб, 7 ноя в 13:00: «Проверить статус задачи по сайту».",
+        "speech": null,
+        "records": [],
+        "nearest": {
+          "id": 707,
+          "type": "task",
+          "text": "Проверить статус задачи по сайту",
+          "date": "2026-11-07",
+          "time": "13:00",
+          "date_kind": "exact",
+          "status": "open",
+          "created_at": null,
+          "marks": [],
+          "highlight": null
+        },
+        "total": 0,
+        "awaiting_reply": false,
+        "buttons": []
+      }
+    },
+    {
+      "note": "list_type_yes",
+      "match": {
+        "text": [
+          "есть ли у меня встречи сегодня?",
+          "есть ли у меня встречи сегодня"
+        ]
+      },
+      "response": {
+        "message_id": "mock-112",
+        "kind": "list",
+        "text": "Да, 1 встреча:",
+        "speech": "Да, 1 встреча.",
+        "records": [
+          {
+            "id": 688,
+            "type": "meeting",
+            "text": "Встреча с Марией по презентации",
+            "date": "2026-10-21",
+            "time": "08:00",
+            "date_kind": "exact",
+            "status": null,
+            "created_at": null,
+            "marks": [],
+            "highlight": null
+          }
+        ],
+        "nearest": null,
+        "total": 1,
+        "awaiting_reply": false,
+        "buttons": []
+      }
+    },
+    {
+      "note": "found_when_last: highlight date",
+      "match": {
+        "text": [
+          "когда у меня была встреча с иваном?",
+          "когда у меня была встреча с иваном"
+        ]
+      },
+      "response": {
+        "message_id": "mock-113",
+        "kind": "found",
+        "text": "В последний раз — чт, 5 мар в 15:45: «Встреча с Иваном по презентации».",
+        "speech": null,
+        "records": [
+          {
+            "id": 530,
+            "type": "meeting",
+            "text": "Встреча с Иваном по презентации",
+            "date": "2026-03-05",
+            "time": "15:45",
+            "date_kind": "exact",
+            "status": null,
+            "created_at": null,
+            "marks": [],
+            "highlight": "date"
+          },
+          {
+            "id": 429,
+            "type": "meeting",
+            "text": "Встреча с Иваном по презентации",
+            "date": "2025-09-27",
+            "time": "15:45",
+            "date_kind": "exact",
+            "status": null,
+            "created_at": null,
+            "marks": [],
+            "highlight": "date"
+          },
+          {
+            "id": 309,
+            "type": "meeting",
+            "text": "Встреча с Иваном по CRM",
+            "date": "2025-04-04",
+            "time": "18:00",
+            "date_kind": "exact",
+            "status": null,
+            "created_at": null,
+            "marks": [],
+            "highlight": "date"
+          }
+        ],
+        "nearest": null,
+        "total": 3,
+        "awaiting_reply": false,
+        "buttons": []
+      }
+    },
+    {
+      "note": "found_none",
+      "match": {
+        "text": ["найди задачу про космос"]
+      },
+      "response": {
+        "message_id": "mock-114",
+        "kind": "found",
+        "text": "Ничего не нашёл. Попробуйте другое слово или дату.",
+        "speech": null,
+        "records": [],
+        "nearest": null,
+        "total": 0,
+        "awaiting_reply": false,
+        "buttons": []
+      }
+    },
+    {
+      "note": "conflict_one: черновик + совпадающая",
+      "match": {
+        "text": ["поставь встречу с еленой в субботу в 20:45"]
+      },
+      "response": {
+        "message_id": "mock-115",
+        "kind": "conflict",
+        "text": "На 20:45 уже есть встреча: «Встреча с Марией по интеграции». Что сделать?",
+        "speech": "Это время занято. Что сделать?",
+        "records": [
+          {
+            "id": null,
+            "type": "meeting",
+            "text": "Встреча с Еленой",
+            "date": "2026-10-24",
+            "time": "20:45",
+            "date_kind": "exact",
+            "status": null,
+            "created_at": null,
+            "marks": ["draft"],
+            "highlight": null
+          },
+          {
+            "id": 693,
+            "type": "meeting",
+            "text": "Встреча с Марией по интеграции",
+            "date": "2026-10-24",
+            "time": "20:45",
+            "date_kind": "exact",
+            "status": null,
+            "created_at": null,
+            "marks": ["conflict"],
+            "highlight": null
+          }
+        ],
+        "nearest": null,
+        "total": null,
+        "awaiting_reply": true,
+        "buttons": [
+          {
+            "label": "Другое время для новой",
+            "send": {
+              "action": {
+                "id": "change_new_time"
+              }
+            }
+          },
+          {
+            "label": "Перенести существующую",
+            "send": {
+              "action": {
+                "id": "move_existing",
+                "record_id": 693
+              }
+            }
+          },
+          {
+            "label": "Оставить обе",
+            "send": {
+              "action": {
+                "id": "keep_both"
+              }
+            }
+          },
+          {
+            "label": "Отменить",
+            "send": {
+              "action": {
+                "id": "cancel"
+              }
+            },
+            "style": "secondary"
+          }
+        ]
+      }
+    },
+    {
+      "note": "conflict_many: без «Перенести существующую»",
+      "match": {
+        "text": ["#conflict_many"]
+      },
+      "response": {
+        "message_id": "mock-116",
+        "kind": "conflict",
+        "text": "На 15:30 уже 2 встречи. Что сделать?",
+        "speech": "Это время занято. Что сделать?",
+        "records": [
+          {
+            "id": null,
+            "type": "meeting",
+            "text": "Созвон с командой",
+            "date": "2026-10-29",
+            "time": "15:30",
+            "date_kind": "exact",
+            "status": null,
+            "created_at": null,
+            "marks": ["draft"],
+            "highlight": null
+          },
+          {
+            "id": 698,
+            "type": "meeting",
+            "text": "Созвон с Орбитой по презентации",
+            "date": "2026-10-29",
+            "time": "15:30",
+            "date_kind": "exact",
+            "status": null,
+            "created_at": null,
+            "marks": ["conflict"],
+            "highlight": null
+          },
+          {
+            "id": 9001,
+            "type": "meeting",
+            "text": "Демо для партнёров (тестовая запись заглушки)",
+            "date": "2026-10-29",
+            "time": "15:30",
+            "date_kind": "exact",
+            "status": null,
+            "created_at": null,
+            "marks": ["conflict"],
+            "highlight": null
+          }
+        ],
+        "nearest": null,
+        "total": null,
+        "awaiting_reply": true,
+        "buttons": [
+          {
+            "label": "Другое время для новой",
+            "send": {
+              "action": {
+                "id": "change_new_time"
+              }
+            }
+          },
+          {
+            "label": "Оставить обе",
+            "send": {
+              "action": {
+                "id": "keep_both"
+              }
+            }
+          },
+          {
+            "label": "Отменить",
+            "send": {
+              "action": {
+                "id": "cancel"
+              }
+            },
+            "style": "secondary"
+          }
+        ]
+      }
+    },
+    {
+      "note": "confirm",
+      "match": {
+        "text": ["напомни про отчёт в пятницу в 7"]
+      },
+      "response": {
+        "message_id": "mock-117",
+        "kind": "confirm",
+        "text": "Правильно понимаю: напоминание «Отчёт», пт, 23 окт в 19:00?",
+        "speech": "Напоминание, 23 октября в 19:00 — верно?",
+        "records": [
+          {
+            "id": null,
+            "type": "reminder",
+            "text": "Отчёт",
+            "date": "2026-10-23",
+            "time": "19:00",
+            "date_kind": "exact",
+            "status": "open",
+            "created_at": null,
+            "marks": ["draft"],
+            "highlight": null
+          }
+        ],
+        "nearest": null,
+        "total": null,
+        "awaiting_reply": true,
+        "buttons": [
+          {
+            "label": "Да, верно",
+            "send": {
+              "action": {
+                "id": "confirm_yes"
+              }
+            }
+          },
+          {
+            "label": "Нет",
+            "send": {
+              "action": {
+                "id": "confirm_no"
+              }
+            },
+            "style": "secondary"
+          }
+        ]
+      }
+    },
+    {
+      "note": "после «Да, верно»",
+      "match": {
+        "action": ["confirm_yes"]
+      },
+      "response": {
+        "message_id": "mock-118",
+        "kind": "created",
+        "text": "Записал напоминание на пт, 23 окт в 19:00: «Отчёт».",
+        "speech": "Напоминание — 23 октября в 19:00.",
+        "records": [
+          {
+            "id": 1003,
+            "type": "reminder",
+            "text": "Отчёт",
+            "date": "2026-10-23",
+            "time": "19:00",
+            "date_kind": "exact",
+            "status": "open",
+            "created_at": "2026-10-21T10:00:05+03:00",
+            "marks": ["new"],
+            "highlight": null
+          }
+        ],
+        "nearest": null,
+        "total": null,
+        "awaiting_reply": false,
+        "buttons": []
+      }
+    },
+    {
+      "note": "после «Нет»",
+      "match": {
+        "action": ["confirm_no"]
+      },
+      "response": {
+        "message_id": "mock-119",
+        "kind": "clarify",
+        "text": "Хорошо. Что поправить?",
+        "speech": null,
+        "records": [],
+        "nearest": null,
+        "total": null,
+        "awaiting_reply": true,
+        "buttons": [
+          {
+            "label": "Отменить",
+            "send": {
+              "action": {
+                "id": "cancel"
+              }
+            },
+            "style": "secondary"
+          }
+        ]
+      }
+    },
+    {
+      "note": "conflict_keep_both",
+      "match": {
+        "action": ["keep_both"]
+      },
+      "response": {
+        "message_id": "mock-120",
+        "kind": "created",
+        "text": "Сохранил обе встречи.",
+        "speech": null,
+        "records": [
+          {
+            "id": 1004,
+            "type": "meeting",
+            "text": "Встреча с Еленой",
+            "date": "2026-10-24",
+            "time": "20:45",
+            "date_kind": "exact",
+            "status": null,
+            "created_at": "2026-10-21T10:00:05+03:00",
+            "marks": ["new"],
+            "highlight": null
+          }
+        ],
+        "nearest": null,
+        "total": null,
+        "awaiting_reply": false,
+        "buttons": []
+      }
+    },
+    {
+      "note": "conflict_new_time",
+      "match": {
+        "action": ["change_new_time"]
+      },
+      "response": {
+        "message_id": "mock-121",
+        "kind": "clarify",
+        "text": "На какое время поставить новую встречу?",
+        "speech": null,
+        "records": [],
+        "nearest": null,
+        "total": null,
+        "awaiting_reply": true,
+        "buttons": [
+          {
+            "label": "Отменить",
+            "send": {
+              "action": {
+                "id": "cancel"
+              }
+            },
+            "style": "secondary"
+          }
+        ]
+      }
+    },
+    {
+      "note": "conflict_move_existing",
+      "match": {
+        "action": ["move_existing"]
+      },
+      "response": {
+        "message_id": "mock-122",
+        "kind": "clarify",
+        "text": "На какое время перенести «Встреча с Марией по интеграции»?",
+        "speech": null,
+        "records": [],
+        "nearest": null,
+        "total": null,
+        "awaiting_reply": true,
+        "buttons": [
+          {
+            "label": "Отменить",
+            "send": {
+              "action": {
+                "id": "cancel"
+              }
+            },
+            "style": "secondary"
+          }
+        ]
+      }
+    },
+    {
+      "note": "cancelled",
+      "match": {
+        "action": ["cancel"]
+      },
+      "response": {
+        "message_id": "mock-123",
+        "kind": "cancelled",
+        "text": "Отменил.",
+        "speech": null,
+        "records": [],
+        "nearest": null,
+        "total": null,
+        "awaiting_reply": false,
+        "buttons": []
+      }
+    },
+    {
+      "note": "off_topic",
+      "match": {
+        "text": ["какая завтра погода?", "какая завтра погода"]
+      },
+      "response": {
+        "message_id": "mock-124",
+        "kind": "off_topic",
+        "text": "Это не по моей части. Я веду задачи, встречи и напоминания.",
+        "speech": "Это не по моей части.",
+        "records": [],
+        "nearest": null,
+        "total": null,
+        "awaiting_reply": false,
+        "buttons": [
+          {
+            "label": "Напомни завтра в 10 утра позвонить Ивану",
+            "send": {
+              "text": "Напомни завтра в 10 утра позвонить Ивану"
+            }
+          },
+          {
+            "label": "Что у меня на следующей неделе?",
+            "send": {
+              "text": "Что у меня на следующей неделе?"
+            }
+          },
+          {
+            "label": "Найди задачу про презентацию",
+            "send": {
+              "text": "Найди задачу про презентацию"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "note": "thanks",
+      "match": {
+        "text": ["спасибо", "спасибо!", "спасибо, stevens", "спасибо, стивенс"]
+      },
+      "response": {
+        "message_id": "mock-125",
+        "kind": "thanks",
+        "text": "Рад помочь.",
+        "speech": null,
+        "records": [],
+        "nearest": null,
+        "total": null,
+        "awaiting_reply": false,
+        "buttons": []
+      }
+    },
+    {
+      "note": "not_understood (и ответ по умолчанию на любую незнакомую фразу)",
+      "match": {
+        "text": ["сделай что-нибудь с этим"]
+      },
+      "response": {
+        "message_id": "mock-126",
+        "kind": "not_understood",
+        "text": "Боюсь, не понял. Можно, например, так:",
+        "speech": null,
+        "records": [],
+        "nearest": null,
+        "total": null,
+        "awaiting_reply": false,
+        "buttons": [
+          {
+            "label": "Напомни завтра в 10 утра позвонить Ивану",
+            "send": {
+              "text": "Напомни завтра в 10 утра позвонить Ивану"
+            }
+          },
+          {
+            "label": "Что у меня на следующей неделе?",
+            "send": {
+              "text": "Что у меня на следующей неделе?"
+            }
+          },
+          {
+            "label": "Найди задачу про презентацию",
+            "send": {
+              "text": "Найди задачу про презентацию"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "note": "created_task_nodate",
+      "match": {
+        "text": ["запиши задачу разобрать почту"]
+      },
+      "response": {
+        "message_id": "mock-127",
+        "kind": "created",
+        "text": "Записал задачу без срока: «Разобрать почту».",
+        "speech": "Записал, без срока.",
+        "records": [
+          {
+            "id": 1005,
+            "type": "task",
+            "text": "Разобрать почту",
+            "date": null,
+            "time": null,
+            "date_kind": "none",
+            "status": "open",
+            "created_at": "2026-10-21T10:00:05+03:00",
+            "marks": ["new"],
+            "highlight": null
+          }
+        ],
+        "nearest": null,
+        "total": null,
+        "awaiting_reply": false,
+        "buttons": []
+      }
+    },
+    {
+      "note": "created_task_deadline",
+      "match": {
+        "text": ["поставь задачу купить билеты до конца недели"]
+      },
+      "response": {
+        "message_id": "mock-128",
+        "kind": "created",
+        "text": "Записал: «Купить билеты», срок — до вс, 25 окт.",
+        "speech": "Записал, срок — до 25 октября.",
+        "records": [
+          {
+            "id": 1006,
+            "type": "task",
+            "text": "Купить билеты",
+            "date": "2026-10-25",
+            "time": null,
+            "date_kind": "deadline",
+            "status": "open",
+            "created_at": "2026-10-21T10:00:05+03:00",
+            "marks": ["new"],
+            "highlight": null
+          }
+        ],
+        "nearest": null,
+        "total": null,
+        "awaiting_reply": false,
+        "buttons": []
+      }
+    },
+    {
+      "note": "длинный list: больше 20 → «Показать ещё»",
+      "match": {
+        "text": ["что у меня в ноябре?", "что у меня в ноябре"]
+      },
+      "response": {
+        "message_id": "mock-129",
+        "kind": "list",
+        "text": "В ноябре — 31 дело:",
+        "speech": "В ноябре — 31 дело.",
+        "records": [
+          {
+            "id": 701,
+            "type": "meeting",
+            "text": "Созвон с Альфой по презентации",
+            "date": "2026-11-01",
+            "time": "15:15",
+            "date_kind": "exact",
+            "status": null,
+            "created_at": null,
+            "marks": [],
+            "highlight": null
+          },
+          {
+            "id": 702,
+            "type": "task",
+            "text": "Подготовить акт",
+            "date": "2026-11-01",
+            "time": "17:45",
+            "date_kind": "exact",
+            "status": "open",
+            "created_at": null,
+            "marks": [],
+            "highlight": null
+          },
+          {
+            "id": 703,
+            "type": "task",
+            "text": "Отправить итоги встречи Натальей",
+            "date": "2026-11-02",
+            "time": "09:30",
+            "date_kind": "exact",
+            "status": "open",
+            "created_at": null,
+            "marks": [],
+            "highlight": null
+          },
+          {
+            "id": 704,
+            "type": "task",
+            "text": "Позвонить Анной",
+            "date": "2026-11-03",
+            "time": "16:30",
+            "date_kind": "exact",
+            "status": "open",
+            "created_at": null,
+            "marks": [],
+            "highlight": null
+          },
+          {
+            "id": 705,
+            "type": "task",
+            "text": "Обновить материалы по мобильному приложению",
+            "date": "2026-11-04",
+            "time": "11:45",
+            "date_kind": "exact",
+            "status": "open",
+            "created_at": null,
+            "marks": [],
+            "highlight": null
+          },
+          {
+            "id": 706,
+            "type": "task",
+            "text": "Подготовиться к встрече с Стартом",
+            "date": "2026-11-05",
+            "time": "20:00",
+            "date_kind": "exact",
+            "status": "open",
+            "created_at": null,
+            "marks": [],
+            "highlight": null
+          },
+          {
+            "id": 707,
+            "type": "task",
+            "text": "Проверить статус задачи по сайту",
+            "date": "2026-11-07",
+            "time": "13:00",
+            "date_kind": "exact",
+            "status": "open",
+            "created_at": null,
+            "marks": [],
+            "highlight": null
+          },
+          {
+            "id": 708,
+            "type": "task",
+            "text": "Проверить сроки по хакатону",
+            "date": "2026-11-07",
+            "time": "14:30",
+            "date_kind": "exact",
+            "status": "open",
+            "created_at": null,
+            "marks": [],
+            "highlight": null
+          },
+          {
+            "id": 709,
+            "type": "task",
+            "text": "Отправить итоги встречи Еленой",
+            "date": "2026-11-08",
+            "time": "19:30",
+            "date_kind": "exact",
+            "status": "open",
+            "created_at": null,
+            "marks": [],
+            "highlight": null
+          },
+          {
+            "id": 710,
+            "type": "task",
+            "text": "Обновить материалы по CRM",
+            "date": "2026-11-09",
+            "time": "14:45",
+            "date_kind": "exact",
+            "status": "open",
+            "created_at": null,
+            "marks": [],
+            "highlight": null
+          },
+          {
+            "id": 711,
+            "type": "task",
+            "text": "Собрать обратную связь по интеграции",
+            "date": "2026-11-11",
+            "time": "15:00",
+            "date_kind": "exact",
+            "status": "open",
+            "created_at": null,
+            "marks": [],
+            "highlight": null
+          },
+          {
+            "id": 712,
+            "type": "meeting",
+            "text": "Демо проекта по сайту",
+            "date": "2026-11-12",
+            "time": "12:45",
+            "date_kind": "exact",
+            "status": null,
+            "created_at": null,
+            "marks": [],
+            "highlight": null
+          },
+          {
+            "id": 713,
+            "type": "task",
+            "text": "Согласовать коммерческое предложение с Алексеем",
+            "date": "2026-11-13",
+            "time": "09:00",
+            "date_kind": "exact",
+            "status": "open",
+            "created_at": null,
+            "marks": [],
+            "highlight": null
+          },
+          {
+            "id": 714,
+            "type": "task",
+            "text": "Проверить сроки по новому продукту",
+            "date": "2026-11-13",
+            "time": "18:30",
+            "date_kind": "exact",
+            "status": "open",
+            "created_at": null,
+            "marks": [],
+            "highlight": null
+          },
+          {
+            "id": 715,
+            "type": "task",
+            "text": "Собрать обратную связь по бюджету",
+            "date": "2026-11-15",
+            "time": "11:45",
+            "date_kind": "exact",
+            "status": "open",
+            "created_at": null,
+            "marks": [],
+            "highlight": null
+          },
+          {
+            "id": 716,
+            "type": "task",
+            "text": "Позвонить Марией",
+            "date": "2026-11-16",
+            "time": "20:15",
+            "date_kind": "exact",
+            "status": "open",
+            "created_at": null,
+            "marks": [],
+            "highlight": null
+          },
+          {
+            "id": 717,
+            "type": "task",
+            "text": "Провести планёрку по интеграции",
+            "date": "2026-11-18",
+            "time": "11:30",
+            "date_kind": "exact",
+            "status": "open",
+            "created_at": null,
+            "marks": [],
+            "highlight": null
+          },
+          {
+            "id": 718,
+            "type": "task",
+            "text": "Подготовить отчёт",
+            "date": "2026-11-19",
+            "time": "11:45",
+            "date_kind": "exact",
+            "status": "open",
+            "created_at": null,
+            "marks": [],
+            "highlight": null
+          },
+          {
+            "id": 719,
+            "type": "meeting",
+            "text": "Демо проекта по новому продукту",
+            "date": "2026-11-20",
+            "time": "09:00",
+            "date_kind": "exact",
+            "status": null,
+            "created_at": null,
+            "marks": [],
+            "highlight": null
+          },
+          {
+            "id": 720,
+            "type": "task",
+            "text": "Напомнить Еленой про хакатону",
+            "date": "2026-11-20",
+            "time": "15:45",
+            "date_kind": "exact",
+            "status": "open",
+            "created_at": null,
+            "marks": [],
+            "highlight": null
+          },
+          {
+            "id": 721,
+            "type": "task",
+            "text": "Обсудить аналитике с Алексеем",
+            "date": "2026-11-21",
+            "time": "18:30",
+            "date_kind": "exact",
+            "status": "open",
+            "created_at": null,
+            "marks": [],
+            "highlight": null
+          },
+          {
+            "id": 722,
+            "type": "task",
+            "text": "Провести планёрку по договору",
+            "date": "2026-11-21",
+            "time": "19:45",
+            "date_kind": "exact",
+            "status": "open",
+            "created_at": null,
+            "marks": [],
+            "highlight": null
+          },
+          {
+            "id": 723,
+            "type": "task",
+            "text": "Обсудить аналитике с Еленой",
+            "date": "2026-11-22",
+            "time": "08:45",
+            "date_kind": "exact",
+            "status": "open",
+            "created_at": null,
+            "marks": [],
+            "highlight": null
+          },
+          {
+            "id": 724,
+            "type": "meeting",
+            "text": "Демо проекта по бюджету",
+            "date": "2026-11-24",
+            "time": "11:00",
+            "date_kind": "exact",
+            "status": null,
+            "created_at": null,
+            "marks": [],
+            "highlight": null
+          },
+          {
+            "id": 725,
+            "type": "task",
+            "text": "Проверить протокол по бюджету",
+            "date": "2026-11-24",
+            "time": "13:45",
+            "date_kind": "exact",
+            "status": "open",
+            "created_at": null,
+            "marks": [],
+            "highlight": null
+          },
+          {
+            "id": 726,
+            "type": "task",
+            "text": "Обсудить бюджет по бюджету",
+            "date": "2026-11-24",
+            "time": "20:30",
+            "date_kind": "exact",
+            "status": "open",
+            "created_at": null,
+            "marks": [],
+            "highlight": null
+          },
+          {
+            "id": 727,
+            "type": "task",
+            "text": "Согласовать коммерческое предложение с Дмитрием",
+            "date": "2026-11-26",
+            "time": "14:00",
+            "date_kind": "exact",
+            "status": "open",
+            "created_at": null,
+            "marks": [],
+            "highlight": null
+          },
+          {
+            "id": 728,
+            "type": "task",
+            "text": "Согласовать протокол с Марией",
+            "date": "2026-11-28",
+            "time": "18:45",
+            "date_kind": "exact",
+            "status": "open",
+            "created_at": null,
+            "marks": [],
+            "highlight": null
+          },
+          {
+            "id": 729,
+            "type": "task",
+            "text": "Отправить итоги встречи Алексеем",
+            "date": "2026-11-29",
+            "time": "16:00",
+            "date_kind": "exact",
+            "status": "open",
+            "created_at": null,
+            "marks": [],
+            "highlight": null
+          },
+          {
+            "id": 730,
+            "type": "task",
+            "text": "Проверить статус задачи по интеграции",
+            "date": "2026-11-30",
+            "time": "10:45",
+            "date_kind": "exact",
+            "status": "open",
+            "created_at": null,
+            "marks": [],
+            "highlight": null
+          },
+          {
+            "id": 731,
+            "type": "task",
+            "text": "Передать отчёт на согласование",
+            "date": "2026-11-30",
+            "time": "15:00",
+            "date_kind": "exact",
+            "status": "open",
+            "created_at": null,
+            "marks": [],
+            "highlight": null
+          }
+        ],
+        "nearest": null,
+        "total": 31,
+        "awaiting_reply": false,
+        "buttons": []
+      }
+    },
+    {
+      "note": "смешанный list: дедлайн, запись без типа, группа «Без срока» в конце",
+      "match": {
+        "text": ["#list_mixed"]
+      },
+      "response": {
+        "message_id": "mock-130",
+        "kind": "list",
+        "text": "На этой неделе — 4 дела:",
+        "speech": null,
+        "records": [
+          {
+            "id": 689,
+            "type": "task",
+            "text": "Подготовиться к встрече с Пульсом",
+            "date": "2026-10-21",
+            "time": "10:15",
+            "date_kind": "exact",
+            "status": "open",
+            "created_at": null,
+            "marks": [],
+            "highlight": null
+          },
+          {
+            "id": 9002,
+            "type": "task",
+            "text": "Купить билеты (тестовая запись заглушки)",
+            "date": "2026-10-25",
+            "time": null,
+            "date_kind": "deadline",
+            "status": "open",
+            "created_at": null,
+            "marks": [],
+            "highlight": null
+          },
+          {
+            "id": 9003,
+            "type": null,
+            "text": "Запись без типа (тестовая запись заглушки)",
+            "date": "2026-10-22",
+            "time": "12:00",
+            "date_kind": "exact",
+            "status": null,
+            "created_at": null,
+            "marks": [],
+            "highlight": null
+          },
+          {
+            "id": 9004,
+            "type": "task",
+            "text": "Разобрать почту (тестовая запись заглушки)",
+            "date": null,
+            "time": null,
+            "date_kind": "none",
+            "status": "open",
+            "created_at": null,
+            "marks": [],
+            "highlight": null
+          }
+        ],
+        "nearest": null,
+        "total": 4,
+        "awaiting_reply": false,
+        "buttons": []
+      }
+    },
+    {
+      "note": "незнакомый kind — рисуем по общим полям",
+      "match": {
+        "text": ["#unknown_kind"]
+      },
+      "response": {
+        "message_id": "mock-131",
+        "kind": "summary",
+        "text": "Ответ незнакомого типа: показываем текст, карточки и кнопки как обычно.",
+        "speech": null,
+        "records": [
+          {
+            "id": 689,
+            "type": "task",
+            "text": "Подготовиться к встрече с Пульсом",
+            "date": "2026-10-21",
+            "time": "10:15",
+            "date_kind": "exact",
+            "status": "open",
+            "created_at": null,
+            "marks": [],
+            "highlight": null
+          }
+        ],
+        "nearest": null,
+        "total": null,
+        "awaiting_reply": false,
+        "buttons": [
+          {
+            "label": "Отменить",
+            "send": {
+              "action": {
+                "id": "cancel"
+              }
+            },
+            "style": "secondary"
+          }
+        ]
+      }
+    },
+    {
+      "note": "kind error от бэка → фронт добавляет «Повторить»",
+      "match": {
+        "text": ["#backend_error"]
+      },
+      "response": {
+        "message_id": "mock-132",
+        "kind": "error",
+        "text": "Извините, у меня сбой. Попробуйте ещё раз.",
+        "speech": "Извините, сбой. Повторите, пожалуйста.",
+        "records": [],
+        "nearest": null,
+        "total": null,
+        "awaiting_reply": false,
+        "buttons": []
+      }
+    }
+  ]
+}
