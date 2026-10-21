@@ -7,6 +7,6 @@ export default defineConfig({
   server: {
     port: 5174,
     strictPort: true,
-    proxy: { '/api/tts': 'http://localhost:8001', '/api': 'http://localhost:8000' },
+    proxy: { '/api': 'http://localhost:8000' },
   },
 });

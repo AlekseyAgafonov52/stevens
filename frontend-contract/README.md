@@ -7,11 +7,10 @@
 ## Запуск
 
 - Всё сразу: в корне `docker compose up --build`, открыть http://localhost:8081.
-  Голос Stevens (Silero, «aidar») — контейнер `tts`; при первом запуске он скачивает модель, до этого ответы звучат голосом браузера.
 - Для разработки: бэк на `localhost:8000`, затем
   ```
   pnpm install
-  pnpm dev          # http://127.0.0.1:5174, /api проксируется на :8000, /api/tts — на :8001
+  pnpm dev          # http://127.0.0.1:5174, /api проксируется на :8000
   ```
 - Проверки: `pnpm lint && pnpm typecheck && pnpm test`.
 
