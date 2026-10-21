@@ -600,6 +600,34 @@ async def answer_list(ctx: Ctx, p: nlu.Parse) -> dict:
     return reply("list", text, speech, nearest=nearest.to_contract() if nearest else None, total=0)
 
 
+async def answer_briefing(ctx: Ctx) -> dict:
+    """Утренний брифинг: при первом открытии за день фронт присылает действие briefing без текста."""
+    hour = ctx.now.hour
+    greeting = "Доброе утро" if hour < 12 else "Добрый день" if hour < 18 else "Добрый вечер"
+    rows = sorted([r for r in await owner_records(ctx, Record.date == ctx.today.isoformat())
+                   if r.status != TaskStatus.done], key=lambda r: (r.time or "99:99", r.id))
+    if not rows:
+        text, speech = ctx.say("briefing_empty", {"greeting": greeting})
+        return reply("list", text, speech, total=0)
+    upcoming = [r for r in rows if r.time and r.time > ctx.now.strftime("%H:%M")]
+    values = {"greeting": greeting, "count": len(rows)}
+    if upcoming:
+        values.update({"time": upcoming[0].time, "text": upcoming[0].text})
+        text, speech = ctx.say("briefing_next", values)
+    else:
+        text, speech = ctx.say("briefing", values)
+    # Плотные места: встречи, между началами которых меньше 30 минут
+    meetings = [r for r in rows if r.type == TaskType.meeting and r.time]
+    dense = [(a, b) for a, b in zip(meetings, meetings[1:]) if 0 < minutes(b.time) - minutes(a.time) < DENSE_MINUTES]
+    if dense:
+        a, b = dense[0]
+        tail, tail_speech = ctx.say("briefing_dense", {"start": a.time, "end": b.time,
+                                                       "count": minutes(b.time) - minutes(a.time)})
+        text = f"{text} {tail}"
+        speech = f"{speech} {tail_speech}" if speech and tail_speech else speech
+    return reply("list", text, speech, records=[r.to_contract() for r in rows], total=len(rows))
+
+
 async def answer_search(ctx: Ctx, p: nlu.Parse) -> dict:
     found = await find(ctx, p)
     if not found:
@@ -720,6 +748,8 @@ async def handle_action(ctx: Ctx, action_id: str, record_id: int | None) -> dict
         ctx.conv.pending = None
         text, speech = ctx.say("cancelled")
         return reply("cancelled", text, speech)
+    if action_id == "briefing":
+        return await answer_briefing(ctx)
     if action_id == "confirm_yes" and pending and pending.kind == "multi":
         return await save_many(ctx, pending.draft["drafts"])
     if action_id == "confirm_yes" and pending and pending.kind == "confirm":

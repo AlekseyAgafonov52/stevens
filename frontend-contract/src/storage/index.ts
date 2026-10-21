@@ -33,6 +33,8 @@ export function dropOldVersions(): void {
 }
 
 export const storage = {
+  briefingDay: () => read('briefing_day'),
+  setBriefingDay: (day: string) => write('briefing_day', day),
   notifyDeclined: () => read('notify_declined') === '1',
   setNotifyDeclined: () => write('notify_declined', '1'),
   notifyFired: (): string[] => {

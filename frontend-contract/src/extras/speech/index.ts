@@ -188,7 +188,16 @@ export function init(): void {
 
   // Safari (и иногда Chrome) разрешает звук, только если первый раз он прозвучал прямо в нажатии.
   // Поэтому при первом нажатии на странице проигрываем тишину и беззвучный пробел — дальше ответы звучат когда угодно
+  // Брифинг приходит при открытии, до первого нажатия: звук пока запрещён — скажем его по первому касанию
+  let unlocked = false;
+  let queued: string | null = null;
   const unlock = () => {
+    unlocked = true;
+    if (queued) {
+      const text = queued;
+      queued = null;
+      setTimeout(() => speak(text), 300);
+    }
     document.removeEventListener('pointerdown', unlock, true);
     document.removeEventListener('keydown', unlock, true);
     if (audio && !audioUrl) {
@@ -204,10 +213,7 @@ export function init(): void {
   document.addEventListener('pointerdown', unlock, true);
   document.addEventListener('keydown', unlock, true);
 
-  onAssistantResponse((response, request) => {
-    if (request.source !== 'voice') return;
-    const text = response.speech ?? response.text;
-    if (!text) return;
+  const speak = (text: string) => {
     stop('новая фраза');
     clearTimeout(startTimer);
     clearTimeout(endTimer);
@@ -217,6 +223,18 @@ export function init(): void {
     void sayServer(text).then((ok) => {
       if (ok === false && isSpeaking()) sayBrowser(text);
     });
+  };
+
+  onAssistantResponse((response, request) => {
+    const briefing = request.action?.id === 'briefing';
+    if (request.source !== 'voice' && !briefing) return;
+    const text = response.speech ?? response.text;
+    if (!text) return;
+    if (briefing && !unlocked) {
+      queued = text;
+      return;
+    }
+    speak(text);
   });
 
   // Обрывает любое действие: кнопка, ввод, микрофон, «Новый диалог», сворачивание вкладки

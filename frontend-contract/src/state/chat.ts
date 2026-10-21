@@ -85,6 +85,24 @@ export function send(
   return true;
 }
 
+/** Запрос без сообщения пользователя: утренний брифинг. false — сейчас занято */
+export function sendQuiet(action: Action): boolean {
+  const state = store.get();
+  if (state.waiting || state.recording) return false;
+  const request: ChatRequest = {
+    conversation_id: state.conversationId,
+    text: '',
+    source: 'text',
+    action,
+    client_time: isoWithOffset(),
+    timezone: timezone(),
+  };
+  const pendingId = uuid();
+  store.set((s) => ({ messages: [...s.messages, { kind: 'pending', id: pendingId, request, startedAt: Date.now() }] }));
+  void run(request, pendingId);
+  return true;
+}
+
 export function pressButton(answerId: string, button: Button, index: number): void {
   emitActivity('button-press');
   if ('action' in button.send) send(button.label, 'button', { action: button.send.action, fromId: answerId, buttonIndex: index });

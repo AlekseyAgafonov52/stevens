@@ -33,6 +33,7 @@ CASES = [
           ("Когда я свободен 30 декабря на час?", None, "clarify", "free_slots_plain")]),
  ("С-2", [("Найди время встретиться с Ваней 30 декабря", None, "clarify", "free_slots"),
           ("", "slot", "created", "created_meeting")]),
+ ("Б-1", [("", "briefing", "list", "briefing_next")]),
 ]
 EXPECT = {
  "С-2": lambda r: r["records"][0]["text"] == "Встреча с Ваней" and r["records"][0]["time"] == "09:00",
@@ -58,7 +59,9 @@ async def main():
                     used.clear()
                     b = {"conversation_id": conv, "text": text, "source": "text", "client_time": CLOCK, "timezone": "Europe/Moscow"}
                     if act:
-                        if act == "slot":  # кнопка со временем шлёт текст
+                        if act == "briefing":  # фронт шлёт действие сам, без кнопки
+                            b["action"] = {"id": "briefing"}; b["source"] = "text"
+                        elif act == "slot":  # кнопка со временем шлёт текст
                             b["text"] = last["buttons"][0]["send"]["text"]; b["source"] = "button"
                         else:
                             btn = next(x for x in last["buttons"] if x["send"].get("action", {}).get("id") == act)
