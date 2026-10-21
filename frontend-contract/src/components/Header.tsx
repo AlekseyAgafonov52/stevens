@@ -5,6 +5,7 @@ import { features } from '../config/features';
 import { T } from '../content/texts';
 import { HeaderRightStart } from '../extensions/points';
 import { newDialog, resetSandbox } from '../state/chat';
+import { install, useCanInstall } from '../lib/install';
 import { emitActivity } from '../state/events';
 import { goAuth, logout } from '../state/session';
 import { useApp } from '../state/store';
@@ -17,9 +18,11 @@ export function Header() {
   const empty = useApp((s) => s.messages.length === 0);
   const busy = useApp((s) => s.waiting || s.recording);
   const [dialog, setDialog] = useState<'new' | 'reset' | null>(null);
+  const installItem = useCanInstall() ? [{ label: T.menu_install, onSelect: () => void install() }] : [];
 
   const sandboxItems = [
     { label: T.menu_reset_sandbox, onSelect: () => setDialog('reset') },
+    ...installItem,
     ...(features.auth ? [{ label: T.menu_go_auth, onSelect: goAuth }] : []),
   ];
 
@@ -56,7 +59,7 @@ export function Header() {
         {mode === 'account' && features.auth && (
           <Menu
             heading={login ?? ''}
-            items={[{ label: T.menu_logout, onSelect: logout }]}
+            items={[...installItem, { label: T.menu_logout, onSelect: logout }]}
             trigger={({ open, toggle }) => (
               <button type="button" className="avatar" aria-label={T.profile_label} aria-haspopup="menu" aria-expanded={open} onClick={toggle}>
                 {(login ?? '?').charAt(0).toUpperCase()}
