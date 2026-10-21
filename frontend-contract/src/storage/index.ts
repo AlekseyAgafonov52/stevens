@@ -33,6 +33,16 @@ export function dropOldVersions(): void {
 }
 
 export const storage = {
+  notifyDeclined: () => read('notify_declined') === '1',
+  setNotifyDeclined: () => write('notify_declined', '1'),
+  notifyFired: (): string[] => {
+    try {
+      return JSON.parse(read('notify_fired') ?? '[]') as string[];
+    } catch {
+      return [];
+    }
+  },
+  setNotifyFired: (keys: string[]) => write('notify_fired', JSON.stringify(keys.slice(-50))),
   wakeWord: () => read('wake_word') === 'on',
   setWakeWord: (on: boolean) => write('wake_word', on ? 'on' : null),
   clientId: () => read('client_id'),

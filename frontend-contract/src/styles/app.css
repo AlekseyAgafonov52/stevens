@@ -282,6 +282,15 @@
 .wake__title { font-weight: 600; color: var(--c-text); }
 .wake__text { font-size: 13px; line-height: 1.4; color: var(--c-text-2); }
 .wake__actions { display: flex; gap: var(--sp-3); }
+/* Плашка «Прислать уведомление?» под ответом */
+.notify-offer {
+  display: flex; flex-direction: column; gap: var(--sp-3); max-width: 320px;
+  padding: var(--sp-5); border-radius: var(--r-card);
+  background: var(--c-surface); border: 1px solid var(--c-line);
+}
+.notify-offer__title { font-weight: 600; color: var(--c-text); }
+.notify-offer__text { font-size: 13px; line-height: 1.4; color: var(--c-text-2); }
+.notify-offer__actions { display: flex; gap: var(--sp-3); }
 .icon-btn--dark:disabled { opacity: 0.4; }
 
 .composer__field { flex: 1; min-width: 0; position: relative; display: flex; }
