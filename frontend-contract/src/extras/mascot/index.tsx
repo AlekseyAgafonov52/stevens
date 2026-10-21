@@ -14,12 +14,12 @@ import writeRead from '../../assets/mascot/stevens-write-read.svg?raw';
 import write1 from '../../assets/mascot/stevens-write-1.svg?raw';
 import write2 from '../../assets/mascot/stevens-write-2.svg?raw';
 import write3 from '../../assets/mascot/stevens-write-3.svg?raw';
-import { capDrop, gestureAt, gestureSvg, type Gesture } from './bow';
+import { capDrop, gestureAt, gestureSvg, shakeAt, type Gesture } from './bow';
 import { onAssistantResponse, onUiActivity } from '../../state/events';
 import { recordingStore } from '../../state/recording';
 import { store, useApp } from '../../state/store';
 import {
-  BOW, CLICK_COOLDOWN_MS, GREET, CLICK_RESET_MS, FLASH_MS, FRAME_MS, NIGHT_FROM, NIGHT_TO, READ_MS, TILT,
+  BOW, BOWS_BEFORE_SHAKE, CLICK_COOLDOWN_MS, GREET, SHAKE, CLICK_RESET_MS, FLASH_MS, FRAME_MS, NIGHT_FROM, NIGHT_TO, READ_MS,
   READ_WRITE_FADE_MS, STATE_FADE_MS, THINK_FRAMES, THINK_LONG_MS, THINK_STEP_MS, TYPING_PAUSE_MS, WRITE_FRAMES, WRITE_MS,
 } from './timing';
 
@@ -30,7 +30,7 @@ const SVG = {
 type Frame = keyof typeof SVG;
 type Mood = 'listen' | 'think' | 'write' | 'concern' | Gesture | 'puzzled' | 'done' | 'rest';
 type Step = { frame: Frame; fade: number };
-type GestureRun = { kind: Gesture; id: number; plan: typeof BOW };
+type GestureRun = { kind: Gesture; id: number; duration: number; at: (ms: number) => number | null };
 
 const reducedMotion = () => window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
 
@@ -62,13 +62,18 @@ function useMood(): { mood: Mood; gesture: GestureRun | null; onClick: () => voi
   const [gesture, setGesture] = useState<GestureRun | null>(null);
   const flashTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const typingTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  const lastClick = useRef(0);
+  const clicks = useRef({ at: 0, count: 0 });
 
   const play = (kind: Gesture, greet = false) => {
     if (reducedMotion()) return;
     clearTimeout(flashTimer.current);
     setFlash(null);
-    setGesture((g) => ({ kind, id: (g?.id ?? 0) + 1, plan: greet ? GREET : kind === 'bow' ? BOW : TILT }));
+    const plan = greet ? GREET : BOW;
+    const run =
+      kind === 'shake'
+        ? { duration: SHAKE.duration, at: (ms: number) => shakeAt(ms, SHAKE) }
+        : { duration: plan.down + plan.hold + plan.up, at: (ms: number) => gestureAt(ms, plan) };
+    setGesture((g) => ({ kind, id: (g?.id ?? 0) + 1, ...run }));
   };
   const playRef = useRef(play);
   playRef.current = play;
@@ -113,20 +118,20 @@ function useMood(): { mood: Mood; gesture: GestureRun | null; onClick: () => voi
   // Поклон гаснет сам; таймер в эффекте, а не в play — переживает повторный запуск эффектов
   useEffect(() => {
     if (!gesture) return;
-    const { plan } = gesture;
-    const timer = setTimeout(() => setGesture(null), plan.down + plan.hold + plan.up);
+    const timer = setTimeout(() => setGesture(null), gesture.duration);
     return () => clearTimeout(timer);
   }, [gesture]);
 
-  // Клик: первый — поклон, дальше — наклон головы; после 10 с без кликов снова поклон
+  // Клик: первые три — поклон, дальше мягко качает головой; после 10 с без кликов счёт сначала
   const onClick = () => {
     const now = Date.now();
-    const since = now - lastClick.current;
+    const since = now - clicks.current.at;
     if (since < CLICK_COOLDOWN_MS) return;
     const s = store.get();
     if (s.recording || s.waiting) return;
-    lastClick.current = now;
-    play(since > CLICK_RESET_MS ? 'bow' : 'tilt');
+    const count = since > CLICK_RESET_MS ? 1 : clicks.current.count + 1;
+    clicks.current = { at: now, count };
+    play(count > BOWS_BEFORE_SHAKE ? 'shake' : 'bow');
   };
 
   let mood: Mood = 'rest';
@@ -185,8 +190,8 @@ function useFrame(mood: Mood, night: boolean): Step {
 
   if (mood === 'write') return write ?? { frame: 'write-read', fade: STATE_FADE_MS };
   if (mood === 'think') return thinking ?? { frame: 'think', fade: STATE_FADE_MS };
-  if ((mood === 'rest' || mood === 'bow' || mood === 'tilt') && night) return { frame: 'rest-night', fade: STATE_FADE_MS };
-  if (mood === 'bow' || mood === 'tilt') return { frame: 'rest', fade: STATE_FADE_MS };
+  if ((mood === 'rest' || mood === 'bow' || mood === 'shake') && night) return { frame: 'rest-night', fade: STATE_FADE_MS };
+  if (mood === 'bow' || mood === 'shake') return { frame: 'rest', fade: STATE_FADE_MS };
   return { frame: mood, fade: STATE_FADE_MS };
 }
 
@@ -201,7 +206,7 @@ function useGesture(gesture: GestureRun | null): number | null {
     const start = performance.now();
     let raf = 0;
     const tick = (now: number) => {
-      const value = gestureAt(now - start, gesture.plan);
+      const value = gesture.at(now - start);
       setK(value);
       if (value !== null) raf = requestAnimationFrame(tick);
     };
@@ -250,14 +255,14 @@ export function MascotPerch() {
   const { frame, fade } = useFrame(mood, night);
   const bow = useGesture(gesture);
   const amp = useHornAmplitude(mood === 'listen');
-  const style = { '--stv-amp': amp, '--stv-cap-drop': bow === null ? 0 : capDrop(mood === 'bow' ? 'bow' : 'tilt', bow) } as CSSProperties;
+  const style = { '--stv-amp': amp, '--stv-cap-drop': bow === null ? 0 : capDrop(mood === 'bow' ? 'bow' : 'shake', bow) } as CSSProperties;
   return (
     <div className="stevens-perch" aria-hidden="true" onClick={onClick} style={style}>
       {/* Поклон рисуется поверх; при k = 0 он совпадает с покоем, поэтому подмена незаметна */}
       <div className="stevens-frames" data-hidden={bow !== null}>
         <Layers frame={frame} fade={fade} />
       </div>
-      {bow !== null && <div className="stevens-layer" dangerouslySetInnerHTML={{ __html: gestureSvg(mood === 'bow' ? 'bow' : 'tilt', bow, night) }} />}
+      {bow !== null && <div className="stevens-layer" dangerouslySetInnerHTML={{ __html: gestureSvg(mood === 'bow' ? 'bow' : 'shake', bow, night) }} />}
       {night && <div className="stevens-cap" dangerouslySetInnerHTML={{ __html: nightcap }} />}
     </div>
   );

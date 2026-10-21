@@ -1,7 +1,8 @@
 /**
- * Поклон и наклон головы без отдельных кадров: фигура считается для доли движения k (0 — покой, 1 — до конца),
+ * Поклон и покачивание головой без отдельных кадров: фигура считается для доли движения k,
  * поэтому движение плавное. При k = 0 рисунок совпадает с stevens-rest.svg (ночью — с rest-night).
- * Поклон — наклоняется всё тело; наклон — только голова набок, глаза прикрыты.
+ * Поклон — наклоняется всё тело (k от 0 до глубины поклона). Покачивание — лицо мягко сдвигается
+ * влево-вправо без поворота (k от −1 до 1), глаза прикрыты, улыбка остаётся.
  */
 const T = 'var(--c-text)';
 const A = 'var(--c-accent)';
@@ -33,14 +34,14 @@ function eyes(k: number, night: boolean): string {
   );
 }
 
-export type Gesture = 'bow' | 'tilt';
+export type Gesture = 'bow' | 'shake';
 
 export function gestureSvg(kind: Gesture, k: number, night: boolean): string {
-  const tilt = kind === 'tilt' ? k : 0;
+  const shift = kind === 'shake' ? 2.2 * k : 0;
   k = kind === 'bow' ? k : 0;
   const d = bodyPath(k);
   const nightEyesY = night && k < 0.2 ? 0.4 : 0;
-  const closed = k > 0.6 || tilt > 0.4;
+  const closed = k > 0.6 || kind === 'shake';
   const mouth =
     k > 0.7
       ? `<path d="M58.2 53.4 L61.8 53.4" stroke="${T}" stroke-width="1.8" stroke-linecap="round"/>`
@@ -50,7 +51,7 @@ export function gestureSvg(kind: Gesture, k: number, night: boolean): string {
     `<path d="${d}" fill="var(--c-surface)"/><clipPath id="stv-bow-clip0"><path d="${d}"/></clipPath>` +
     `<g clip-path="url(#stv-bow-clip0)"><ellipse cx="97" cy="84" rx="24" ry="90" fill="var(--c-mascot-shade)"/></g>` +
     `<path d="${d}" fill="none" stroke="${T}" stroke-width="2.4" stroke-linejoin="round"/>` +
-    `<g transform="translate(0 ${f(10 * k)}) rotate(${f(-12 * tilt)} 60 42) translate(${f(1.5 * tilt)} ${f(-1.5 * tilt)})">` +
+    `<g transform="translate(${f(shift)} ${f(10 * k)})">` +
     `<path d="M50 31.6 Q53 30.2 56 31.6" fill="none" stroke="${T}" stroke-width="1.5" stroke-linecap="round"/>` +
     `<path d="M64 31.2 Q67 30.2 70 31.6" fill="none" stroke="${T}" stroke-width="1.5" stroke-linecap="round"/>` +
     `<g transform="translate(0 ${nightEyesY})">${eyes(closed ? 1 : k, night)}</g>` +
@@ -77,4 +78,11 @@ export function gestureAt(ms: number, plan: { down: number; hold: number; up: nu
   if (ms < down + hold) return depth;
   if (ms < down + hold + up) return depth * (1 - ease((ms - down - hold) / up));
   return null;
+}
+
+/** Покачивание: два мягких «туда-обратно», размах нарастает и гаснет */
+export function shakeAt(ms: number, plan: { duration: number; cycles: number }): number | null {
+  if (ms >= plan.duration) return null;
+  const t = ms / plan.duration;
+  return Math.sin(2 * Math.PI * plan.cycles * t) * Math.sin(Math.PI * t);
 }

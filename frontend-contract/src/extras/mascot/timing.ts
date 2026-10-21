@@ -12,9 +12,10 @@ export const WRITE_FRAMES = ['write-1', 'write-2', 'write-3', 'write-2'] as cons
 export const GREET = { down: 700, hold: 700, up: 800, depth: 1.6 };
 /** Поклон по клику — чуть короче и мельче (≈1,6 с) */
 export const BOW = { down: 550, hold: 450, up: 600, depth: 1.2 };
-/** Клик после поклона — лёгкий наклон головы с прикрытыми глазами (≈1,2 с) */
-export const TILT = { down: 350, hold: 400, up: 450, depth: 1 };
-/** Без кликов столько — следующий клик снова поклон */
+/** С 4-го клика подряд — мягко качает головой, глаза прикрыты, улыбается (≈1 с) */
+export const SHAKE = { duration: 1000, cycles: 2 };
+export const BOWS_BEFORE_SHAKE = 3;
+/** Без кликов столько — счёт кликов сначала, снова поклон */
 export const CLICK_RESET_MS = 10_000;
 export const CLICK_COOLDOWN_MS = 1200;
 /** «Думает» дольше 1,5 с — по очереди точки, карандаш, сверяется, по 2 с */
