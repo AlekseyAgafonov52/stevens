@@ -23,8 +23,15 @@ CASES = [
           ("Созвон с Ваней 30 декабря в 15:15", None, "created", "dense_schedule")]),
  ("П-5", [("Встреча с Петей 30 декабря в 15", None, "created", "created_meeting"),
           ("Задача отправить договор 30 декабря в 15:15", None, "created", "created_task")]),
+ # Несколько дел одной фразой
+ ("М-1", [("Завтра в 10 созвон с Иваном, потом отправить договор Маше, а в пятницу сдать лабу", None, "confirm", "multi_confirm"),
+          ("", "confirm_yes", "created", "multi_created")]),
+ ("М-2", [("Напомни завтра в 10 позвонить Ивану и в 12 написать Маше", None, "confirm", "multi_confirm")]),
+ ("М-3", [("Созвон с Иваном завтра, потом купить молоко", None, "clarify", "clarify_meeting_time")]),
 ]
 EXPECT = {
+ "М-1": lambda r: len(r["records"]) == 3 and all("new" in x["marks"] for x in r["records"]),
+ "М-2": lambda r: [x["type"] for x in r["records"]] == ["reminder", "reminder"],
  "П-1": lambda r: r["records"][0]["text"] == "Созвон с Иваном" and r["records"][0]["type"] == "meeting",
  "П-2": lambda r: r["records"][0]["text"] == "Встреча с Машей",
  "П-3": lambda r: r["records"][0]["time"] == "14:00",

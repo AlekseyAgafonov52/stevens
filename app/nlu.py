@@ -441,6 +441,43 @@ def parse(raw: str, now: datetime) -> Parse:
     return result
 
 
+# ── Несколько дел одной фразой ────────────────────────
+
+MULTI_SPLIT_RE = re.compile(
+    r"\s*[;]\s*|\s*,\s*(?:а\s+|и\s+)?(?:потом|затем|ещё|еще|также|после\s+этого)\b\s*"
+    r"|\s+(?:а\s+потом|и\s+потом|потом|затем|а\s+также|и\s+ещё|и\s+еще|а\s+ещё|а\s+еще)\s+"
+    r"|\s*,?\s+(?:а|и)\s+(?=(?:в|во|к)\s+\d|(?:завтра|послезавтра|сегодня)\b|в\s+" + WEEKDAY_RE.replace("(", "(?:", 1) + r")",
+    I,
+)
+
+
+def parse_many(raw: str, now: datetime) -> list[Parse] | None:
+    """«Завтра в 10 созвон с Иваном, потом отправить договор Маше» → два создания.
+    None — фраза про одно дело. Дата без явного дня берётся из предыдущей части."""
+    text = strip_lead(" ".join(raw.strip().split()))
+    parts = [part.strip(" ,.") for part in MULTI_SPLIT_RE.split(text) if part and part.strip(" ,.")]
+    if len(parts) < 2 or len(parts) > 5:
+        return None
+    first = parse(parts[0], now)
+    if first.intent != "create" or not first.text:
+        return None
+    result = [first]
+    prefix = "напомни " if first.type == "reminder" else "запиши "
+    for part in parts[1:]:
+        p = parse(part, now)
+        if p.intent != "create" or not p.text:
+            p = parse(prefix + part, now)
+        if p.intent != "create" or not p.text:
+            return None
+        # «Напомни в 10 позвонить Ивану и в 12 написать Маше» — оба напоминания
+        if first.type == "reminder" and p.type == "task" and not re.search(r"\bзадач", part, I):
+            p.type = "reminder"
+        if not p.date and result[-1].date:
+            p.date, p.date_kind = result[-1].date, "exact"
+        result.append(p)
+    return result
+
+
 def parse_reply(raw: str, now: datetime) -> Parse:
     """Ответ на уточнение: только дата, время или участник («в 15», «завтра», «с Иваном»)."""
     return parse(raw, now)
