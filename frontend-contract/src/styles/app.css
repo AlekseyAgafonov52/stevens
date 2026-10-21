@@ -282,15 +282,17 @@
 .wake__title { font-weight: 600; color: var(--c-text); }
 .wake__text { font-size: 13px; line-height: 1.4; color: var(--c-text-2); }
 .wake__actions { display: flex; gap: var(--sp-3); }
-/* Плашка «Прислать уведомление?» под ответом */
-.notify-offer {
+/* Плашки-предложения: «Прислать уведомление?», «Рассказать план на сегодня?» */
+.offer, .notify-offer {
   display: flex; flex-direction: column; gap: var(--sp-3); max-width: 320px;
   padding: var(--sp-5); border-radius: var(--r-card);
   background: var(--c-surface); border: 1px solid var(--c-line);
 }
-.notify-offer__title { font-weight: 600; color: var(--c-text); }
-.notify-offer__text { font-size: 13px; line-height: 1.4; color: var(--c-text-2); }
-.notify-offer__actions { display: flex; gap: var(--sp-3); }
+.offer__title, .notify-offer__title { font-weight: 600; color: var(--c-text); }
+.offer__text, .notify-offer__text { font-size: 13px; line-height: 1.4; color: var(--c-text-2); }
+.offer__actions, .notify-offer__actions { display: flex; gap: var(--sp-3); }
+.start__offer { position: relative; top: -40px; margin-top: var(--sp-11); width: min(320px, 100%); }
+.feed__offer { margin-top: var(--sp-5); }
 .icon-btn--dark:disabled { opacity: 0.4; }
 
 .composer__field { flex: 1; min-width: 0; position: relative; display: flex; }

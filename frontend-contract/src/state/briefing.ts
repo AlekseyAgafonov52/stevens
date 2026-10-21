@@ -1,48 +1,81 @@
 /**
- * Утренний брифинг: при первом открытии за день Stevens сам пишет план дня
- * и предупреждает о плотных местах (действие briefing, без сообщения пользователя).
+ * План на сегодня (брифинг) — по предложению, не сам. Предлагаем, если на сегодня есть дела,
+ * а человек не заходил несколько часов: в пустом чате вместо примеров, в непустом — в конце ленты.
+ * «Да» — действие briefing без сообщения пользователя, «Нет» — плашка уходит до следующего долгого перерыва.
  */
+import { useSyncExternalStore } from 'react';
+import { api } from '../api';
 import { storage } from '../storage';
 import { sendQuiet } from './chat';
-import { store } from './store';
+import { createStore, store } from './store';
+
+/** Сколько не заходил, чтобы предложить план */
+const AWAY_MS = 3 * 60 * 60 * 1000;
+/** Как часто отмечаем «был здесь», пока вкладка открыта */
+const SEEN_EVERY_MS = 60 * 1000;
+
+export const briefingStore = createStore<{ offer: { count: number } | null }>({ offer: null });
+
+export function useBriefingOffer() {
+  return useSyncExternalStore(briefingStore.subscribe, briefingStore.get).offer;
+}
 
 function today(): string {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
-let sent: string | null = null;
-let timer: ReturnType<typeof setTimeout> | undefined;
-
-const ready = () => {
-  const s = store.get();
-  return s.screen === 'app' && s.server === 'ok' && !!s.conversationId && !s.waiting && !s.recording;
-};
-
-/** Ждём секунду после входа: лента и диалог должны успеть восстановиться, иначе брифинг затрётся */
-function tryBriefing(): void {
-  if (timer || !ready()) return;
-  timer = setTimeout(() => {
-    timer = undefined;
-    if (ready()) sendBriefing();
-  }, 1000);
+function markSeen(): void {
+  storage.setLastSeen(Date.now());
 }
 
-function sendBriefing(): void {
-  const day = today();
-  if (sent === day || storage.briefingDay() === day) return;
-  // Отмечаем до отправки: sendQuiet меняет store, и подписка вызовет нас снова
-  sent = day;
-  storage.setBriefingDay(day);
-  if (!sendQuiet({ id: 'briefing' })) {
-    sent = null;
-    storage.setBriefingDay('');
+let checking = false;
+
+/** Был долгий перерыв — смотрим, есть ли дела на сегодня */
+async function checkOffer(awaySince: number | null): Promise<void> {
+  if (checking || (awaySince !== null && Date.now() - awaySince < AWAY_MS)) return;
+  checking = true;
+  try {
+    const day = today();
+    const records = await api.records(day, day);
+    const count = records.filter((r) => r.status !== 'done' && !r.marks.includes('deleted')).length;
+    if (count > 0) briefingStore.set({ offer: { count } });
+  } catch {
+    /* без предложения */
+  } finally {
+    checking = false;
   }
+}
+
+export function acceptBriefing(): void {
+  if (sendQuiet({ id: 'briefing' })) briefingStore.set({ offer: null });
+}
+
+export function declineBriefing(): void {
+  briefingStore.set({ offer: null });
 }
 
 export function initBriefing(): void {
-  store.subscribe(tryBriefing);
-  if (typeof document !== 'undefined') {
-    document.addEventListener('visibilitychange', () => document.visibilityState === 'visible' && tryBriefing());
-  }
+  // Время прошлого визита берём до того, как отметим нынешний
+  const previous = storage.lastSeen();
+  let started = false;
+  store.subscribe(() => {
+    const s = store.get();
+    if (started || s.screen !== 'app' || s.server !== 'ok') return;
+    started = true;
+    void checkOffer(previous);
+    markSeen();
+    setInterval(() => document.visibilityState === 'visible' && markSeen(), SEEN_EVERY_MS);
+  });
+  if (typeof document === 'undefined') return;
+  let hiddenAt: number | null = null;
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') {
+      hiddenAt = Date.now();
+      markSeen();
+    } else if (started) {
+      void checkOffer(hiddenAt);
+      markSeen();
+    }
+  });
 }
