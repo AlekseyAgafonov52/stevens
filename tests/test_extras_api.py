@@ -28,8 +28,15 @@ CASES = [
           ("", "confirm_yes", "created", "multi_created")]),
  ("М-2", [("Напомни завтра в 10 позвонить Ивану и в 12 написать Маше", None, "confirm", "multi_confirm")]),
  ("М-3", [("Созвон с Иваном завтра, потом купить молоко", None, "clarify", "clarify_meeting_time")]),
+ # Свободное время
+ ("С-1", [("Встреча с Петей 30 декабря в 10", None, "created", "created_meeting"),
+          ("Когда я свободен 30 декабря на час?", None, "clarify", "free_slots_plain")]),
+ ("С-2", [("Найди время встретиться с Ваней 30 декабря", None, "clarify", "free_slots"),
+          ("", "slot", "created", "created_meeting")]),
 ]
 EXPECT = {
+ "С-2": lambda r: r["records"][0]["text"] == "Встреча с Ваней" and r["records"][0]["time"] == "09:00",
+ "С-1": lambda r: [b["label"] for b in r["buttons"]] == ["09:00", "11:00", "13:00"],
  "М-1": lambda r: len(r["records"]) == 3 and all("new" in x["marks"] for x in r["records"]),
  "М-2": lambda r: [x["type"] for x in r["records"]] == ["reminder", "reminder"],
  "П-1": lambda r: r["records"][0]["text"] == "Созвон с Иваном" and r["records"][0]["type"] == "meeting",
@@ -51,8 +58,11 @@ async def main():
                     used.clear()
                     b = {"conversation_id": conv, "text": text, "source": "text", "client_time": CLOCK, "timezone": "Europe/Moscow"}
                     if act:
-                        btn = next(x for x in last["buttons"] if x["send"].get("action", {}).get("id") == act)
-                        b["action"] = btn["send"]["action"]; b["text"] = btn["label"]; b["source"] = "button"
+                        if act == "slot":  # кнопка со временем шлёт текст
+                            b["text"] = last["buttons"][0]["send"]["text"]; b["source"] = "button"
+                        else:
+                            btn = next(x for x in last["buttons"] if x["send"].get("action", {}).get("id") == act)
+                            b["action"] = btn["send"]["action"]; b["text"] = btn["label"]; b["source"] = "button"
                     r = (await c.post("/api/chat", json=b, headers=h)).json(); last = r
                     ok = r["kind"] == kind and tpl in used and (text != turns[-1][0] or EXPECT.get(name, lambda r: True)(r))
                     print("OK " if ok else "BAD", name, r["kind"], used, r["text"], [(x["label"][:30], x.get("style")) for x in r["buttons"]], [x["marks"] for x in r["records"]][:2])
