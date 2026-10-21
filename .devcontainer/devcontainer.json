@@ -1,0 +1,13 @@
+{
+  "name": "Stevens",
+  "image": "mcr.microsoft.com/devcontainers/base:ubuntu",
+  "features": {
+    "ghcr.io/devcontainers/features/docker-in-docker:2": {}
+  },
+  "forwardPorts": [8080, 8000],
+  "portsAttributes": {
+    "8080": { "label": "Stevens", "onAutoForward": "openBrowser" },
+    "8000": { "label": "API (Swagger: /docs)" }
+  },
+  "postStartCommand": "docker compose up --build -d"
+}
