@@ -1,0 +1,5 @@
+.git
+frontend
+**/__pycache__
+.env
+.env.*

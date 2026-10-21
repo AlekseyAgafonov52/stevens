@@ -1,3 +1,5 @@
+# Весь Stevens одной командой: docker compose up --build
+# Откройте http://localhost:8080
 services:
   postgres:
     image: postgres:16-alpine
@@ -15,6 +17,30 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+
+  backend:
+    build: .
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/taskapp
+      YANDEX_API_KEY: ${YANDEX_API_KEY:-}
+      YANDEX_FOLDER_ID: ${YANDEX_FOLDER_ID:-}
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        # Пусто: фронт ходит на тот же адрес, nginx проксирует /api на бэк.
+        VITE_API_URL: ""
+    ports:
+      - "8080:80"
+    depends_on:
+      - backend
 
 volumes:
   voice_assistant_pg_data:

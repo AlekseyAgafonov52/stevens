@@ -11,13 +11,15 @@ load_dotenv()
 YANDEX_FOLDER = os.getenv("YANDEX_FOLDER_ID")
 YANDEX_KEY = os.getenv("YANDEX_API_KEY")
 
-assert YANDEX_FOLDER is not None
-assert YANDEX_KEY is not None
+# Без ключей сервер всё равно стартует: вход и регистрация работают,
+# а чат отвечает «не понял», пока ключи не заданы.
+if not (YANDEX_FOLDER and YANDEX_KEY):
+    print("⚠️ YANDEX_API_KEY / YANDEX_FOLDER_ID не заданы: чат будет отвечать «не понял».")
 
 MODEL = "yandexgpt-lite"
 
 client = openai.OpenAI(
-    api_key=YANDEX_KEY,
+    api_key=YANDEX_KEY or "missing",
     base_url="https://ai.api.cloud.yandex.net/v1",
     project=YANDEX_FOLDER,
 )

@@ -15,7 +15,7 @@ ENV VITE_API_URL=${VITE_API_URL}
 ENV VITE_API_MODE=real
 ENV VITE_FEATURE_AUTH=true
 
-RUN node -e "const u = new URL(process.env.VITE_API_URL); if (!['http:', 'https:'].includes(u.protocol) || u.username || u.password) throw new Error('VITE_API_URL must be a public HTTP(S) backend URL without credentials');"
+RUN node -e "if (!process.env.VITE_API_URL) process.exit(0); const u = new URL(process.env.VITE_API_URL); if (!['http:', 'https:'].includes(u.protocol) || u.username || u.password) throw new Error('VITE_API_URL must be a public HTTP(S) backend URL without credentials');"
 RUN pnpm run lint && pnpm run typecheck && pnpm test && pnpm run build
 
 FROM nginx:stable-alpine AS runtime
