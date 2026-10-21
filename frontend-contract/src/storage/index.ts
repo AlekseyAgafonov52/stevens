@@ -33,6 +33,8 @@ export function dropOldVersions(): void {
 }
 
 export const storage = {
+  wakeWord: () => read('wake_word') === 'on',
+  setWakeWord: (on: boolean) => write('wake_word', on ? 'on' : null),
   clientId: () => read('client_id'),
   setClientId: (id: string) => write('client_id', id),
   mode: () => (read('mode') === 'sandbox' ? 'sandbox' : null),

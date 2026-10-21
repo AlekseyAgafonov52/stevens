@@ -46,6 +46,16 @@ export function cancelRecording(): void {
   store.set({ input: prefix });
 }
 
+// Вызов по имени: запись началась без кнопки — берём то, что уже набрано, как при нажатии
+voice.on('wake', () => {
+  prefix = store.get().input.trim();
+  auto = false;
+  heard = false;
+  setHint(null);
+  // После recording-start, иначе он погасит кивок персонажа
+  setTimeout(() => emitActivity('wake'), 0);
+});
+
 voice.on('state', (state) => {
   if (state === 'asking') setHint('voice_permission');
   if (state === 'recording') {

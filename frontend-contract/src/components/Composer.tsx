@@ -1,5 +1,5 @@
 /** Строка ввода — 02-screens.md, 2.5–2.6. */
-import { ArrowUp, Mic, Trash2 } from 'lucide-react';
+import { ArrowUp, Ear, Mic, Trash2 } from 'lucide-react';
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { T, fill } from '../content/texts';
 import { InputBarOverlay } from '../extensions/points';
@@ -7,6 +7,8 @@ import { send } from '../state/chat';
 import { emitActivity } from '../state/events';
 import { cancelRecording, recordingStore, startRecording, stopRecording } from '../state/recording';
 import { store, useApp } from '../state/store';
+import { setWakeWord, wakeStore } from '../state/wake';
+import { voice } from '../voice';
 
 const LIMIT = 300;
 const COUNTER_FROM = 250;
@@ -66,6 +68,20 @@ function RecordingRow() {
   );
 }
 
+/** Вызов по имени: включить или выключить. Пока слушает фоном — у кнопки тихая точка */
+function WakeToggle() {
+  const { enabled, armed } = useSyncExternalStore(wakeStore.subscribe, wakeStore.get);
+  if (!voice.isSupported()) return null;
+  return (
+    <button type="button" className={`icon-btn icon-btn--ghost wake-btn ${enabled ? 'wake-btn--on' : ''}`}
+      aria-pressed={enabled} aria-label={enabled ? T.btn_wake_off : T.btn_wake_on} title={enabled ? T.btn_wake_off : T.btn_wake_on}
+      onClick={() => { emitActivity('button-press'); setWakeWord(!enabled); }}>
+      <Ear size={18} strokeWidth={1.5} aria-hidden="true" />
+      {enabled && armed && <span className="wake-btn__dot" aria-hidden="true" />}
+    </button>
+  );
+}
+
 export function Composer() {
   const input = useApp((s) => s.input);
   const waiting = useApp((s) => s.waiting);
@@ -103,6 +119,7 @@ export function Composer() {
           <RecordingRow />
         ) : (
           <>
+            <WakeToggle />
             <button type="button" className="icon-btn icon-btn--dark" aria-label={T.btn_mic} disabled={waiting}
               onClick={() => { emitActivity('button-press'); startRecording(); }}>
               <Mic size={18} strokeWidth={1.5} aria-hidden="true" />
