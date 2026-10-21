@@ -14,12 +14,14 @@ import { ErrorBoundary } from './components/ErrorBoundary';
 import { initExtras } from './extensions/flags';
 import './state/recording';
 import { boot } from './state/session';
+import { initBriefing } from './state/briefing';
 import { initNotify } from './state/notify';
 import { initWakeWord } from './state/wake';
 
 initExtras();
 initWakeWord();
 initNotify();
+initBriefing();
 void boot();
 
 createRoot(document.getElementById('root')!).render(
