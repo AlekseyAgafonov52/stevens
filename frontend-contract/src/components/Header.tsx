@@ -3,7 +3,7 @@ import { ChevronDown, Plus } from 'lucide-react';
 import { useState } from 'react';
 import { features } from '../config/features';
 import { T } from '../content/texts';
-import { HeaderRightStart } from '../extensions/points';
+import { HeaderRightStart, sandboxMenuExtra } from '../extensions/points';
 import { newDialog, resetSandbox } from '../state/chat';
 import { install, useCanInstall } from '../lib/install';
 import { emitActivity } from '../state/events';
@@ -21,6 +21,7 @@ export function Header() {
   const installItem = useCanInstall() ? [{ label: T.menu_install, onSelect: () => void install() }] : [];
 
   const sandboxItems = [
+    ...sandboxMenuExtra(T.menu_tour),
     { label: T.menu_reset_sandbox, onSelect: () => setDialog('reset') },
     ...installItem,
     ...(features.auth ? [{ label: T.menu_go_auth, onSelect: goAuth }] : []),

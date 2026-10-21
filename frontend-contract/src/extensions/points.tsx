@@ -11,6 +11,7 @@ const calendar = () => import('../extras/calendar');
 const edit = () => import('../extras/edit');
 const mascot = () => import('../extras/mascot');
 const deleted = () => import('../extras/deleted-card');
+const tour = () => import('../extras/tour');
 
 const CalendarToggle = features.d6_calendar ? lazy(() => calendar().then((m) => ({ default: m.CalendarToggle }))) : null;
 const CalendarPanel = features.d6_calendar ? lazy(() => calendar().then((m) => ({ default: m.CalendarPanel }))) : null;
@@ -18,6 +19,7 @@ const EditButton = features.d10_undo ? lazy(() => edit().then((m) => ({ default:
 const FeedEditForm = features.d10_undo ? lazy(() => edit().then((m) => ({ default: m.FeedEditForm }))) : null;
 const MascotPerch = features.d14_mascot ? lazy(() => mascot().then((m) => ({ default: m.MascotPerch }))) : null;
 const MascotTitle = features.d14_mascot ? lazy(() => mascot().then((m) => ({ default: m.MascotTitle }))) : null;
+const TourBar = features.d15_tour ? lazy(() => tour().then((m) => ({ default: m.TourBar }))) : null;
 const DeletedLabel =
   features.d2_delete || features.d10_undo ? lazy(() => deleted().then((m) => ({ default: m.DeletedLabel }))) : null;
 
@@ -74,4 +76,14 @@ export function InputBarOverlay() {
 /** Д14: персонаж справа от «Stevens» на экране входа */
 export function LoginTitleAside() {
   return MascotTitle ? wrap(<MascotTitle />) : null;
+}
+
+/** Д15: обучение в песочнице — над строкой статуса */
+export function BottomTop() {
+  return TourBar ? wrap(<TourBar />) : null;
+}
+
+/** Д15: «Пройти обучение» в меню песочницы */
+export function sandboxMenuExtra(label: string): { label: string; onSelect: () => void }[] {
+  return features.d15_tour ? [{ label, onSelect: () => void import('../extras/tour/state').then((m) => m.startTour()) }] : [];
 }

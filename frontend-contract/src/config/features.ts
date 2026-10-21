@@ -27,6 +27,8 @@ export const features = {
   d13_autolisten: on('D13_AUTOLISTEN'),
   /** Д14 Персонаж Stevens — docs/08-mascot.md; подключает src/styles/mascot.css */
   d14_mascot: on('D14_MASCOT'),
+  /** Д15 Обучение в песочнице: Stevens предлагает пройти главное по шагам — 07-extras.md, раздел 11 */
+  d15_tour: on('D15_TOUR'),
 } as const;
 
 /** Откуда берём ответы: 'mock' — локальные заглушки (src/api/mocks.json), 'real' — бэк по VITE_API_URL */
