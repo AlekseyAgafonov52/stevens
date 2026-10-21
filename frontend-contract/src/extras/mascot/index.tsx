@@ -106,8 +106,8 @@ function useMood(): { mood: Mood; gesture: GestureRun | null; onClick: () => voi
         setGesture(null);
       }
       if (kind === 'new-dialog') playRef.current('bow', true);
-      // Позвали по имени — коротко кивает и слушает
-      if (kind === 'wake') playRef.current('tilt');
+      // Позвали по имени — короткий поклон, дальше слушает
+      if (kind === 'wake') playRef.current('bow');
     });
     return () => {
       offResponse();
