@@ -3,7 +3,7 @@ import { Composer } from './components/Composer';
 import { Feed } from './components/Feed';
 import { Header } from './components/Header';
 import { StatusLine } from './components/StatusLine';
-import { LayoutSidePanel } from './extensions/points';
+import { BottomTop, LayoutSidePanel } from './extensions/points';
 import { useApp } from './state/store';
 
 export function App() {
@@ -18,6 +18,7 @@ export function App() {
           <Feed />
           <div className="bottom">
             <div className="bottom__column">
+              <BottomTop />
               <StatusLine />
               <Composer />
             </div>

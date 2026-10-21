@@ -38,6 +38,10 @@ export const storage = {
     return Number.isFinite(v) && v > 0 ? v : null;
   },
   setLastSeen: (at: number) => write('last_seen', String(at)),
+  tourSeen: () => read('tour_seen') === '1',
+  setTourSeen: () => write('tour_seen', '1'),
+  briefingDay: () => read('briefing_day'),
+  setBriefingDay: (day: string) => write('briefing_day', day),
   notifyDeclined: () => read('notify_declined') === '1',
   setNotifyDeclined: () => write('notify_declined', '1'),
   notifyFired: (): string[] => {
