@@ -105,6 +105,11 @@ export function declineOffer(): void {
 export function initNotify(): void {
   if (!supported()) return;
   onAssistantResponse((response) => {
+    // Перенос, удаление и отметка фразой тоже меняют, когда звонить
+    if (response.kind === 'updated' || response.kind === 'deleted' || response.kind === 'completed') {
+      if (notifyGranted()) void reschedule();
+      return;
+    }
     if (response.kind !== 'created') return;
     if (notifyGranted()) {
       void reschedule();

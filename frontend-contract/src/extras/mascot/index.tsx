@@ -89,7 +89,7 @@ function useMood(): { mood: Mood; gesture: GestureRun | null; onClick: () => voi
     const offResponse = onAssistantResponse((response) => {
       setConflict(response.kind === 'conflict');
       if (response.kind === 'not_understood' || response.kind === 'off_topic') showFlash('puzzled');
-      else if (response.kind === 'created' || response.kind === 'completed' || response.kind === 'deleted') showFlash('done');
+      else if (response.kind === 'created' || response.kind === 'completed' || response.kind === 'deleted' || response.kind === 'updated') showFlash('done');
     });
     const offActivity = onUiActivity((kind) => {
       if (kind === 'typing') {

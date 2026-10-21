@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from functools import lru_cache
 from datetime import date, datetime, timedelta
 
 from app.textfmt import MONTHS_GEN, MONTHS_PREP, MONTHS_SHORT, capitalize, date_speech, date_text, week_bounds
@@ -47,6 +48,8 @@ STOPWORDS = {
     "ставил", "ставила", "когда-то", "выполненной", "выполненным", "выполнено", "отметь", "удали", "удалить",
     "сделал", "сделала", "сделано", "который", "которую", "мы", "нам", "нас", "а", "же", "уже", "там",
     "сегодня", "завтра", "вчера", "послезавтра",
+    "последнюю", "последний", "последнее", "последняя", "предыдущую", "эта", "перенеси", "перенести", "передвинь",
+    "сдвинь", "подвинь", "поменяй", "измени", "время", "дату", "позже", "раньше", "выполненной", "готово",
 }
 
 
@@ -60,7 +63,7 @@ class Period:
 
 @dataclass
 class Parse:
-    intent: str = "unknown"  # create list search help thanks off_topic delete complete free unknown
+    intent: str = "unknown"  # create list search help thanks off_topic delete complete free move unknown
     type: str | None = None
     text: str | None = None
     date: date | None = None
@@ -70,6 +73,9 @@ class Parse:
     period: Period | None = None
     filter_type: str | None = None
     keywords: list[str] = field(default_factory=list)
+    required: list[str] = field(default_factory=list)  # search: без этих ключей запись не подходит
+    ref: bool = False           # «её», «это», «последнюю» — запись из контекста диалога
+    shift: int = 0              # move: «на час позже» → +60 минут
     ask: str | None = None      # when | exists
     tense: str | None = None    # past | future
     vague_period: bool = False  # «на следующей неделе» без дня у создания
@@ -281,9 +287,82 @@ def stem(word: str) -> str:
     return word if len(word) <= 3 else word[: max(3, len(word) - 2)]
 
 
+# Слова с одним смыслом ищем вместе: «звонил Ивану» найдёт «Позвонить Ивану» и «Созвон с Иваном»
+ROOTS = {
+    "звонить": "звон", "позвонить": "звон", "перезвонить": "звон", "созвониться": "звон", "созвон": "звон",
+    "звонок": "звон", "встреча": "встреч", "встретиться": "встреч", "встречаться": "встреч",
+    "увидеться": "встреч", "видеться": "встреч",
+}
+# «Ваня» и «Иван» — один человек
+NICKNAMES = {
+    "ваня": "иван", "петя": "петр", "маша": "мария", "леша": "алексей", "алеша": "алексей", "саша": "александр",
+    "дима": "дмитрий", "сережа": "сергей", "лена": "елена", "катя": "екатерина", "настя": "анастасия",
+    "миша": "михаил", "коля": "николай", "таня": "татьяна", "оля": "ольга", "женя": "евгений", "юля": "юлия",
+    "аня": "анна", "наташа": "наталья", "андрюша": "андрей", "вова": "владимир", "паша": "павел",
+}
+SEARCH_FILLERS = {"последний", "раз", "что-нибудь", "что-то", "нибудь", "вообще", "всё", "все", "весь", "дело", "раньше"}
+
+try:
+    import pymorphy3
+    _MORPH = pymorphy3.MorphAnalyzer()
+except Exception:  # noqa: BLE001 — без pymorphy3 поиск работает по основам слов
+    _MORPH = None
+
+
+@lru_cache(maxsize=20000)
+def word_key(word: str) -> str:
+    """Ключ слова для поиска: «@иван» — имя (с учётом «Ваня»), «~звон» — смысловая группа, иначе основа."""
+    if _MORPH is not None:
+        forms = _MORPH.parse(word)
+        first = forms[0]
+        lemma = first.normal_form.replace("ё", "е")
+        if "Name" in first.tag or (word[:1].isupper() and any("Name" in f.tag for f in forms[:3])):
+            name = next(f for f in forms if "Name" in f.tag).normal_form.replace("ё", "е")
+            return "@" + NICKNAMES.get(name, name)
+        if lemma in ROOTS:
+            return "~" + ROOTS[lemma]
+    return stem(word)
+
+
+def _lemma(word: str) -> str:
+    return _MORPH.parse(word)[0].normal_form if _MORPH is not None else word.lower()
+
+
 def keywords(text: str) -> list[str]:
     words = re.findall(r"[A-Za-zА-Яа-яЁё0-9-]+", text)
-    return [stem(w) for w in words if w.lower().replace("ё", "е") not in STOPWORDS and len(w) >= 2 and not w.isdigit()]
+    return [word_key(w) for w in words if w.lower().replace("ё", "е") not in STOPWORDS and len(w) >= 2 and not w.isdigit()]
+
+
+def search_keywords(text: str, filter_type: str | None = None) -> tuple[list[str], list[str]]:
+    """Ключи для поиска и обязательные из них: имена и названия с большой буквы («Петром», «Вектор»)."""
+    words = re.findall(r"[A-Za-zА-Яа-яЁё0-9-]+", text)
+    keys, required = [], []
+    for i, w in enumerate(words):
+        if w.lower().replace("ё", "е") in STOPWORDS or len(w) < 2 or w.isdigit() or _lemma(w) in SEARCH_FILLERS:
+            continue
+        key = word_key(w)
+        if filter_type == "meeting" and key in ("~звон", "~встреч"):
+            continue  # «найди созвон с Петром» — любая встреча с Петром, не только со словом «созвон»
+        keys.append(key)
+        if key.startswith("@") or (i > 0 and w[:1].isupper()):
+            required.append(key)
+    return keys, required
+
+
+def record_has(words: list[str], key: str) -> bool:
+    """Есть ли в словах записи ключ поиска."""
+    if key[:1] in "@~":
+        return any(word_key(w) == key for w in words)
+    return any(w.lower().replace("ё", "е").startswith(key) for w in words)
+
+
+def past_tense(text: str) -> bool:
+    if re.search(r"\b(был|была|было|были|последний\s+раз|в\s+прошлый\s+раз|раньше)\b", text, I):
+        return True
+    if _MORPH is None:
+        return False
+    return any("VERB" in f.tag and "past" in f.tag
+               for f in (_MORPH.parse(w)[0] for w in re.findall(r"[А-Яа-яЁё]+", text)))
 
 
 def _filter_type(text: str) -> str | None:
@@ -313,6 +392,11 @@ SEARCH_RE = re.compile(rf"(\bнайди\b|\bнайти\b|\bпоищи\b|\bищи
 LIST_RE = re.compile(rf"(что\s+у\s+меня|какие\s+(?:у\s+меня\s+)?(?:планы|дела|задачи|встречи|напоминания)|^покажи|что\s+(?:я\s+)?запланировано|есть\s+ли\s+у\s+меня|что\s+(?:было|будет)|мо[её]\s+расписание|\bпланы\s+на\b|чем\s+я\s+занят)", I)
 OFFTOPIC_RE = re.compile(r"(погод|анекдот|шутк|курс\s+(?:доллар|евро|валют)|новост|рецепт|кто\s+так|переведи|столиц|сколько\s+будет|расскажи\s+(?:о|про)\s+себе|как\s+дела|фильм|музык|игр[ау]|стих)", I)
 CREATE_VERB_RE = re.compile(r"^(?:пожалуйста\s+)?(напомни(?:те)?(?:\s+мне)?|поставь|запиши|добавь|создай|запланируй|назначь|внеси|заведи)\b", I)
+DONE_RE = re.compile(r"^(?:готово|сделано|выполнено|сделал|сделала)[\s.!]*$", I)
+REF_RE = re.compile(rf"\b(её|ее|его|это|эту|этот|эта|последн\w*|предыдущ\w*)\b", I)
+MOVE_RE = re.compile(r"^(?:перенеси(?:те)?|перенести|передвинь|сдвинь|подвинь|поменяй|измени)\b", I)
+SHIFT_RE = re.compile(r"\bна\s+(полчаса|(\d+)?\s*час\w*|(\d+)\s*минут\w*)\s+(позже|раньше)\b", I)
+TIME_ON_RE = re.compile(r"\bна\s+(\d{1,2})\b(?![:.]\d|\s*(?:час|минут|числ|январ|феврал|март|апрел|ма[яй]|июн|июл|август|сентябр|октябр|ноябр|декабр))", I)
 REMIND_RE = re.compile(r"(^напомни|\bнапомни\b|\bнапоминани)", I)
 
 
@@ -393,13 +477,36 @@ def parse(raw: str, now: datetime) -> Parse:
         result.intent = "help"
         return result
 
-    if DELETE_RE.search(lower) or COMPLETE_RE.search(lower):
+    if DELETE_RE.search(lower) or COMPLETE_RE.search(lower) or DONE_RE.search(lower):
         result.intent = "delete" if DELETE_RE.search(lower) else "complete"
         result.filter_type = _filter_type(lower)
         rest = _cut(text, info.spans + time_spans)
-        result.keywords = keywords(rest)
+        result.keywords, result.required = search_keywords(rest, result.filter_type)
+        result.ref = bool(REF_RE.search(lower)) or bool(DONE_RE.search(lower))
         result.date = info.date
         result.time = time if not ambiguous else None
+        return result
+
+    # «Перенеси её на завтра», «Сдвинь встречу с Иваном на час позже»
+    if MOVE_RE.search(lower):
+        result.intent = "move"
+        result.filter_type = _filter_type(lower)
+        spans = info.spans + time_spans
+        shift = SHIFT_RE.search(text)
+        if shift:
+            spans.append(shift.span())
+            amount = shift.group(1).lower()
+            result.shift = 30 if amount == "полчаса" else 60 * int(shift.group(2) or 1) if "час" in amount else int(shift.group(3))
+            result.shift *= -1 if shift.group(4).lower() == "раньше" else 1
+        if not time and not shift:
+            hour = TIME_ON_RE.search(text)
+            if hour and int(hour.group(1)) < 24:
+                h = int(hour.group(1))
+                time = f"{h + 12 if 1 <= h <= 7 else h:02d}:00"
+                spans.append(hour.span())
+        result.keywords, result.required = search_keywords(_cut(text, spans), result.filter_type)
+        result.ref = bool(REF_RE.search(lower)) or not result.keywords
+        result.date, result.time = info.date, time
         return result
 
     # «Когда я свободен в четверг на час?», «Найди время встретиться с Ваней»
@@ -418,9 +525,9 @@ def parse(raw: str, now: datetime) -> Parse:
         result.filter_type = _filter_type(lower)
         if re.search(r"\bкогда\b(?!-)", lower):
             result.ask = "when"
-            result.tense = "past" if re.search(r"\b(был|была|было|были)\b", lower) else "future"
+            result.tense = "past" if past_tense(lower) else "future"
         rest = _cut(text, info.spans + time_spans)
-        result.keywords = keywords(rest)
+        result.keywords, result.required = search_keywords(rest, result.filter_type)
         if info.period:
             result.period = info.period
         elif info.date:
@@ -497,13 +604,6 @@ CLAUSE_RE = re.compile(
     r"(?:(?:должен|должна|должны|обязательно)\s+)?",
     I,
 )
-
-try:
-    import pymorphy3
-    _MORPH = pymorphy3.MorphAnalyzer()
-except Exception:  # noqa: BLE001 — без pymorphy3 оставляем глагол как есть
-    _MORPH = None
-
 
 def _infinitive(word: str) -> str:
     if _MORPH is None:
