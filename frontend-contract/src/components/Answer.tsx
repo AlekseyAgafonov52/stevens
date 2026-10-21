@@ -5,7 +5,7 @@ import { T, fill } from '../content/texts';
 import { dayTitle, groupByDay } from '../lib/dates';
 import { pressButton } from '../state/chat';
 import { useApp, type AnswerMessage } from '../state/store';
-import { AnswerExtraButtons, RecordCardOverride } from '../extensions/points';
+import { AnswerExtraButtons, RecordCardOverride, cardEditHandler } from '../extensions/points';
 import { Pill, type PillVariant } from './Pill';
 import { RecordCard } from './RecordCard';
 
@@ -37,6 +37,7 @@ export function Answer({ message, isLast }: Props) {
         record={flash ? { ...record, marks: [...record.marks, 'new'] } : record}
         withDate={withDate}
         isNew={(fresh && record.marks.includes('new')) || !!flash}
+        onClick={cardEditHandler(message, record, isLast && !message.restored && !waiting && !editing)}
       />
     );
   };

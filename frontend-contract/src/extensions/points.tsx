@@ -5,7 +5,7 @@
 import { lazy, Suspense, type ReactNode } from 'react';
 import type { RecordItem } from '../api/types';
 import { features } from '../config/features';
-import type { AnswerMessage } from '../state/store';
+import { store, type AnswerMessage } from '../state/store';
 
 const calendar = () => import('../extras/calendar');
 const edit = () => import('../extras/edit');
@@ -40,6 +40,18 @@ export function AnswerExtraButtons({ message, isLast }: { message: AnswerMessage
   if (response.kind !== 'created' || response.records.length !== 1 || response.records[0].id === null) return null;
   if (response.records[0].marks.includes('deleted')) return null;
   return wrap(<EditButton message={message} isLast={isLast} />);
+}
+
+/**
+ * Д10: в ответе created с несколькими записями (плотный график) любую карточку можно открыть
+ * и поправить нажатием. undefined — карточка не нажимается
+ */
+export function cardEditHandler(message: AnswerMessage, record: RecordItem, active: boolean) {
+  const { response } = message;
+  if (!FeedEditForm || !active || response.kind !== 'created' || response.records.length < 2) return undefined;
+  if (record.id === null || record.marks.includes('deleted')) return undefined;
+  const id = record.id;
+  return () => store.set({ editing: { messageId: message.id, recordId: id } });
 }
 
 /** Д10: форма правки на месте карточки в ленте. null — обычная карточка */

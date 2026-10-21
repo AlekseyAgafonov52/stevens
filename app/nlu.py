@@ -26,6 +26,9 @@ MEETING_NOUNS = {
     "встречу": "Встреча", "встреча": "Встреча", "встречи": "Встреча",
     "созвон": "Созвон", "планерку": "Планёрка", "планёрку": "Планёрка", "планерка": "Планёрка",
     "планёрка": "Планёрка", "совещание": "Совещание", "демо": "Демо", "звонок": "Звонок",
+    # «напомни о встрече с Машей» → «Встреча с Машей»
+    "встрече": "Встреча", "созвоне": "Созвон", "планерке": "Планёрка", "планёрке": "Планёрка",
+    "совещании": "Совещание",
 }
 MEETING_WORD_RE = rf"(встреч|созвон|план{E}рк|совещани|демо\b)"
 
@@ -84,9 +87,15 @@ def _parse_time(text: str) -> tuple[str | None, bool, list[tuple[int, int]]]:
         if h < 24 and mm < 60:
             spans.append(m.span())
             ampm = re.search(r"\s+(утра|дня|вечера|ночи)\b", text[m.end():m.end() + 8], I)
+            word = TIME_WORDS.search(text)
+            ambiguous = False
             if ampm and ampm.group(1).lower() in ("вечера", "дня") and h < 12:
                 h += 12
-            return f"{h:02d}:{mm:02d}", False, spans
+            elif not ampm and not word and len(m.group(1)) == 1 and 1 <= h <= 7:
+                # «в 2:00» — как «в 2»: ставим день и переспрашиваем (Р-19). «в 02:00» — точно ночь
+                h += 12
+                ambiguous = True
+            return f"{h:02d}:{mm:02d}", ambiguous, spans
     m = TIME_H.search(text)
     if m:
         h = int(m.group(1))
@@ -299,8 +308,35 @@ CREATE_VERB_RE = re.compile(r"^(?:пожалуйста\s+)?(напомни(?:т�
 REMIND_RE = re.compile(r"(^напомни|\bнапомни\b|\bнапоминани)", I)
 
 
+# Вводные слова и просьбы в начале фразы: «Слушай, а можешь напомнить, что…» → «напомни …»
+LEAD_RE = re.compile(r"^(?:(?:слушай(?:те)?|послушай|стивенс|stevens|ну|а|так|эй|окей|ок|короче|пожалуйста)\b[\s,!.]*)+", I)
+ASK_RE = re.compile(r"^(?:(?:ты|вы)\s+)?(?:не\s+)?(?:можешь|можете|мог\s+бы|могла\s+бы|могли\s+бы|сможешь)(?:\s+(?:ли|ты|вы|мне|пожалуйста))*\b[\s,]*", I)
+ASK_VERBS = (
+    (rf"(?:сделать|создать|поставить|завести|добавить)\s+(?:мне\s+)?напоминани[ея]", "напомни"),
+    (r"напомнить", "напомни"), (r"поставить", "поставь"), (r"записать", "запиши"), (r"добавить", "добавь"),
+    (r"(?:создать|сделать)", "создай"), (r"запланировать", "запланируй"), (r"назначить", "назначь"),
+    (r"найти", "найди"), (r"показать", "покажи"), (r"удалить", "удали"), (r"отметить", "отметь"),
+)
+
+
+def strip_lead(text: str) -> str:
+    rest = LEAD_RE.sub("", text)
+    asked = ASK_RE.match(rest)
+    if asked:
+        rest = rest[asked.end():]
+        for verb, imperative in ASK_VERBS:
+            m = re.match(rf"{verb}\b", rest, I)
+            if m:
+                rest = imperative + rest[m.end():]
+                break
+    rest = re.sub(r"^напомни(\s+мне)?[\s,]+(?:о\s+том|про\s+то)?[\s,]*(?:что|чтобы)\b[\s,]*", r"напомни\1 ", rest, flags=I)
+    rest = re.sub(r"^напомни(\s+мне)?\s+(?:о\s+том|про\s+то)\b[\s,]*", r"напомни\1 ", rest, flags=I)
+    rest = rest.strip(" ,")
+    return rest or text
+
+
 def parse(raw: str, now: datetime) -> Parse:
-    text = " ".join(raw.strip().split())
+    text = strip_lead(" ".join(raw.strip().split()))
     result = Parse()
 
     # Благодарность: одна — thanks; с просьбой — выполняем просьбу (Р-124)
@@ -367,7 +403,8 @@ def parse(raw: str, now: datetime) -> Parse:
 
     # Создание
     is_reminder = bool(REMIND_RE.search(lower))
-    is_meeting = bool(re.search(MEETING_WORD_RE, lower)) and not is_reminder
+    # Встреча важнее слова «напоминание»: «напомни про встречу в 15» — встреча, с проверкой конфликтов
+    is_meeting = bool(re.search(MEETING_WORD_RE, lower))
     has_verb = bool(CREATE_VERB_RE.search(lower))
     has_need = bool(re.search(r"\b(нужно|надо|необходимо|не\s+забыть)\b", lower))
     is_task_word = bool(re.search(r"^(?:поставь|запиши|добавь|создай)\s+задач", lower))
@@ -375,7 +412,7 @@ def parse(raw: str, now: datetime) -> Parse:
         return result  # unknown
 
     result.intent = "create"
-    result.type = "reminder" if is_reminder else "meeting" if is_meeting else "task"
+    result.type = "meeting" if is_meeting else "reminder" if is_reminder else "task"
     result.time = time
     result.time_ambiguous = ambiguous
     result.date = info.date
@@ -388,7 +425,7 @@ def parse(raw: str, now: datetime) -> Parse:
     body = re.sub(r"\b(?:у\s+меня|мне|нужно|надо|необходимо|не\s+забыть|пожалуйста)\b", " ", body, flags=I)
     body = re.sub(r"\b(?:утром|вечером|днём|днем)\b", " ", body, flags=I)
     body = " ".join(body.split()).strip(" ,.:;!—-")
-    if result.type == "reminder":
+    if is_reminder:
         body = re.sub(r"^(?:про|о|об|насчёт|насчет)\s+", "", body, flags=I)
     # Существительное встречи — в именительный падеж: «встречу с Иваном» → «Встреча с Иваном»
     first = body.split(" ", 1)

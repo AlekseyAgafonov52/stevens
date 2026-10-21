@@ -15,7 +15,22 @@ CASES = [
  ("Д-5", [("Удали задачу про договор", None, "clarify", "which_one")]),
  ("Д-6", [("Напомни завтра в 10 позвонить Ивану", None, "created", "created_reminder"), ("", "undo", "deleted", "undo_done")]),
  ("Д-7", [("Удали встречу с Марией в субботу", None, "not_understood", "not_understood")]),
+ # Исправления парсинга и плотный график (бэклог, 2026-10-21)
+ ("П-1", [("Слушай а ты можешь сделать напоминание о том что 30 декабря созвон с Иваном в 15", None, "created", "created_meeting")]),
+ ("П-2", [("Напомни про встречу с Машей 30 декабря в 15", None, "created", "created_meeting")]),
+ ("П-3", [("Встреча с Петей 30 декабря в 2:00", None, "confirm", "confirm")]),
+ ("П-4", [("Встреча с Петей 30 декабря в 15", None, "created", "created_meeting"),
+          ("Созвон с Ваней 30 декабря в 15:15", None, "created", "dense_schedule")]),
+ ("П-5", [("Встреча с Петей 30 декабря в 15", None, "created", "created_meeting"),
+          ("Задача отправить договор 30 декабря в 15:15", None, "created", "created_task")]),
 ]
+EXPECT = {
+ "П-1": lambda r: r["records"][0]["text"] == "Созвон с Иваном" and r["records"][0]["type"] == "meeting",
+ "П-2": lambda r: r["records"][0]["text"] == "Встреча с Машей",
+ "П-3": lambda r: r["records"][0]["time"] == "14:00",
+ "П-4": lambda r: len(r["records"]) == 2 and "15 минут" in r["text"],
+ "П-5": lambda r: len(r["records"]) == 1,
+}
 async def main():
     async with app.router.lifespan_context(app):
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t") as c:
@@ -32,6 +47,6 @@ async def main():
                         btn = next(x for x in last["buttons"] if x["send"].get("action", {}).get("id") == act)
                         b["action"] = btn["send"]["action"]; b["text"] = btn["label"]; b["source"] = "button"
                     r = (await c.post("/api/chat", json=b, headers=h)).json(); last = r
-                    ok = r["kind"] == kind and tpl in used
+                    ok = r["kind"] == kind and tpl in used and (text != turns[-1][0] or EXPECT.get(name, lambda r: True)(r))
                     print("OK " if ok else "BAD", name, r["kind"], used, r["text"], [(x["label"][:30], x.get("style")) for x in r["buttons"]], [x["marks"] for x in r["records"]][:2])
 asyncio.run(main())
