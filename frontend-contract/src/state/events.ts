@@ -10,6 +10,8 @@ export type UiActivity =
   | 'button-press'
   | 'new-dialog'
   | 'tab-hidden'
+  /** Услышали «Стивенс» — запись началась без кнопки */
+  | 'wake'
   /** Сохранена форма «Исправить» в ленте (Д10) — персонаж «готово» */
   | 'edit-saved';
 
