@@ -3,7 +3,7 @@ import { api, ApiFailure, setModeHeaders } from '../api';
 import { features } from '../config/features';
 import { uuid } from '../lib/uuid';
 import { dropOldVersions, storage } from '../storage';
-import { emitActivity } from './events';
+import { emitActivity, requestGreeting } from './events';
 import { restoreFeed } from './feed';
 import { store, type Mode } from './store';
 
@@ -121,11 +121,13 @@ export async function authenticate(kind: 'login' | 'register', login: string, pa
   storage.setLogin(result.user.login);
   storage.setUserId(result.user.id);
   storage.setMode(null);
+  requestGreeting();
   enterApp('account', result.user.login, result.user.id);
 }
 
 export function chooseSandbox(): void {
   storage.setMode('sandbox');
+  requestGreeting();
   enterApp('sandbox');
 }
 

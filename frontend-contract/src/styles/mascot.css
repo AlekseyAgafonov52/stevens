@@ -6,21 +6,25 @@
 .stevens-perch {
   position: absolute;
   right: 22px;
-  bottom: calc(100% - 7.4px);   /* низ фигуры (y = 128 из 140) стоит на верхней рамке поля */
-  width: 64px;
-  height: 74.7px;
+  bottom: calc(100% - 10.6px);  /* низ фигуры (y = 128 из 140) стоит на верхней рамке поля */
+  width: 96px;
+  height: 112px;
   pointer-events: none;
   z-index: 2;
 }
 @media (max-width: 760px) {
-  .stevens-perch { right: 18px; width: 56px; height: 65.3px; bottom: calc(100% - 6.6px); }
+  .stevens-perch { right: 18px; width: 72px; height: 84px; bottom: calc(100% - 8.2px); }
 }
+/* Клик по фигуре — поклон или кивок; пустые поля рисунка нажатия не ловят */
+.stevens-perch .stevens path,
+.stevens-perch .stevens ellipse,
+.stevens-perch .stevens rect { pointer-events: visiblePainted; }
 .stevens-perch svg,
 .stevens-title svg { display: block; width: 100%; height: 100%; overflow: visible; }
 
 /* Лента не должна уходить под персонажа: запас снизу */
-.feed--with-mascot { padding-bottom: 84px; }
-@media (max-width: 760px) { .feed--with-mascot { padding-bottom: 74px; } }
+.feed--with-mascot { padding-bottom: 122px; }
+@media (max-width: 760px) { .feed--with-mascot { padding-bottom: 94px; } }
 
 /* ── Рядом с «Stevens» на экране входа ─────────────────── */
 /* Ряд «слово + персонаж»: display:flex; align-items:baseline; gap:8px.
@@ -39,11 +43,15 @@
 .stevens--think .stv-dot-3 { animation-delay: 300ms; }
 
 /* ── Слушает: трубка покачивается у уха ────────────────── */
-@keyframes stv-horn { from { transform: rotate(-3deg); } to { transform: rotate(3deg); } }
+/* Размах — --stv-amp (градусы) от громкости голоса: 1° в тишине, до 7° */
+@keyframes stv-horn {
+  from { transform: rotate(calc(var(--stv-amp, 3) * -1deg)); }
+  to   { transform: rotate(calc(var(--stv-amp, 3) * 1deg)); }
+}
 .stevens--listen .stv-horn {
   transform-box: view-box;
   transform-origin: 80.5px 41.5px;
-  animation: stv-horn 1200ms ease-in-out infinite alternate;
+  animation: stv-horn 600ms ease-in-out infinite alternate;
 }
 
 /* ── Не понял: вопрос появляется ───────────────────────── */
@@ -58,11 +66,36 @@
   animation: stv-spark 600ms var(--ease) both;
 }
 
+/* ── Думает: карандаш постукивает по блокноту ─────────── */
+@keyframes stv-tap { 0%, 100% { transform: rotate(0); } 50% { transform: rotate(-9deg); } }
+.stevens--think-tap .stv-tap {
+  transform-box: view-box;
+  transform-origin: 72px 74px;
+  animation: stv-tap 500ms ease-in-out infinite;
+}
+
+/* ── Конфликт: приподнимает очки и оставляет чуть выше ─── */
+@keyframes stv-glasses { 0% { transform: none; } 45% { transform: translateY(-2.4px); } 100% { transform: translateY(-1.2px); } }
+.stevens--concern .stv-glasses { transform-box: view-box; animation: stv-glasses 700ms var(--ease) 200ms both; }
+
+/* ── Ночь: колпак поверх любого кадра, в поклоне опускается вместе с головой ── */
+.stevens-cap {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  transform: translateY(calc(var(--stv-cap-drop, 0) / 140 * 100%));
+  transition: transform 180ms var(--ease);
+}
+.stevens-cap svg { display: block; width: 100%; height: 100%; overflow: visible; }
+
 /* ── Без анимаций по настройке системы ─────────────────── */
 @media (prefers-reduced-motion: reduce) {
   .stevens-layer { transition: none; }
   .stevens--think .stv-dot { animation: none; opacity: 0.6; }
   .stevens--listen .stv-horn,
   .stevens--puzzled .stv-question,
-  .stevens--done .stv-sparkle { animation: none; }
+  .stevens--done .stv-sparkle,
+  .stevens--think-tap .stv-tap { animation: none; }
+  .stevens--concern .stv-glasses { animation: none; transform: translateY(-1.2px); }
+  .stevens-cap { transition: none; }
 }
