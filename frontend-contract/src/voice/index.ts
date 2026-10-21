@@ -86,6 +86,14 @@ let finalText = '';
 let interimText = '';
 let cancelled = false;
 let permissionGranted = false;
+// После перезагрузки страницы разрешение уже может быть выдано — тогда автослушание работает с первого ответа
+if (typeof navigator !== 'undefined' && navigator.permissions?.query) {
+  navigator.permissions.query({ name: 'microphone' as PermissionName })
+    .then((status) => {
+      if (status.state === 'granted') permissionGranted = true;
+    })
+    .catch(() => undefined);
+}
 /** Фоновая запись, которая ещё ждёт имя */
 let armedRec: Recognition | null = null;
 let armedEnded: Promise<void> | null = null;
@@ -237,6 +245,8 @@ function arm(inGesture = false): void {
     else rearmTimer = setTimeout(arm, 400);
   };
   let refusedOutsideGesture = false;
+  // Фоновая запись запустилась — микрофон разрешён, автослушание (Д13) после ответа можно включать
+  rec.onstart = () => { permissionGranted = true; };
   try {
     rec.start();
     armedRec = rec;

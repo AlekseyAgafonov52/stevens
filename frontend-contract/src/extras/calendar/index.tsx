@@ -16,7 +16,7 @@ import { EditForm } from '../edit/EditForm';
 import { conflictIds, countByDate, dayLabel, dotsFor, gridDays, gridRange, sortDay } from './month';
 import './calendar.css';
 
-const RELOAD_KINDS = new Set(['created', 'completed', 'deleted', 'cancelled']);
+const RELOAD_KINDS = new Set(['created', 'completed', 'deleted', 'cancelled', 'updated']);
 const DELETED_ROW_MS = 5000;
 const ERROR_MS = 6000;
 

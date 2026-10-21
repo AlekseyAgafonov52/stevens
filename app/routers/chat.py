@@ -42,7 +42,7 @@ WHICH_LIMIT = 5
 
 @dataclass
 class Pending:
-    kind: str                      # draft | confirm | conflict | new_time | confirm_no | multi
+    kind: str                      # draft | confirm | conflict | new_time | confirm_no | multi | move | move_when
     draft: dict = field(default_factory=dict)
 
 
@@ -50,6 +50,7 @@ class Pending:
 class Conversation:
     pending: Pending | None = None
     variants: dict[str, int] = field(default_factory=dict)
+    focus: int | None = None       # о какой записи шла речь: «перенеси её», «удали это»
     touched: float = field(default_factory=clock.time)
 
 
@@ -166,10 +167,13 @@ def is_future(record: Record, now: datetime) -> bool:
     return not record.time or record.time >= now.strftime("%H:%M")
 
 
-def matches(record: Record, stems: list[str]) -> int:
-    words = [w.lower().replace("ё", "е") for w in record.text.replace("-", " ").split()]
-    words = [w.strip(".,:;!?«»\"()") for w in words]
-    return sum(1 for s in stems if any(w.startswith(s) for w in words))
+def record_words(record: Record) -> list[str]:
+    return [w.strip(".,:;!?«»\"()") for w in record.text.replace("-", " ").split()]
+
+
+def matches(record: Record, keys: list[str]) -> int:
+    words = record_words(record)
+    return sum(1 for key in keys if nlu.record_has(words, key))
 
 
 def nearest_first(records: list[Record], now: datetime) -> list[Record]:
@@ -192,6 +196,8 @@ async def find(ctx: Ctx, p: nlu.Parse, types: set[str] | None = None) -> list[Re
     rows = await owner_records(ctx, *conditions)
     if not p.keywords:
         return rows if (p.filter_type or p.period or p.date) else []
+    if p.required:
+        rows = [r for r in rows if all(nlu.record_has(record_words(r), key) for key in p.required)]
     scored = [(matches(r, p.keywords), r) for r in rows]
     best = [r for score, r in scored if score == len(p.keywords)]
     return best or [r for score, r in scored if score > 0]
@@ -321,6 +327,7 @@ async def save(ctx: Ctx, draft: dict) -> dict:
     ctx.db.add(record)
     await ctx.db.commit()
     await ctx.db.refresh(record)
+    ctx.conv.focus = record.id
     data = record.to_contract(marks=["new"])
     values, speech_values = ctx.record_values(data)
     if draft.get("keep_both"):
@@ -486,8 +493,7 @@ def draft_from(p: nlu.Parse, today: date) -> dict:
 def merge_reply(pending: Pending, raw: str, now: datetime) -> dict | None:
     """Ответ на уточнение: «в 15», «завтра», «с Иваном». Не ответ — None."""
     draft = dict(pending.draft)
-    time, ambiguous, time_spans = nlu._parse_time(raw)
-    info = nlu._parse_date(raw, now, time)
+    time, ambiguous, time_spans, info = nlu.parse_when(raw, now)
     rest = " ".join(nlu._cut(raw, info.spans + time_spans).split()).strip(" ,.!?")
     changed = False
     if info.date:
@@ -663,6 +669,8 @@ async def answer_search(ctx: Ctx, p: nlu.Parse) -> dict:
             text, speech = ctx.say("found_one", values, speech_values)
         else:
             text, speech = ctx.say("found_some", {"count": len(found)})
+    if len(found) == 1 or p.ask == "when":
+        ctx.conv.focus = ordered[0].id
     records = [r.to_contract(highlight=highlight) for r in ordered[:FOUND_LIMIT]]
     return reply("found", text, speech, records=records, total=len(found))
 
@@ -696,6 +704,7 @@ async def complete_one(ctx: Ctx, record: Record) -> dict:
         return reply("clarify", text, speech, awaiting=True, buttons=[CANCEL])
     record.status = TaskStatus.done
     await ctx.db.commit()
+    ctx.conv.focus = record.id
     data = record.to_contract()
     values, speech_values = ctx.record_values(data)
     text, speech = ctx.say("completed", values, speech_values)
@@ -709,7 +718,27 @@ def single(ctx: Ctx, found: list[Record]) -> Record | None:
     return None
 
 
+async def focused(ctx: Ctx, p: nlu.Parse, types: set[str] | None = None) -> list[Record]:
+    """«Её», «это» — запись, о которой только что шла речь; «последнюю» без контекста — последняя созданная."""
+    if not p.ref or p.keywords:
+        return []
+    record = await owned_record(ctx, ctx.conv.focus)
+    if record and record.deleted_at is None and (not types or record.type.value in types):
+        return [record]
+    if ctx.conv.focus is None:
+        conditions = [Record.type == TaskType(p.filter_type)] if p.filter_type else []
+        if types and not p.filter_type:
+            conditions.append(Record.type.in_([TaskType(t) for t in types]))
+        rows = await ctx.db.execute(select(Record).where(ctx.owner.filter(), Record.deleted_at.is_(None),
+                                                         Record.created_at.is_not(None), *conditions)
+                                    .order_by(Record.created_at.desc(), Record.id.desc()).limit(1))
+        return list(rows.scalars().all())
+    return []
+
+
 async def answer_delete(ctx: Ctx, p: nlu.Parse) -> dict:
+    if near := await focused(ctx, p):
+        return await delete_one(ctx, near[0])
     if not (p.keywords or p.date or p.filter_type):
         text, speech = ctx.say("clarify_generic")
         return reply("clarify", text, speech, awaiting=True, buttons=[CANCEL])
@@ -728,6 +757,8 @@ async def answer_complete(ctx: Ctx, p: nlu.Parse) -> dict:
     if p.filter_type == "meeting":
         text, speech = ctx.say("completed_meeting_no")
         return reply("clarify", text, speech, awaiting=True, buttons=[CANCEL])
+    if near := await focused(ctx, p):
+        return await complete_one(ctx, near[0])
     if not (p.keywords or p.date or p.filter_type):
         text, speech = ctx.say("clarify_generic")
         return reply("clarify", text, speech, awaiting=True, buttons=[CANCEL])
@@ -743,6 +774,82 @@ async def answer_complete(ctx: Ctx, p: nlu.Parse) -> dict:
     if one := single(ctx, open_ones):
         return await complete_one(ctx, one)
     return which_one(ctx, open_ones, "complete")
+
+
+# ── Перенос фразой: «перенеси её на завтра», «сдвинь встречу с Иваном на час позже» ──
+
+def move_changes(p: nlu.Parse) -> dict:
+    return {"date": p.date.isoformat() if p.date else None, "time": p.time, "shift": p.shift}
+
+
+async def answer_move(ctx: Ctx, p: nlu.Parse) -> dict:
+    changes = move_changes(p)
+    found = await focused(ctx, p)
+    if not found and p.keywords:
+        found = await find(ctx, nlu.Parse(keywords=p.keywords, required=p.required, filter_type=p.filter_type))
+    if not found:
+        if p.ref:
+            text, speech = ctx.say("clarify_generic")
+            return reply("clarify", text, speech, awaiting=True, buttons=[CANCEL])
+        text, speech = ctx.say("found_none")
+        return reply("found", text, speech, total=0)
+    future = [r for r in found if is_future(r, ctx.now) or not r.date] or found
+    if one := single(ctx, future):
+        return await move_one(ctx, one, changes)
+    answer = which_one(ctx, future, "move")
+    ctx.conv.pending = Pending("move", changes)
+    return answer
+
+
+async def move_one(ctx: Ctx, record: Record, changes: dict) -> dict:
+    ctx.conv.focus = record.id
+    new_date, new_time = changes.get("date") or record.date, changes.get("time") or record.time
+    if changes.get("shift") and record.time:
+        start = max(0, min(minutes(record.time) + changes["shift"], 23 * 60 + 59))
+        new_time = hhmm(start)
+    if not (changes.get("date") or changes.get("time") or changes.get("shift")):
+        ctx.conv.pending = Pending("move_when", {"record_id": record.id})
+        text, speech = ctx.say("conflict_move_existing", {"text": record.text})
+        return reply("clarify", text, speech, records=[record.to_contract()], awaiting=True, buttons=[CANCEL])
+    if new_time and not new_date:
+        ctx.conv.pending = Pending("move_when", {"record_id": record.id, "time": new_time})
+        text, speech = ctx.say("clarify_day")
+        return reply("clarify", text, speech, awaiting=True,
+                     buttons=[button_text("Сегодня", "сегодня"), button_text("Завтра", "завтра"), CANCEL])
+    today = ctx.today.isoformat()
+    if new_date < today or (new_date == today and new_time and new_time <= ctx.now.strftime("%H:%M")):
+        ctx.conv.pending = Pending("move_when", {"record_id": record.id})
+        values, _ = ctx.record_values({**record.to_contract(), "date": new_date, "time": new_time,
+                                       "date_kind": "exact"})
+        text, speech = ctx.say("clarify_date_past", values={"when": values["when"]})
+        return reply("clarify", text, speech, awaiting=True, buttons=[CANCEL])
+    ctx.conv.pending = None
+    record.date, record.time = new_date, new_time
+    if record.date_kind == DateKind.none:
+        record.date_kind = DateKind.exact
+    await ctx.db.commit()
+    data = record.to_contract(marks=["new"])
+    values, speech_values = ctx.record_values(data)
+    text, speech = ctx.say("moved", values, speech_values)
+    if record.type == TaskType.meeting and record.time:
+        busy = [r for r in await owner_records(ctx, Record.type == TaskType.meeting, Record.date == record.date,
+                                               Record.time == record.time) if r.id != record.id]
+        if busy:
+            tail, _ = ctx.say("moved_busy", {"text": busy[0].text})
+            text = f"{text} {tail}"
+            return reply("updated", text, speech, records=[data] + [r.to_contract(marks=["conflict"]) for r in busy])
+    return reply("updated", text, speech, records=[data])
+
+
+async def answer_move_when(ctx: Ctx, pending: Pending, raw: str) -> dict | None:
+    """Ответ на «На какое время перенести?»: «на 16», «завтра в 11». Не ответ — None."""
+    record = await owned_record(ctx, pending.draft.get("record_id"))
+    p = nlu.parse("перенеси " + raw, ctx.now)
+    if not record or p.intent != "move" or p.keywords:
+        return None
+    changes = move_changes(p)
+    changes["time"] = changes["time"] or pending.draft.get("time")
+    return await move_one(ctx, record, changes)
 
 
 # ── Кнопки-действия (раздел 6, 15.3) ──────────────────
@@ -793,10 +900,15 @@ async def handle_action(ctx: Ctx, action_id: str, record_id: int | None) -> dict
             return await complete_one(ctx, record)
         record.deleted_at = None
         await ctx.db.commit()
+        ctx.conv.focus = record.id
         data = record.to_contract(marks=["new"])
         values, speech_values = ctx.record_values(data)
         text, speech = ctx.say("restored", values, speech_values)
         return reply("created", text, speech, records=[data], buttons=undo_button(ctx, record))
+    if action_id == "move" and pending and pending.kind == "move":
+        record = await owned_record(ctx, record_id)
+        if record:
+            return await move_one(ctx, record, pending.draft)
     if pending and action_id in ("confirm_yes", "confirm_no", "keep_both", "change_new_time"):
         return None
     return None
@@ -805,7 +917,7 @@ async def handle_action(ctx: Ctx, action_id: str, record_id: int | None) -> dict
 # ── Эндпоинт ──────────────────────────────────────────
 
 def is_new_request(p: nlu.Parse, raw: str) -> bool:
-    if p.intent in ("list", "search", "help", "off_topic", "delete", "complete", "thanks"):
+    if p.intent in ("list", "search", "help", "off_topic", "delete", "complete", "thanks", "move"):
         return True
     if p.intent == "create":
         return bool(nlu.CREATE_VERB_RE.search(raw.strip().lower()) or (p.text and len(nlu.keywords(p.text)) >= 2))
@@ -842,6 +954,9 @@ async def respond(ctx: Ctx, payload: ChatRequest) -> dict:
 
     # Ответ на уточнение (Р-45); не ответ — новый запрос, уточнение забываем (Р-33)
     pending = ctx.conv.pending
+    if pending and pending.kind == "move_when" and not is_new_request(p, raw):
+        if answer := await answer_move_when(ctx, pending, raw):
+            return answer
     if pending and pending.kind in ("draft", "new_time", "confirm_no") and not is_new_request(p, raw):
         merged = merge_reply(pending, raw, ctx.now)
         if merged:
@@ -871,6 +986,8 @@ async def respond(ctx: Ctx, payload: ChatRequest) -> dict:
         return await answer_delete(ctx, p)
     if p.intent == "complete":
         return await answer_complete(ctx, p)
+    if p.intent == "move":
+        return await answer_move(ctx, p)
     if p.intent == "help":
         return examples("help", "help", ctx, HELP_EXAMPLES)
     if p.intent == "thanks":
