@@ -1,13 +1,23 @@
 {
   "name": "Stevens",
-  "image": "mcr.microsoft.com/devcontainers/base:ubuntu",
+  "image": "mcr.microsoft.com/devcontainers/base:noble",
   "features": {
-    "ghcr.io/devcontainers/features/docker-in-docker:2": {}
+    "ghcr.io/devcontainers/features/docker-in-docker:2": {
+      "moby": false
+    }
   },
-  "forwardPorts": [8080, 8000],
+  "forwardPorts": [
+    8080,
+    8000
+  ],
   "portsAttributes": {
-    "8080": { "label": "Stevens", "onAutoForward": "openBrowser" },
-    "8000": { "label": "API (Swagger: /docs)" }
+    "8080": {
+      "label": "Stevens",
+      "onAutoForward": "openBrowser"
+    },
+    "8000": {
+      "label": "API (Swagger: /docs)"
+    }
   },
   "postStartCommand": "bash .devcontainer/start.sh"
 }
