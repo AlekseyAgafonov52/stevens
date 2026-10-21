@@ -37,7 +37,7 @@ CASES = [
 ]
 EXPECT = {
  "С-2": lambda r: r["records"][0]["text"] == "Встреча с Ваней" and r["records"][0]["time"] == "09:00",
- "С-1": lambda r: [b["label"] for b in r["buttons"]] == ["09:00", "11:00", "13:00"],
+ "С-1": lambda r: "09:00–10:00, 11:00–" in r["text"] and [b["label"] for b in r["buttons"]][:3] == ["09:00", "11:00", "12:00"],
  "М-1": lambda r: len(r["records"]) == 3 and all("new" in x["marks"] for x in r["records"]),
  "М-2": lambda r: [x["type"] for x in r["records"]] == ["reminder", "reminder"],
  "П-1": lambda r: r["records"][0]["text"] == "Созвон с Иваном" and r["records"][0]["type"] == "meeting",

@@ -405,17 +405,28 @@ def hhmm(total: int) -> str:
     return f"{total // 60:02d}:{total % 60:02d}"
 
 
-def free_slots(busy: list[tuple[int, int]], start: int, need: int, limit: int = 3) -> list[int]:
-    """До limit начал окон длиной need: первое свободное, дальше — с разносом хотя бы в 2 часа."""
-    found: list[int] = []
+def free_windows(busy: list[tuple[int, int]], start: int, need: int) -> list[tuple[int, int]]:
+    """Все свободные промежутки дня (начало, конец), куда помещается дело длиной need."""
+    windows: list[tuple[int, int]] = []
     t = start
-    while t + need <= DAY_END and len(found) < limit:
-        if all(t + need <= b or t >= e for b, e in busy):
-            found.append(t)
-            t += max(need, 120)
-        else:
-            t += STEP
-    return found
+    for b, e in sorted(busy) + [(DAY_END, DAY_END)]:
+        if b - t >= need:
+            windows.append((t, min(b, DAY_END)))
+        t = max(t, e)
+        if t >= DAY_END:
+            break
+    return windows
+
+
+def window_starts(windows: list[tuple[int, int]], need: int) -> list[int]:
+    """Кнопки: начало каждого окна и дальше каждый ровный час, пока дело помещается."""
+    starts: list[int] = []
+    for b, e in windows:
+        t = b
+        while t + need <= e:
+            starts.append(t)
+            t = (t // 60 + 1) * 60
+    return starts
 
 
 async def answer_free(ctx: Ctx, p: nlu.Parse) -> dict:
@@ -429,18 +440,20 @@ async def answer_free(ctx: Ctx, p: nlu.Parse) -> dict:
     rows = await owner_records(ctx, Record.date == day.isoformat(), Record.time.is_not(None))
     busy = [(minutes(r.time), minutes(r.time) + LENGTH.get(r.type.value, 30))
             for r in rows if r.status != TaskStatus.done]
-    slots = free_slots(busy, start, p.duration)
+    windows = free_windows(busy, start, p.duration)
     day_word = date_text(day, ctx.today)
     day_send = f"{day.day} {MONTHS_GEN[day.month - 1]}"
     need = {30: "полчаса", 60: "час", 90: "полтора часа"}.get(p.duration)
     if not need:
         need = (plural(p.duration // 60, "час", "часа", "часов") if p.duration % 60 == 0
                 else plural(p.duration, "минута", "минуты", "минут"))
-    if not slots:
+    if not windows:
         text, speech = ctx.say("free_none", {"day": day_word, "need": need})
         return reply("found", text, speech, total=0)
-    times = [hhmm(t) for t in slots]
-    listed = times[0] if len(times) == 1 else ", ".join(times[:-1]) + " и " + times[-1]
+    # В тексте — все окна промежутками, кнопки — каждый час внутри них
+    spans = [f"{hhmm(b)}–{hhmm(e)}" for b, e in windows]
+    listed = spans[0] if len(spans) == 1 else ", ".join(spans[:-1]) + " и " + spans[-1]
+    times = [hhmm(t) for t in window_starts(windows, p.duration)]
     text, speech = ctx.say("free_slots" if p.subject else "free_slots_plain",
                            {"day": day_word, "slots": listed, "need": need, "text": p.subject or ""})
     what = p.subject or "Встреча"
