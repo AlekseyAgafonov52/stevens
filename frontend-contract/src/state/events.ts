@@ -62,14 +62,3 @@ export function emitSpeech(phase: SpeechPhase): void {
   speaking = phase === 'start';
   speechListeners.forEach((listener) => listener(phase));
 }
-
-/** Персонаж (Д14) кланяется после входа: экран чата появляется позже события, поэтому флаг, а не событие */
-let greeting = false;
-export function requestGreeting(): void {
-  greeting = true;
-}
-export function takeGreeting(): boolean {
-  const value = greeting;
-  greeting = false;
-  return value;
-}

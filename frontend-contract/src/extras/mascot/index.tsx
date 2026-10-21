@@ -9,32 +9,28 @@ import listen from '../../assets/mascot/stevens-listen.svg?raw';
 import puzzled from '../../assets/mascot/stevens-puzzled.svg?raw';
 import done from '../../assets/mascot/stevens-done.svg?raw';
 import concern from '../../assets/mascot/stevens-concern.svg?raw';
-import bow1 from '../../assets/mascot/stevens-bow-1.svg?raw';
-import bow2 from '../../assets/mascot/stevens-bow-2.svg?raw';
 import nightcap from '../../assets/mascot/stevens-nightcap.svg?raw';
 import writeRead from '../../assets/mascot/stevens-write-read.svg?raw';
 import write1 from '../../assets/mascot/stevens-write-1.svg?raw';
 import write2 from '../../assets/mascot/stevens-write-2.svg?raw';
 import write3 from '../../assets/mascot/stevens-write-3.svg?raw';
-import { onAssistantResponse, onUiActivity, takeGreeting } from '../../state/events';
+import { capDrop, gestureAt, gestureSvg, type Gesture } from './bow';
+import { onAssistantResponse, onUiActivity } from '../../state/events';
 import { recordingStore } from '../../state/recording';
 import { store, useApp } from '../../state/store';
 import {
-  BOW_STEPS, CLICK_COOLDOWN_MS, FLASH_MS, FRAME_MS, GESTURE_MS, NIGHT_FROM, NIGHT_TO, NOD_STEPS, READ_MS,
+  BOW, CLICK_COOLDOWN_MS, GREET, CLICK_RESET_MS, FLASH_MS, FRAME_MS, NIGHT_FROM, NIGHT_TO, READ_MS, TILT,
   READ_WRITE_FADE_MS, STATE_FADE_MS, THINK_FRAMES, THINK_LONG_MS, THINK_STEP_MS, TYPING_PAUSE_MS, WRITE_FRAMES, WRITE_MS,
 } from './timing';
 
 const SVG = {
   rest, 'rest-night': restNight, think, 'think-tap': thinkTap, 'think-read': thinkRead, listen, puzzled, done, concern,
-  'bow-1': bow1, 'bow-2': bow2, 'write-read': writeRead, 'write-1': write1, 'write-2': write2, 'write-3': write3,
+  'write-read': writeRead, 'write-1': write1, 'write-2': write2, 'write-3': write3,
 } as const;
 type Frame = keyof typeof SVG;
-type Gesture = 'bow' | 'nod';
 type Mood = 'listen' | 'think' | 'write' | 'concern' | Gesture | 'puzzled' | 'done' | 'rest';
 type Step = { frame: Frame; fade: number };
-
-/** Насколько опускается верх головы в кадре (единицы viewBox) — колпак едет вместе с ним */
-const CAP_DROP: Partial<Record<Frame, number>> = { 'bow-1': 4.5, 'bow-2': 9 };
+type GestureRun = { kind: Gesture; id: number; plan: typeof BOW };
 
 const reducedMotion = () => window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
 
@@ -56,29 +52,30 @@ function useNight(): boolean {
  * Приоритет: слушает → думает → пишет → конфликт → поклон/кивок → не понял/готово → покой.
  * «Конфликт» держится, пока не ушёл следующий запрос; поклон — после входа, «Нового диалога» и по клику.
  */
-function useMood(): { mood: Mood; gestureId: number; onClick: () => void } {
+function useMood(): { mood: Mood; gesture: GestureRun | null; onClick: () => void } {
   const recording = useApp((s) => s.recording);
   const waiting = useApp((s) => s.waiting);
   const hasText = useApp((s) => s.input.trim().length > 0);
   const [flash, setFlash] = useState<'puzzled' | 'done' | null>(null);
   const [typing, setTyping] = useState(false);
   const [conflict, setConflict] = useState(false);
-  const [gesture, setGesture] = useState<{ kind: Gesture; id: number } | null>(null);
+  const [gesture, setGesture] = useState<GestureRun | null>(null);
   const flashTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const typingTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  const lastClick = useRef({ at: 0, next: 'bow' as Gesture });
+  const lastClick = useRef(0);
 
-  const play = (kind: Gesture) => {
+  const play = (kind: Gesture, greet = false) => {
     if (reducedMotion()) return;
     clearTimeout(flashTimer.current);
     setFlash(null);
-    setGesture((g) => ({ kind, id: (g?.id ?? 0) + 1 }));
+    setGesture((g) => ({ kind, id: (g?.id ?? 0) + 1, plan: greet ? GREET : kind === 'bow' ? BOW : TILT }));
   };
   const playRef = useRef(play);
   playRef.current = play;
 
   useEffect(() => {
-    if (takeGreeting()) playRef.current('bow');
+    // Приветствие: при каждом открытии чата (вход, перезагрузка) и при «Новом диалоге»
+    playRef.current('bow', true);
     const showFlash = (mood: 'puzzled' | 'done') => {
       clearTimeout(flashTimer.current);
       setFlash(mood);
@@ -103,7 +100,7 @@ function useMood(): { mood: Mood; gestureId: number; onClick: () => void } {
         setFlash(null);
         setGesture(null);
       }
-      if (kind === 'new-dialog') playRef.current('bow');
+      if (kind === 'new-dialog') playRef.current('bow', true);
     });
     return () => {
       offResponse();
@@ -116,19 +113,20 @@ function useMood(): { mood: Mood; gestureId: number; onClick: () => void } {
   // Поклон гаснет сам; таймер в эффекте, а не в play — переживает повторный запуск эффектов
   useEffect(() => {
     if (!gesture) return;
-    const timer = setTimeout(() => setGesture(null), GESTURE_MS);
+    const { plan } = gesture;
+    const timer = setTimeout(() => setGesture(null), plan.down + plan.hold + plan.up);
     return () => clearTimeout(timer);
   }, [gesture]);
 
-  // Клик: поклон, следующий — кивок; не чаще раза в 2 с и только в покое
+  // Клик: первый — поклон, дальше — наклон головы; после 10 с без кликов снова поклон
   const onClick = () => {
     const now = Date.now();
-    if (now - lastClick.current.at < CLICK_COOLDOWN_MS) return;
+    const since = now - lastClick.current;
+    if (since < CLICK_COOLDOWN_MS) return;
     const s = store.get();
     if (s.recording || s.waiting) return;
-    const kind = lastClick.current.next;
-    lastClick.current = { at: now, next: kind === 'bow' ? 'nod' : 'bow' };
-    play(kind);
+    lastClick.current = now;
+    play(since > CLICK_RESET_MS ? 'bow' : 'tilt');
   };
 
   let mood: Mood = 'rest';
@@ -138,7 +136,7 @@ function useMood(): { mood: Mood; gestureId: number; onClick: () => void } {
   else if (conflict) mood = 'concern';
   else if (gesture) mood = gesture.kind;
   else if (flash) mood = flash;
-  return { mood, gestureId: gesture?.id ?? 0, onClick };
+  return { mood, gesture: gesture && mood === gesture.kind ? gesture : null, onClick };
 }
 
 /** Последовательность кадров по таймерам; сбрасывается при смене состояния */
@@ -157,7 +155,7 @@ function useSequence(active: boolean, run: (set: (step: Step) => void, after: (m
   return active ? step : null;
 }
 
-function useFrame(mood: Mood, gestureId: number, night: boolean): Step {
+function useFrame(mood: Mood, night: boolean): Step {
   const still = reducedMotion();
 
   // «Пишет»: читает 1,2 с → письмо 1,6 с (кадры по 200 мс) → снова читает
@@ -185,17 +183,32 @@ function useFrame(mood: Mood, gestureId: number, night: boolean): Step {
     after(THINK_LONG_MS, () => next(1));
   }, []);
 
-  // Поклон и кивок
-  const gesture = useSequence(mood === 'bow' || mood === 'nod', (set, after) => {
-    const steps = mood === 'bow' ? BOW_STEPS : NOD_STEPS;
-    steps.forEach((s) => after(s.at, () => set({ frame: s.frame === 'rest' && night ? 'rest-night' : s.frame, fade: s.fade })));
-  }, [mood, gestureId]);
-
   if (mood === 'write') return write ?? { frame: 'write-read', fade: STATE_FADE_MS };
   if (mood === 'think') return thinking ?? { frame: 'think', fade: STATE_FADE_MS };
-  if (mood === 'bow' || mood === 'nod') return gesture ?? { frame: 'rest', fade: STATE_FADE_MS };
-  if (mood === 'rest' && night) return { frame: 'rest-night', fade: STATE_FADE_MS };
+  if ((mood === 'rest' || mood === 'bow' || mood === 'tilt') && night) return { frame: 'rest-night', fade: STATE_FADE_MS };
+  if (mood === 'bow' || mood === 'tilt') return { frame: 'rest', fade: STATE_FADE_MS };
   return { frame: mood, fade: STATE_FADE_MS };
+}
+
+/** Доля поклона или наклона на каждом кадре экрана; null — движения нет */
+function useGesture(gesture: GestureRun | null): number | null {
+  const [k, setK] = useState<number | null>(null);
+  useEffect(() => {
+    if (!gesture) {
+      setK(null);
+      return;
+    }
+    const start = performance.now();
+    let raf = 0;
+    const tick = (now: number) => {
+      const value = gestureAt(now - start, gesture.plan);
+      setK(value);
+      if (value !== null) raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [gesture]);
+  return gesture ? k : null;
 }
 
 /** Два слоя, мягкая смена прозрачности */
@@ -233,13 +246,18 @@ function useHornAmplitude(listening: boolean): number {
 
 export function MascotPerch() {
   const night = useNight();
-  const { mood, gestureId, onClick } = useMood();
-  const { frame, fade } = useFrame(mood, gestureId, night);
+  const { mood, gesture, onClick } = useMood();
+  const { frame, fade } = useFrame(mood, night);
+  const bow = useGesture(gesture);
   const amp = useHornAmplitude(mood === 'listen');
-  const style = { '--stv-amp': amp, '--stv-cap-drop': CAP_DROP[frame] ?? 0 } as CSSProperties;
+  const style = { '--stv-amp': amp, '--stv-cap-drop': bow === null ? 0 : capDrop(mood === 'bow' ? 'bow' : 'tilt', bow) } as CSSProperties;
   return (
     <div className="stevens-perch" aria-hidden="true" onClick={onClick} style={style}>
-      <Layers frame={frame} fade={fade} />
+      {/* Поклон рисуется поверх; при k = 0 он совпадает с покоем, поэтому подмена незаметна */}
+      <div className="stevens-frames" data-hidden={bow !== null}>
+        <Layers frame={frame} fade={fade} />
+      </div>
+      {bow !== null && <div className="stevens-layer" dangerouslySetInnerHTML={{ __html: gestureSvg(mood === 'bow' ? 'bow' : 'tilt', bow, night) }} />}
       {night && <div className="stevens-cap" dangerouslySetInnerHTML={{ __html: nightcap }} />}
     </div>
   );

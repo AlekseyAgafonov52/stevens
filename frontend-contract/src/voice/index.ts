@@ -32,7 +32,7 @@ type RecognitionCtor = new () => Recognition;
 
 const MAX_MS = 20000;
 /** Пауза, после которой считаем, что человек договорил: хватает, чтобы подумать посреди фразы */
-const SILENCE_MS = 2500;
+const SILENCE_MS = 1800;
 const STOP_WORD = /(?:^|\s)стоп[.!]?$/i;
 
 function ctor(): RecognitionCtor | null {

@@ -8,20 +8,15 @@ export const TYPING_PAUSE_MS = 1500; // «пишет», пока последн�
 export const FLASH_MS = 3000;        // «готово» и «не понял»
 export const WRITE_FRAMES = ['write-1', 'write-2', 'write-3', 'write-2'] as const;
 
-/** Поклон: покой → середина → поклон (держит) → середина → покой, всего ≈1,2 с */
-export const BOW_STEPS = [
-  { frame: 'bow-1', at: 0, fade: 180 },
-  { frame: 'bow-2', at: 180, fade: 180 },
-  { frame: 'bow-1', at: 780, fade: 180 },
-  { frame: 'rest', at: 960, fade: 240 },
-] as const;
-/** Кивок по клику: только середина поклона */
-export const NOD_STEPS = [
-  { frame: 'bow-1', at: 0, fade: 160 },
-  { frame: 'rest', at: 460, fade: 200 },
-] as const;
-export const GESTURE_MS = 1200;
-export const CLICK_COOLDOWN_MS = 2000;
+/** Приветственный поклон (вход, открытие чата, «Новый диалог»): глубокий, плавно вниз, держит, плавно вверх (≈2,2 с) */
+export const GREET = { down: 700, hold: 700, up: 800, depth: 1.6 };
+/** Поклон по клику — чуть короче и мельче (≈1,6 с) */
+export const BOW = { down: 550, hold: 450, up: 600, depth: 1.2 };
+/** Клик после поклона — лёгкий наклон головы с прикрытыми глазами (≈1,2 с) */
+export const TILT = { down: 350, hold: 400, up: 450, depth: 1 };
+/** Без кликов столько — следующий клик снова поклон */
+export const CLICK_RESET_MS = 10_000;
+export const CLICK_COOLDOWN_MS = 1200;
 /** «Думает» дольше 1,5 с — по очереди точки, карандаш, сверяется, по 2 с */
 export const THINK_LONG_MS = 1500;
 export const THINK_STEP_MS = 2000;
