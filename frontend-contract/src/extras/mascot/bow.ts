@@ -29,7 +29,8 @@ function eyes(k: number, night: boolean): string {
     );
   }
   const y = f(36 + Math.min(1.4, k * 4));
-  const ry = night && k < 0.2 ? 1.4 : 2.6;
+  // Ночью глаза полуприкрыты на всём пути поклона, иначе на миг мелькают открытые
+  const ry = night ? 1.4 : 2.6;
   return (
     `<path d="M50.5 ${y} L55.5 ${y} A2.5 ${ry} 0 0 1 50.5 ${y} Z" fill="${T}"/>` +
     `<path d="M64.5 ${y} L69.5 ${y} A2.5 ${ry} 0 0 1 64.5 ${y} Z" fill="${T}"/>`
@@ -42,7 +43,7 @@ export function gestureSvg(kind: Gesture, k: number, night: boolean): string {
   const shift = kind === 'shake' ? 2.2 * k : 0;
   k = kind === 'bow' ? k : 0;
   const d = bodyPath(k, shift);
-  const nightEyesY = night && k < 0.2 ? 0.4 : 0;
+  const nightEyesY = night ? 0.4 : 0;
   const closed = k > 0.6 || kind === 'shake';
   const mouth =
     k > 0.7
