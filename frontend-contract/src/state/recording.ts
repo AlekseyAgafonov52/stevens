@@ -8,7 +8,8 @@ import { createStore, store } from './store';
 /** Быстро меняющееся — отдельно, чтобы не перерисовывать всё приложение */
 export const recordingStore = createStore({ transcript: '', level: 0, startedAt: 0 });
 
-const AUTO_SILENCE_MS = 5000;
+/** Д13: столько ждём первого слова после уточнения — человеку нужно время подумать */
+const AUTO_SILENCE_MS = 8000;
 
 let prefix = '';
 let auto = false;
@@ -94,7 +95,8 @@ voice.on('final', (text) => {
 
 voice.on('error', (error) => {
   store.set({ input: prefix });
-  if (error === 'no-speech' && auto) return;
+  // Д13: сам включился — сам и молчит об ошибках (Safari может не дать слушать без нажатия)
+  if (auto) return;
   setHint(ERROR_HINT[error]);
 });
 
