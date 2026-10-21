@@ -282,9 +282,35 @@ async def process_draft(ctx: Ctx, draft: dict) -> dict:
     return await save(ctx, draft)
 
 
+DENSE_MINUTES = 30  # порог плотного графика из отчёта аналитика: 12% пар встреч
+
+
+def minutes(hhmm: str) -> int:
+    h, m = hhmm.split(":")
+    return int(h) * 60 + int(m)
+
+
+async def dense_neighbours(ctx: Ctx, draft: dict) -> list[Record]:
+    """Ближайшие встречи до и после новой, если до них меньше 30 минут. Точное совпадение — это конфликт."""
+    if draft["type"] != "meeting" or not draft.get("time") or draft.get("keep_both"):
+        return []
+    same_day = await owner_records(ctx, Record.type == TaskType.meeting, Record.date == draft["date"],
+                                   Record.time.is_not(None))
+    start = minutes(draft["time"])
+    before = [r for r in same_day if 0 < start - minutes(r.time) < DENSE_MINUTES]
+    after = [r for r in same_day if 0 < minutes(r.time) - start < DENSE_MINUTES]
+    near = []
+    if before:
+        near.append(max(before, key=lambda r: minutes(r.time)))
+    if after:
+        near.append(min(after, key=lambda r: minutes(r.time)))
+    return near
+
+
 async def save(ctx: Ctx, draft: dict) -> dict:
     ctx.conv.pending = None
     kind = draft["type"]
+    near = await dense_neighbours(ctx, draft)
     record = ctx.owner.new_record(
         type=TaskType(kind), text=draft["text"][:300], date=draft.get("date"), time=draft.get("time"),
         date_kind=DateKind(draft["date_kind"]),
@@ -303,6 +329,14 @@ async def save(ctx: Ctx, draft: dict) -> dict:
     else:
         template = f"created_{kind}"
     text, speech = ctx.say(template, values, speech_values)
+    if near:
+        # Плотный график: встречу сохраняем, показываем её и соседей — любую можно открыть и поправить
+        gap = min(abs(minutes(r.time) - minutes(record.time)) for r in near)
+        tail, tail_speech = ctx.say("dense_schedule", {"count": gap})
+        text = f"{text} {tail}"
+        speech = f"{speech} {tail_speech}" if speech and tail_speech else speech
+        others = sorted([data] + [r.to_contract() for r in near], key=lambda r: r["time"])
+        return reply("created", text, speech, records=others, buttons=undo_button(ctx, record))
     return reply("created", text, speech, records=[data], buttons=undo_button(ctx, record))
 
 
