@@ -13,11 +13,11 @@
   ],
   "portsAttributes": {
     "8080": {
-      "label": "Stevens",
-      "onAutoForward": "openBrowser"
+      "label": "Stevens (то же, что 8081)",
+      "onAutoForward": "silent"
     },
     "8081": {
-      "label": "Stevens по контракту v1.4",
+      "label": "Stevens — прототип по контракту v1.4",
       "onAutoForward": "openBrowser"
     },
     "8000": {

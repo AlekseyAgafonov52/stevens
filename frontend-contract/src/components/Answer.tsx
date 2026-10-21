@@ -1,0 +1,101 @@
+/** Ответ ассистента — 02-screens.md, 2.3: текст, карточки, «Ближайшее», кнопки. */
+import { useState } from 'react';
+import type { RecordItem } from '../api/types';
+import { T, fill } from '../content/texts';
+import { dayTitle, groupByDay } from '../lib/dates';
+import { pressButton } from '../state/chat';
+import { useApp, type AnswerMessage } from '../state/store';
+import { AnswerExtraButtons, RecordCardOverride } from '../extensions/points';
+import { Pill, type PillVariant } from './Pill';
+import { RecordCard } from './RecordCard';
+
+const PAGE = { list: { first: 20, step: 20 }, found: { first: 5, step: 10 } } as const;
+
+type Props = { message: AnswerMessage; isLast: boolean };
+
+export function Answer({ message, isLast }: Props) {
+  const { response } = message;
+  const waiting = useApp((s) => s.waiting);
+  const editing = useApp((s) => s.editing);
+  const paging = response.kind === 'list' ? PAGE.list : response.kind === 'found' ? PAGE.found : null;
+  const [shown, setShown] = useState<number>(paging ? paging.first : Infinity);
+  const fresh = !message.restored;
+
+  const records = response.records.map((r) => (r.id !== null && message.edited[r.id]) || r);
+  const visible = records.slice(0, shown);
+  const rest = records.length - visible.length;
+
+  const card = (record: RecordItem, withDate: boolean, index: number) => {
+    const isEditing = !!editing && editing.messageId === message.id && editing.recordId === record.id;
+    const flash = message.flash && message.flash.id === record.id;
+    if (isEditing) {
+      return <RecordCardOverride key={`${record.id}-${index}`} message={message} record={record} editing />;
+    }
+    return (
+      <RecordCard
+        key={`${record.id ?? 'd'}-${index}-${flash ? message.flash?.at : ''}`}
+        record={flash ? { ...record, marks: [...record.marks, 'new'] } : record}
+        withDate={withDate}
+        isNew={(fresh && record.marks.includes('new')) || !!flash}
+      />
+    );
+  };
+
+  const buttonVariant = (index: number, style: string | undefined): PillVariant => {
+    if (message.pressed === index) return 'selected';
+    if (!isLast || message.restored || message.pressed !== null || waiting) return 'dimmed';
+    return style === 'secondary' ? 'secondary' : 'primary';
+  };
+
+  return (
+    <div className={`answer ${fresh ? 'anim-appear' : ''}`}>
+      {response.text && <div className="answer__text">{response.text}</div>}
+
+      {visible.length > 0 && (
+        <div className="answer__cards">
+          {response.kind === 'list'
+            ? groupByDay(visible).map((group, gi) => (
+                <div className="day-group" key={gi}>
+                  <div className="day-title">{group.date ? dayTitle(group.date) : T.group_no_date}</div>
+                  {group.records.map((r, i) => card(r, false, gi * 1000 + i))}
+                </div>
+              ))
+            : visible.map((r, i) => card(r, true, i))}
+        </div>
+      )}
+
+      {paging && rest > 0 && (
+        <div>
+          <Pill variant="secondary" onClick={() => setShown((n) => n + paging.step)}>
+            {fill(T.show_more, { count: Math.min(rest, paging.step) })}
+          </Pill>
+        </div>
+      )}
+      {response.kind === 'found' && response.total !== null && response.total > response.records.length && (
+        <div className="answer__caption">{fill(T.limit_caption, { shown: response.records.length, total: response.total })}</div>
+      )}
+
+      {response.nearest && (
+        <div className="answer__cards">
+          <div className="day-title">{T.label_nearest}</div>
+          <RecordCard record={response.nearest} withDate />
+        </div>
+      )}
+
+      {(response.buttons.length > 0 || (isLast && response.kind === 'created')) && (
+        <div className="answer__buttons">
+          <AnswerExtraButtons message={message} isLast={isLast} />
+          {response.buttons.map((button, index) => (
+            <Pill
+              key={index}
+              variant={buttonVariant(index, button.style)}
+              onClick={() => pressButton(message.id, button, index)}
+            >
+              {button.label}
+            </Pill>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}

@@ -1,65 +1,60 @@
-import type { User } from "../api/types";
-import { apiUrl } from "../config/features";
+/** localStorage — только здесь, каждое обращение в try/catch (03-behavior.md, раздел 7). */
+const PREFIX = 'stevens:v1:';
 
-const prefix = "stevens-contract:v1:";
-const sessionKey = `session:${apiUrl}`;
-
-export function read<T>(key: string): T | null {
+function read(key: string): string | null {
   try {
-    return JSON.parse(localStorage.getItem(prefix + key) ?? "null") as T | null;
+    return localStorage.getItem(PREFIX + key);
   } catch {
     return null;
   }
 }
-export function write(key: string, value: unknown): void {
+
+function write(key: string, value: string | null): void {
   try {
-    localStorage.setItem(prefix + key, JSON.stringify(value));
+    if (value === null) localStorage.removeItem(PREFIX + key);
+    else localStorage.setItem(PREFIX + key, value);
   } catch {
-    /* Storage is optional. */
+    /* хранилище недоступно — работаем без сохранения */
   }
-}
-export function remove(key: string): void {
-  try {
-    localStorage.removeItem(prefix + key);
-  } catch {
-    /* Storage is optional. */
-  }
-}
-export interface Session {
-  token: string;
-  user: User;
-}
-export function loadSession(): Session | null {
-  const session = read<Session>(sessionKey);
-  return session &&
-    typeof session.token === "string" &&
-    session.user &&
-    typeof session.user.email === "string" &&
-    typeof session.user.name === "string" &&
-    typeof session.user.id === "number"
-    ? session
-    : null;
-}
-export function saveSession(session: Session): void {
-  write(sessionKey, session);
-}
-export function clearSession(): void {
-  remove(sessionKey);
 }
 
-export function loadFeed<T>(key: string): T[] {
-  const saved = read<{ savedAt: number; messages: T[] }>(`feed:${key}`);
-  if (
-    !saved ||
-    !Array.isArray(saved.messages) ||
-    typeof saved.savedAt !== "number" ||
-    Date.now() - saved.savedAt > 3_600_000
-  ) {
-    remove(`feed:${key}`);
-    return [];
+/** Ключи другой версии (stevens:v0:… и т. п.) удаляются при старте */
+export function dropOldVersions(): void {
+  try {
+    const stale: string[] = [];
+    for (let i = 0; i < localStorage.length; i += 1) {
+      const key = localStorage.key(i);
+      if (key && key.startsWith('stevens:') && !key.startsWith(PREFIX)) stale.push(key);
+    }
+    stale.forEach((key) => localStorage.removeItem(key));
+  } catch {
+    /* нет хранилища */
   }
-  return saved.messages;
 }
-export function saveFeed(key: string, messages: unknown[]): void {
-  write(`feed:${key}`, { savedAt: Date.now(), messages: messages.slice(-50) });
-}
+
+export const storage = {
+  clientId: () => read('client_id'),
+  setClientId: (id: string) => write('client_id', id),
+  mode: () => (read('mode') === 'sandbox' ? 'sandbox' : null),
+  setMode: (mode: 'sandbox' | null) => write('mode', mode),
+  token: () => read('token'),
+  setToken: (token: string | null) => write('token', token),
+  login: () => read('login'),
+  setLogin: (login: string | null) => write('login', login),
+  userId: () => {
+    const v = read('user_id');
+    return v ? Number(v) : null;
+  },
+  setUserId: (id: number | null) => write('user_id', id === null ? null : String(id)),
+  feed: <T>(key: string): { savedAt: number; messages: T[] } | null => {
+    const raw = read(`feed:${key}`);
+    if (!raw) return null;
+    try {
+      return JSON.parse(raw) as { savedAt: number; messages: T[] };
+    } catch {
+      return null;
+    }
+  },
+  setFeed: <T>(key: string, messages: T[] | null) =>
+    write(`feed:${key}`, messages === null ? null : JSON.stringify({ savedAt: Date.now(), messages })),
+};

@@ -1,207 +1,176 @@
-import { ZodError } from "zod";
-import { apiUrl, featuresHeader } from "../config/features";
-import { T } from "../content/texts";
+/** Все запросы — только здесь (AGENTS.md, правило 5). Режим «настоящий бэк». */
+import { apiUrl, features } from '../config/features';
+import { parseChat, parseRecord } from './schema';
 import type {
-  AuthRequest,
-  AuthResponse,
-  ChatRequest,
-  ChatResponse,
-  RecordItem,
-  RecordPatch,
-  User,
-} from "./types";
-import {
-  authSchema,
-  describeIssue,
-  healthSchema,
-  parseChatResponse,
-  parseRecord,
-  recordsSchema,
-  userSchema,
-} from "./schema";
-import { ApiError } from "./errors";
-export { ApiError } from "./errors";
+  AuthResponse, BackendFeature, ChatRequest, ChatResponse, RecordItem, RecordPatch, User,
+} from './types';
+import { FEATURES_HEADER } from './types';
 
-const base = apiUrl.replace(/\/+$/, "");
+export type ApiError =
+  | { type: 'network' }
+  | { type: 'timeout' }
+  | { type: 'server' }
+  | { type: 'unauthorized' }
+  | { type: 'http'; status: number; code: string | null };
 
-type Method = "GET" | "POST" | "PATCH" | "DELETE";
+export class ApiFailure extends Error {
+  constructor(public readonly error: ApiError) {
+    super(error.type);
+  }
+}
 
-/**
- * Один запрос к бэку по общим правилам контракта (раздел 3): JSON, таймаут
- * 25 секунд, всё, что не 2xx, — ошибка с кнопкой «Повторить».
- */
-async function request(
-  method: Method,
-  path: string,
-  options: {
-    token?: string | null;
-    body?: unknown;
-    headers?: Record<string, string>;
-    timeout?: number;
-    /** Текст ошибки для 404 и 422 — свой у каждого запроса */
-    messages?: Partial<Record<404 | 422, string>>;
-  } = {},
-): Promise<unknown> {
-  const {
-    token,
-    body,
-    headers = {},
-    timeout = 25_000,
-    messages = {},
-  } = options;
-  const label = `${method} ${path.split("?")[0]}`;
+/** Заголовок режима: Bearer в аккаунте, X-Client-Id в песочнице */
+let modeHeaders: Record<string, string> = {};
+export function setModeHeaders(headers: Record<string, string>): void {
+  modeHeaders = headers;
+}
+
+const base = apiUrl.replace(/\/$/, '');
+
+/** Допы, которым нужен бэк (09-extensions.md, правило 7) */
+function backendFeatures(): BackendFeature[] {
+  const list: BackendFeature[] = [];
+  if (features.d2_delete) list.push('d2');
+  if (features.d3_complete) list.push('d3');
+  if (features.d10_undo) list.push('d10');
+  return list;
+}
+
+type Options = {
+  method?: string;
+  body?: unknown;
+  timeout?: number;
+  auth?: boolean;
+  extra?: Record<string, string>;
+};
+
+async function request(path: string, { method = 'GET', body, timeout = 25000, auth = true, extra }: Options): Promise<Response> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeout);
+  const headers: Record<string, string> = { ...(auth ? modeHeaders : {}), ...extra };
+  if (body !== undefined) headers['Content-Type'] = 'application/json';
+  let response: Response;
   try {
-    const response = await fetch(base + path, {
+    response = await fetch(base + path, {
       method,
+      headers,
+      body: body === undefined ? undefined : JSON.stringify(body),
       signal: controller.signal,
-      headers: {
-        ...(body === undefined ? {} : { "Content-Type": "application/json" }),
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        ...headers,
-      },
-      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     });
-    if (response.status === 204) return null;
-    const data: unknown = await response.json().catch(() => null);
-    if (!response.ok) {
-      const detail = `${label} → ${response.status}`;
-      if (response.status === 401 || (response.status === 403 && token))
-        throw new ApiError("unauthorized", T.auth_session_expired, detail);
-      if (response.status === 404)
-        throw new ApiError("not_found", messages[404] ?? T.err_server, detail);
-      if (response.status === 422)
-        throw new ApiError(
-          "validation",
-          messages[422] ?? T.request_invalid,
-          detail,
-        );
-      throw new ApiError(
-        response.status < 500 ? "validation" : "server",
-        T.err_server,
-        detail,
-      );
-    }
-    return data;
-  } catch (error) {
-    if (error instanceof ApiError) throw error;
-    if (error instanceof DOMException && error.name === "AbortError")
-      throw new ApiError("timeout", T.err_timeout, `${label}: 25 с`);
-    throw new ApiError("network", T.err_network, label);
+  } catch {
+    throw new ApiFailure(controller.signal.aborted ? { type: 'timeout' } : { type: 'network' });
   } finally {
     clearTimeout(timer);
   }
+  if (response.status === 401 && auth && 'Authorization' in modeHeaders) {
+    throw new ApiFailure({ type: 'unauthorized' });
+  }
+  if (response.status >= 500) throw new ApiFailure({ type: 'server' });
+  if (!response.ok) {
+    let code: string | null = null;
+    try {
+      code = ((await response.json()) as { error?: string }).error ?? null;
+    } catch {
+      /* без тела */
+    }
+    throw new ApiFailure({ type: 'http', status: response.status, code });
+  }
+  return response;
 }
 
-/** Разбор ответа: не по контракту — ошибка с указанием, какое поле не сошлось */
-function parse<R>(label: string, parser: () => R): R {
+async function json(response: Response): Promise<unknown> {
   try {
-    return parser();
-  } catch (error) {
-    throw new ApiError(
-      "contract",
-      T.err_contract,
-      `${label}: ${error instanceof ZodError ? describeIssue(error) : "формат ответа"}`,
-    );
+    return await response.json();
+  } catch {
+    throw new ApiFailure({ type: 'server' });
   }
 }
 
-// ── POST /api/chat (разделы 4–7, 15.2) ─────────────────
+export const api = {
+  async health(timeout: number): Promise<boolean> {
+    try {
+      const response = await request('/api/health', { auth: false, timeout });
+      const data = (await json(response)) as { status?: string };
+      return data.status === 'ok';
+    } catch {
+      return false;
+    }
+  },
 
-export async function chat(
-  payload: ChatRequest,
-  token: string | null,
-): Promise<ChatResponse> {
-  const flags = featuresHeader();
-  const data = await request("POST", "/api/chat", {
-    token,
-    body: payload,
-    headers: flags ? { "X-Stevens-Features": flags } : {},
-  });
-  return parse("POST /api/chat", () => parseChatResponse(data));
-}
+  /** Ответ не прошёл схему: есть text — ответ из одного текста, нет — err_server */
+  async chat(body: ChatRequest, timeout: number): Promise<ChatResponse> {
+    const list = backendFeatures();
+    const response = await request('/api/chat', {
+      method: 'POST',
+      body,
+      timeout,
+      extra: list.length ? { [FEATURES_HEADER]: list.join(',') } : undefined,
+    });
+    const data = await json(response);
+    const parsed = parseChat(data);
+    if (parsed) return parsed;
+    const text = (data as { text?: unknown } | null)?.text;
+    if (typeof text === 'string') {
+      return {
+        message_id: '', kind: 'unknown', text, speech: null, records: [], nearest: null,
+        total: null, awaiting_reply: false, buttons: [],
+      };
+    }
+    throw new ApiFailure({ type: 'server' });
+  },
 
-// ── REST для календаря и правки (15.5) ────────────────
+  async login(kind: 'login' | 'register', login: string, password: string): Promise<AuthResponse> {
+    const response = await request(`/api/auth/${kind}`, { method: 'POST', body: { login, password }, auth: false });
+    return (await json(response)) as AuthResponse;
+  },
 
-const recordMessages = { 404: T.err_record_missing, 422: T.err_record_fields };
+  async me(token: string, timeout: number): Promise<User> {
+    const response = await request('/api/auth/me', {
+      auth: false, timeout, extra: { Authorization: `Bearer ${token}` },
+    });
+    return ((await json(response)) as { user: User }).user;
+  },
 
-export async function getRecords(
-  from: string,
-  to: string,
-  token: string | null,
-): Promise<RecordItem[]> {
-  const data = await request("GET", `/api/records?from=${from}&to=${to}`, {
-    token,
-    messages: { 422: T.request_invalid },
-  });
-  return parse("GET /api/records", () => recordsSchema.parse(data).records);
-}
+  logout(token: string): void {
+    void request('/api/auth/logout', {
+      method: 'POST', auth: false, extra: { Authorization: `Bearer ${token}` },
+    }).catch(() => undefined);
+  },
 
-export async function patchRecord(
-  id: number,
-  patch: RecordPatch,
-  token: string | null,
-): Promise<RecordItem> {
-  const data = await request("PATCH", `/api/records/${id}`, {
-    token,
-    body: patch,
-    messages: recordMessages,
-  });
-  return parse("PATCH /api/records", () => parseRecord(data));
-}
+  async resetSandbox(): Promise<void> {
+    await request('/api/sandbox/reset', { method: 'POST' });
+  },
 
-export async function deleteRecord(
-  id: number,
-  token: string | null,
-): Promise<void> {
-  await request("DELETE", `/api/records/${id}`, {
-    token,
-    messages: recordMessages,
-  });
-}
+  async records(from: string, to: string): Promise<RecordItem[]> {
+    const response = await request(`/api/records?from=${from}&to=${to}`, {});
+    const data = (await json(response)) as { records?: unknown[] };
+    return (data.records ?? []).map(parseRecord).filter((r): r is RecordItem => r !== null);
+  },
 
-export async function restoreRecord(
-  id: number,
-  token: string | null,
-): Promise<RecordItem> {
-  const data = await request("POST", `/api/records/${id}/restore`, {
-    token,
-    messages: recordMessages,
-  });
-  return parse("POST /api/records/restore", () => parseRecord(data));
-}
+  async patchRecord(id: number, patch: RecordPatch): Promise<RecordItem> {
+    const response = await request(`/api/records/${id}`, { method: 'PATCH', body: patch });
+    const record = parseRecord(((await json(response)) as { record?: unknown }).record);
+    if (!record) throw new ApiFailure({ type: 'server' });
+    return record;
+  },
 
-// ── GET /api/health (раздел 2) ────────────────────────
+  async deleteRecord(id: number): Promise<void> {
+    await request(`/api/records/${id}`, { method: 'DELETE' });
+  },
 
-export async function health(): Promise<void> {
-  const data = await request("GET", "/api/health", { timeout: 60_000 });
-  parse("GET /api/health", () => healthSchema.parse(data));
-}
+  async restoreRecord(id: number): Promise<RecordItem> {
+    const response = await request(`/api/records/${id}/restore`, { method: 'POST' });
+    const record = parseRecord(((await json(response)) as { record?: unknown }).record);
+    if (!record) throw new ApiFailure({ type: 'server' });
+    return record;
+  },
+};
 
-// ── Вход: как в текущем бэке, не по разделу 14 ────────
-
-export async function authenticate(
-  payload: AuthRequest,
-  register: boolean,
-): Promise<AuthResponse> {
-  try {
-    const data = await request(
-      "POST",
-      `/api/auth/${register ? "register" : "login"}`,
-      { body: payload },
-    );
-    return parse("POST /api/auth", () => authSchema.parse(data));
-  } catch (error) {
-    if (error instanceof ApiError && error.kind === "unauthorized")
-      throw new ApiError("validation", T.auth_err_credentials, error.detail);
-    if (error instanceof ApiError && error.detail.endsWith("409"))
-      throw new ApiError("validation", T.auth_err_login_taken, error.detail);
-    throw error;
+/** Текст ошибки запроса для пользователя — ключ texts.ts */
+export function errorKey(error: unknown): 'err_network' | 'err_timeout' | 'err_server' {
+  if (error instanceof ApiFailure) {
+    if (error.error.type === 'network') return 'err_network';
+    if (error.error.type === 'timeout') return 'err_timeout';
   }
-}
-
-export async function me(token: string): Promise<User> {
-  const data = await request("GET", "/api/auth/me", { token });
-  return parse("GET /api/auth/me", () => userSchema.parse(data));
+  return 'err_server';
 }

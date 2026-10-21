@@ -1,0 +1,90 @@
+/** Шапка — 02-screens.md, 2.1. */
+import { ChevronDown, Plus } from 'lucide-react';
+import { useState } from 'react';
+import { features } from '../config/features';
+import { T } from '../content/texts';
+import { HeaderRightStart } from '../extensions/points';
+import { newDialog, resetSandbox } from '../state/chat';
+import { emitActivity } from '../state/events';
+import { goAuth, logout } from '../state/session';
+import { useApp } from '../state/store';
+import { Menu } from './Menu';
+import { Modal } from './Modal';
+
+export function Header() {
+  const mode = useApp((s) => s.mode);
+  const login = useApp((s) => s.login);
+  const empty = useApp((s) => s.messages.length === 0);
+  const busy = useApp((s) => s.waiting || s.recording);
+  const [dialog, setDialog] = useState<'new' | 'reset' | null>(null);
+
+  const sandboxItems = [
+    { label: T.menu_reset_sandbox, onSelect: () => setDialog('reset') },
+    ...(features.auth ? [{ label: T.menu_go_auth, onSelect: goAuth }] : []),
+  ];
+
+  return (
+    <header className="header">
+      <div className="header__left">
+        {!empty && (
+          <button
+            type="button"
+            className="new-dialog"
+            disabled={busy}
+            aria-label={T.btn_new_dialog}
+            onClick={() => { emitActivity('button-press'); setDialog('new'); }}
+          >
+            <Plus size={16} strokeWidth={1.5} aria-hidden="true" />
+            <span className="new-dialog__text">{T.btn_new_dialog}</span>
+          </button>
+        )}
+      </div>
+      <div className="header__name">{T.app_name}</div>
+      <div className="header__right">
+        <HeaderRightStart />
+        {mode === 'sandbox' && (
+          <Menu
+            items={sandboxItems}
+            trigger={({ open, toggle }) => (
+              <button type="button" className="sandbox-badge" aria-haspopup="menu" aria-expanded={open} onClick={toggle}>
+                {T.header_sandbox}
+                <ChevronDown className="sandbox-badge__chevron" strokeWidth={1.5} aria-hidden="true" />
+              </button>
+            )}
+          />
+        )}
+        {mode === 'account' && features.auth && (
+          <Menu
+            heading={login ?? ''}
+            items={[{ label: T.menu_logout, onSelect: logout }]}
+            trigger={({ open, toggle }) => (
+              <button type="button" className="avatar" aria-label={T.profile_label} aria-haspopup="menu" aria-expanded={open} onClick={toggle}>
+                {(login ?? '?').charAt(0).toUpperCase()}
+              </button>
+            )}
+          />
+        )}
+      </div>
+      {dialog === 'new' && (
+        <Modal
+          title={T.new_dialog_title}
+          text={T.new_dialog_text}
+          confirm={T.new_dialog_confirm}
+          cancel={T.new_dialog_cancel}
+          onCancel={() => setDialog(null)}
+          onConfirm={() => { setDialog(null); newDialog(); }}
+        />
+      )}
+      {dialog === 'reset' && (
+        <Modal
+          title={T.reset_title}
+          text={T.reset_text}
+          confirm={T.reset_confirm}
+          cancel={T.reset_cancel}
+          onCancel={() => setDialog(null)}
+          onConfirm={() => { setDialog(null); void resetSandbox(); }}
+        />
+      )}
+    </header>
+  );
+}

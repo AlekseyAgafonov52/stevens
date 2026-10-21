@@ -6,7 +6,7 @@ COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 RUN pnpm install --frozen-lockfile
 
 # Explicit copies keep local .env files and server secrets out of the build.
-COPY index.html tsconfig.json vite.config.ts eslint.config.js ./
+COPY index.html tsconfig.json vite.config.ts eslint.config.js .env.production ./
 COPY src ./src
 COPY public ./public
 

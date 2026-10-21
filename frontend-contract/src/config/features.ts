@@ -1,64 +1,60 @@
 /**
- * Допы контракта v1.4 (раздел 15). По умолчанию включены все; значение по
- * умолчанию можно поменять при сборке (VITE_FEATURE_D2=false и т. п.), а
- * каждый доп — включить или выключить на лету в меню профиля «Допы».
- * Выбор хранится в браузере, после переключения страница перезагружается.
+ * Флаги функций (Р-149): один код, два набора — «минимальный» и «полный».
+ * Набор задаётся при сборке: `vite build --mode minimal` / `vite build --mode full`
+ * (файлы .env.minimal и .env.full в корне, примеры — внизу).
+ * Выключенная функция не рисуется и места не занимает: интерфейс в точности как без неё.
+ * Флаги читают только точки расширения (docs/09-extensions.md) и модуль src/api/ (заголовок X-Stevens-Features, заглушки).
  */
-export type FeatureId = "d2" | "d3" | "d10" | "d6" | "d12" | "d13" | "d14";
+const on = (name: string): boolean => import.meta.env[`VITE_FEATURE_${name}`] === 'true';
 
-export const featureList: { id: FeatureId; title: string; backend: boolean }[] =
-  [
-    { id: "d2", title: "Д2 Удаление", backend: true },
-    { id: "d3", title: "Д3 Отметка выполненной", backend: true },
-    { id: "d10", title: "Д10 Отменить и исправить", backend: true },
-    { id: "d6", title: "Д6 Календарь", backend: true },
-    { id: "d12", title: "Д12 Озвучка", backend: false },
-    { id: "d13", title: "Д13 Автослушание", backend: false },
-    { id: "d14", title: "Д14 Персонаж", backend: false },
-  ];
+export const features = {
+  /** Экран входа и аккаунты — часть первого варианта, не доп. Выключено — приложение сразу открывается в песочнице */
+  auth: on('AUTH'),
 
-const storageKey = "stevens-contract:features";
+  // ── Допы: docs/07-extras.md и docs/08-mascot.md; как встраивать — docs/09-extensions.md.
+  //    Все флаги допов выключены = в точности первый вариант. ──
+  /** Д2 Удаление */
+  d2_delete: on('D2_DELETE'),
+  /** Д3 Отметка выполненной */
+  d3_complete: on('D3_COMPLETE'),
+  /** Д6 Календарная панель — справа на широком экране, на телефоне по кнопке в шапке */
+  d6_calendar: on('D6_CALENDAR'),
+  /** Д10 «Исправить» (добавляет фронт) и «Отменить» (присылает бэк) у созданной записи */
+  d10_undo: on('D10_UNDO'),
+  /** Д12 Озвучка ответов */
+  d12_speech: on('D12_SPEECH'),
+  /** Д13 Автослушание после уточнения */
+  d13_autolisten: on('D13_AUTOLISTEN'),
+  /** Д14 Персонаж Stevens — docs/08-mascot.md; подключает src/styles/mascot.css */
+  d14_mascot: on('D14_MASCOT'),
+} as const;
 
-function defaults(): Record<FeatureId, boolean> {
-  return Object.fromEntries(
-    featureList.map(({ id }) => [
-      id,
-      import.meta.env[`VITE_FEATURE_${id.toUpperCase()}`] !== "false",
-    ]),
-  ) as Record<FeatureId, boolean>;
-}
+/** Откуда берём ответы: 'mock' — локальные заглушки (src/api/mocks.json), 'real' — бэк по VITE_API_URL */
+export const apiMode: 'mock' | 'real' = import.meta.env.VITE_API_MODE === 'real' ? 'real' : 'mock';
+export const apiUrl: string = import.meta.env.VITE_API_URL ?? '';
 
-function load(): Record<FeatureId, boolean> {
-  const result = defaults();
-  try {
-    const saved = JSON.parse(
-      localStorage.getItem(storageKey) ?? "{}",
-    ) as Partial<Record<FeatureId, unknown>>;
-    for (const { id } of featureList)
-      if (typeof saved[id] === "boolean") result[id] = saved[id];
-  } catch {
-    /* Хранилище необязательно. */
-  }
-  return result;
-}
+/*
+.env.development  — разработка
+  VITE_API_MODE=mock
+  VITE_FEATURE_AUTH=true
 
-export const features: Readonly<Record<FeatureId, boolean>> = load();
+.env.minimal      — запасной деплой: первый вариант без входа, все допы выключены (как в первом пакете)
+  VITE_API_MODE=real
+  VITE_API_URL=https://<бэк>
+  VITE_FEATURE_AUTH=false
 
-export function setFeature(id: FeatureId, value: boolean): void {
-  try {
-    localStorage.setItem(
-      storageKey,
-      JSON.stringify({ ...features, [id]: value }),
-    );
-  } catch {
-    /* Хранилище необязательно. */
-  }
-}
+.env.full         — ссылка для жюри: первый вариант + вход + допы, прошедшие проверку
+  VITE_API_MODE=real
+  VITE_API_URL=https://<бэк>
+  VITE_FEATURE_AUTH=true
+  # допы включаются по мере готовности и проверки:
+  # VITE_FEATURE_D2_DELETE=true
+  # VITE_FEATURE_D10_UNDO=true
+  # VITE_FEATURE_D3_COMPLETE=true
+  # VITE_FEATURE_D6_CALENDAR=true
+  # VITE_FEATURE_D12_SPEECH=true
+  # VITE_FEATURE_D13_AUTOLISTEN=true
+  # VITE_FEATURE_D14_MASCOT=true
 
-/** Значение заголовка X-Stevens-Features (15.2): только допы, которым нужен бэк в /api/chat */
-export function featuresHeader(): string {
-  return (["d2", "d3", "d10"] as const).filter((id) => features[id]).join(",");
-}
-
-/** Адрес бэка. Пусто — тот же адрес, что у страницы (nginx проксирует /api) */
-export const apiUrl: string = import.meta.env.VITE_API_URL ?? "";
+Эталон «первый вариант» для снимков (docs/09-extensions.md, раздел 3) — .env.development: auth включён, все допы выключены.
+*/

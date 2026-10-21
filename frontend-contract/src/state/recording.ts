@@ -1,0 +1,96 @@
+/** Запись голоса для строки ввода — 03-behavior.md, раздел 6. */
+import { T } from '../content/texts';
+import { voice, type VoiceError } from '../voice';
+import { send, setHint } from './chat';
+import { emitActivity } from './events';
+import { createStore, store } from './store';
+
+/** Быстро меняющееся — отдельно, чтобы не перерисовывать всё приложение */
+export const recordingStore = createStore({ transcript: '', level: 0, startedAt: 0 });
+
+const AUTO_SILENCE_MS = 5000;
+
+let prefix = '';
+let auto = false;
+let heard = false;
+let autoTimer: ReturnType<typeof setTimeout> | undefined;
+
+const ERROR_HINT: Record<VoiceError, keyof typeof T> = {
+  denied: 'voice_denied',
+  'no-mic': 'voice_no_mic',
+  'no-speech': 'voice_no_speech',
+  failed: 'voice_error',
+};
+
+export function startRecording(options: { auto?: boolean } = {}): void {
+  const state = store.get();
+  if (state.waiting || state.recording) return;
+  if (!voice.isSupported()) {
+    setHint('voice_unsupported');
+    return;
+  }
+  prefix = state.input.trim();
+  auto = !!options.auto;
+  heard = false;
+  setHint(null);
+  void voice.start();
+}
+
+export function stopRecording(): void {
+  voice.stop();
+}
+
+export function cancelRecording(): void {
+  clearTimeout(autoTimer);
+  voice.cancel();
+  store.set({ input: prefix });
+}
+
+voice.on('state', (state) => {
+  if (state === 'asking') setHint('voice_permission');
+  if (state === 'recording') {
+    if (store.get().hint?.key === 'voice_permission') setHint(null);
+    recordingStore.set({ transcript: prefix, level: 0, startedAt: Date.now() });
+    store.set({ recording: true });
+    emitActivity('recording-start');
+    if (auto) {
+      autoTimer = setTimeout(() => {
+        if (!heard) cancelRecording(); // Д13: тихо выключаемся, без «Не расслышал»
+      }, AUTO_SILENCE_MS);
+    }
+  }
+  if (state === 'idle') {
+    clearTimeout(autoTimer);
+    if (store.get().recording) {
+      store.set({ recording: false });
+      emitActivity('recording-stop');
+    }
+  }
+});
+
+voice.on('interim', (text) => {
+  if (text) heard = true;
+  recordingStore.set({ transcript: [prefix, text].filter(Boolean).join(' ') });
+});
+
+voice.on('level', (level) => recordingStore.set({ level }));
+
+voice.on('final', (text) => {
+  const full = [prefix, text].filter(Boolean).join(' ');
+  store.set({ input: '' });
+  if (!send(full, 'voice')) store.set({ input: full });
+});
+
+voice.on('error', (error) => {
+  store.set({ input: prefix });
+  if (error === 'no-speech' && auto) return;
+  setHint(ERROR_HINT[error]);
+});
+
+if (typeof document !== 'undefined') {
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState !== 'hidden') return;
+    emitActivity('tab-hidden');
+    if (store.get().recording) cancelRecording();
+  });
+}

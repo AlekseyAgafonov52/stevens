@@ -1,44 +1,37 @@
-import { describe, expect, it, vi } from "vitest";
-vi.mock("./clock", () => ({
-  now: () => new Date("2026-10-21T10:00:00+03:00"),
-  userTimezone: () => "Europe/Moscow",
-}));
-import { displayDate, groupDate, isPast } from "./dates";
-import type { RecordItem } from "../api/types";
+import { describe, expect, it } from 'vitest';
+import { dayTitle, groupByDay, isPast, metaDate, metaParts, pluralKey, shortDate } from './dates';
+import type { RecordItem } from '../api/types';
 
-const record: RecordItem = {
-  id: 1,
-  type: "task",
-  text: "Тест",
-  date: "2026-10-21",
-  time: "08:00",
-  date_kind: "exact",
-  status: "open",
-  created_at: null,
-  marks: [],
-  highlight: null,
-};
-describe("calendar rules at the contract test clock (Moscow)", () => {
-  it("recognizes local today, tomorrow and yesterday", () => {
-    expect(displayDate("2026-10-21")).toBe("сегодня");
-    expect(displayDate("2026-10-22")).toBe("завтра");
-    expect(displayDate("2026-10-20")).toBe("вчера");
-    expect(groupDate("2026-10-21")).toBe("Сегодня, ср 21 окт");
+const today = new Date(2026, 9, 21, 10, 0);
+const rec = (over: Partial<RecordItem>): RecordItem => ({
+  id: 1, type: 'task', text: 'x', date: '2026-10-22', time: null, date_kind: 'exact',
+  status: 'open', created_at: null, marks: [], highlight: null, ...over,
+});
+
+describe('dates', () => {
+  it('formats short and relative dates', () => {
+    expect(shortDate('2026-10-19', today)).toBe('пн, 19 окт');
+    expect(shortDate('2027-03-05', today)).toBe('пт, 5 мар 2027');
+    expect(metaDate('2026-10-22', today)).toBe('завтра');
+    expect(dayTitle('2026-10-21', today)).toBe('Сегодня, ср 21 окт');
+    expect(dayTitle('2026-10-23', today)).toBe('Пт, 23 окт');
   });
-  it("includes a different year and handles year boundaries", () => {
-    expect(displayDate("2027-01-05")).toBe("вт, 5 янв 2027");
-    expect(
-      displayDate("2027-01-01", new Date("2026-12-31T22:00:00+03:00")),
-    ).toBe("завтра");
+  it('builds meta parts', () => {
+    expect(metaParts(rec({ time: '08:00' }), true, today).map((p) => p.text)).toEqual(['завтра', '08:00']);
+    expect(metaParts(rec({ time: '08:00' }), false, today).map((p) => p.text)).toEqual(['08:00']);
+    expect(metaParts(rec({ date_kind: 'deadline', date: '2026-10-25' }), false, today)[0].text).toBe('до вс, 25 окт');
+    expect(metaParts(rec({ date_kind: 'none', date: null }), true, today)[0].text).toBe('без срока');
   });
-  it("distinguishes exact times from deadlines on the same day", () => {
-    expect(isPast(record)).toBe(true);
-    expect(isPast({ ...record, time: "10:15" })).toBe(false);
-    expect(isPast({ ...record, date_kind: "deadline" })).toBe(false);
-    expect(isPast({ ...record, time: null })).toBe(false);
-    expect(isPast({ ...record, marks: ["draft"] })).toBe(false);
-    expect(isPast({ ...record, date: "2026-10-20", date_kind: "none" })).toBe(
-      false,
-    );
+  it('detects past records', () => {
+    expect(isPast(rec({ date: '2026-10-21', time: '08:00' }), today)).toBe(true);
+    expect(isPast(rec({ date: '2026-10-21' }), today)).toBe(false);
+    expect(isPast(rec({ date: '2026-10-20', date_kind: 'deadline' }), today)).toBe(true);
+  });
+  it('groups by day with no-date group last', () => {
+    const groups = groupByDay([rec({ id: 1, date: null, date_kind: 'none' }), rec({ id: 2 }), rec({ id: 3 })]);
+    expect(groups.map((g) => g.date)).toEqual(['2026-10-22', null]);
+  });
+  it('plural', () => {
+    expect([1, 2, 5, 11, 21, 22, 25].map(pluralKey)).toEqual(['one', 'few', 'many', 'many', 'one', 'few', 'many']);
   });
 });

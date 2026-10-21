@@ -1,87 +1,65 @@
-import { z } from "zod";
-import type { ChatResponse, RecordItem } from "./types";
+/** Проверка ответов в рантайме по src/api/types.ts (03-behavior.md, раздел 3). */
+import { z } from 'zod';
+import type { ChatResponse, RecordItem } from './types';
 
-/**
- * Проверка ответов по контракту v1.4. Поля «обяз.» должны быть всегда,
- * поля «необяз.» могут быть null или отсутствовать. Ответ не по контракту
- * фронт не чинит, а показывает как ошибку (см. api/index.ts).
- */
-const date = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
-const time = z.string().regex(/^\d{2}:\d{2}$/);
-
-export const recordSchema = z.object({
-  id: z.number().nullable().default(null),
-  type: z.enum(["task", "meeting", "reminder"]).nullable().default(null),
+const recordSchema = z.object({
+  id: z.number().nullable(),
+  type: z.enum(['task', 'reminder', 'meeting']).nullable(),
   text: z.string(),
-  date: date.nullable().default(null),
-  time: time.nullable().default(null),
-  date_kind: z.enum(["exact", "deadline", "none"]),
-  status: z.enum(["open", "done"]).nullable().default(null),
-  created_at: z.string().nullable().default(null),
-  marks: z.array(z.enum(["new", "draft", "conflict", "deleted"])),
-  highlight: z.enum(["date", "time", "text"]).nullable().default(null),
-  remind_at: z.string().nullable().optional(),
+  date: z.string().nullable(),
+  time: z.string().nullable(),
+  date_kind: z.enum(['exact', 'deadline', 'none']),
+  status: z.enum(['open', 'done']).nullable(),
+  created_at: z.string().nullable(),
+  marks: z.array(z.string()).default([]),
+  highlight: z.enum(['date', 'time', 'text']).nullable().default(null),
 });
-const action = z.object({
-  id: z.string(),
-  record_id: z
-    .number()
-    .nullish()
-    .transform((value) => value ?? undefined),
+
+const actionSchema = z.object({ id: z.string(), record_id: z.number().optional().nullable() });
+
+const buttonSchema = z.object({
+  label: z.string(),
+  send: z.union([
+    z.object({ action: actionSchema }),
+    z.object({ text: z.string() }),
+  ]),
+  style: z.enum(['primary', 'secondary']).nullable().optional(),
 });
-// «Ровно одно из двух». Ключ со значением null считаем отсутствующим:
-// так сериализует Pydantic, и смысл от этого не меняется.
-const send = z
-  .object({ text: z.string().nullish(), action: action.nullish() })
-  .refine(
-    (value) => (value.text == null) !== (value.action == null),
-    "send: нужно ровно одно из text и action",
-  )
-  .transform((value) =>
-    value.action ? { action: value.action } : { text: value.text! },
-  );
-const responseSchema = z.object({
+
+const chatSchema = z.object({
   message_id: z.string(),
   kind: z.string(),
   text: z.string(),
   speech: z.string().nullable().default(null),
-  records: z.array(recordSchema),
+  records: z.array(recordSchema).default([]),
   nearest: recordSchema.nullable().default(null),
   total: z.number().nullable().default(null),
-  awaiting_reply: z.boolean(),
-  buttons: z.array(
-    z.object({
-      label: z.string(),
-      send,
-      style: z.enum(["primary", "secondary"]).optional(),
-    }),
-  ),
-});
-export const healthSchema = z.object({ status: z.literal("ok") });
-export const recordsSchema = z.object({ records: z.array(recordSchema) });
-export const recordResponseSchema = z.object({ record: recordSchema });
-export const userSchema = z.object({
-  id: z.number(),
-  email: z.string(),
-  name: z.string(),
-});
-export const authSchema = z.object({
-  token: z.string(),
-  user: userSchema,
-  expires_at: z.string(),
+  awaiting_reply: z.boolean().default(false),
+  buttons: z.array(buttonSchema).default([]),
 });
 
-/** Где именно ответ разошёлся с контрактом — для технической подписи под ошибкой */
-export function describeIssue(error: z.ZodError): string {
-  const issue = error.issues[0];
-  return issue
-    ? `${issue.path.join(".") || "ответ"}: ${issue.message}`
-    : "формат ответа";
+function clean<T extends { record_id?: number | null }>(action: T) {
+  return action.record_id == null ? { id: (action as unknown as { id: string }).id } : action;
 }
 
-export function parseChatResponse(input: unknown): ChatResponse {
-  return responseSchema.parse(input);
+/** null — ответ не прошёл схему */
+export function parseChat(data: unknown): ChatResponse | null {
+  const result = chatSchema.safeParse(data);
+  if (!result.success) return null;
+  const value = result.data;
+  return {
+    ...value,
+    records: value.records as RecordItem[],
+    nearest: value.nearest as RecordItem | null,
+    buttons: value.buttons.map((b) => ({
+      label: b.label,
+      style: b.style ?? undefined,
+      send: 'action' in b.send ? { action: clean(b.send.action) as { id: string; record_id?: number } } : b.send,
+    })),
+  };
 }
-export function parseRecord(input: unknown): RecordItem {
-  return recordResponseSchema.parse(input).record;
+
+export function parseRecord(data: unknown): RecordItem | null {
+  const result = recordSchema.safeParse(data);
+  return result.success ? (result.data as RecordItem) : null;
 }

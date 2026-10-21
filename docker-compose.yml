@@ -1,6 +1,6 @@
 # Весь Stevens одной командой: docker compose up --build
-# Откройте http://localhost:8080 (фронт под текущий бэк)
-# и http://localhost:8081 (фронт строго по контракту v1.4 с допами)
+# Откройте http://localhost:8081 (или 8080 — тот же фронт): прототип по контракту v1.4 с допами.
+# Бэк в этой ветке переделан под контракт, поэтому старый frontend/ здесь не собирается.
 services:
   postgres:
     image: postgres:16-alpine
@@ -32,17 +32,6 @@ services:
       postgres:
         condition: service_healthy
 
-  frontend:
-    build:
-      context: ./frontend
-      args:
-        # Пусто: фронт ходит на тот же адрес, nginx проксирует /api на бэк.
-        VITE_API_URL: ""
-    ports:
-      - "8080:80"
-    depends_on:
-      - backend
-
   frontend-contract:
     build:
       context: ./frontend-contract
@@ -50,6 +39,7 @@ services:
         VITE_API_URL: ""
     ports:
       - "8081:80"
+      - "8080:80"
     depends_on:
       - backend
 
