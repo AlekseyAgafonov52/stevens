@@ -136,35 +136,57 @@ def _parse_time(text: str) -> tuple[str | None, bool, list[tuple[int, int]]]:
     return None, False, spans
 
 
-# «через 11 минут», «через полчаса», «через 2 часа», «через неделю»
+# «через 11 минут», «через полчаса», «через час и 20 минут», «через пару дней», «через неделю»
+_UNITS = {"ноль": 0, "один": 1, "одну": 1, "одна": 1, "два": 2, "две": 2, "три": 3, "четыре": 4, "пять": 5,
+          "шесть": 6, "семь": 7, "восемь": 8, "девять": 9, "десять": 10, "одиннадцать": 11, "двенадцать": 12,
+          "тринадцать": 13, "четырнадцать": 14, "пятнадцать": 15, "шестнадцать": 16, "семнадцать": 17,
+          "восемнадцать": 18, "девятнадцать": 19, "пару": 2, "пара": 2}
+_TENS = {"двадцать": 20, "тридцать": 30, "сорок": 40, "пятьдесят": 50}
+_NUM = rf"(?:\d+(?:[.,]5)?|(?:{'|'.join(_TENS)})(?:\s+(?:{'|'.join(_UNITS)}))?|{'|'.join(_UNITS)})"
+_UNIT = r"(?:полчаса|полтора\s+часа|полминуты|минут[уы]?|мин\.?|час(?:а|ов)?|д(?:ень|ня|ней)|сутки|суток|недел[юи]|недель|месяц(?:а|ев)?)"
 REL_RE = re.compile(
-    r"\bчерез\s+(?:(\d+|одну|один|два|две|три|четыре|пять|десять|пятнадцать|двадцать|сорок)\s+)?"
-    r"(полчаса|полтора\s+часа|минут[уы]?|час(?:а|ов)?|д(?:ень|ня|ней)|недел[юи]|недель)\b",
+    rf"\bчерез\s+(?:({_NUM})\s+)?({_UNIT})(?:\s+(?:и\s+)?({_NUM})\s+(минут[уы]?|мин\.?))?(?=\s|$|[,.!?])",
     I,
 )
-REL_NUMBERS = {"одну": 1, "один": 1, "два": 2, "две": 2, "три": 3, "четыре": 4, "пять": 5, "десять": 10,
-               "пятнадцать": 15, "двадцать": 20, "сорок": 40}
+
+
+def _number(raw: str | None) -> float:
+    if not raw:
+        return 1
+    raw = raw.lower().replace(",", ".")
+    try:
+        return float(raw)
+    except ValueError:
+        words = raw.split()
+        return sum(_TENS.get(w, 0) + _UNITS.get(w, 0) for w in words) or 1
 
 
 def _relative(text: str, now: datetime) -> tuple[date | None, str | None, tuple[int, int] | None]:
     m = REL_RE.search(text)
     if not m:
         return None, None, None
-    raw, unit = (m.group(1) or "").lower(), m.group(2).lower()
-    n = int(raw) if raw.isdigit() else REL_NUMBERS.get(raw, 1)
+    n, unit = _number(m.group(1)), m.group(2).lower()
+    extra = timedelta(minutes=_number(m.group(3))) if m.group(3) else timedelta()
     if unit == "полчаса":
         delta = timedelta(minutes=30)
     elif unit.startswith("полтора"):
         delta = timedelta(minutes=90)
-    elif unit.startswith("минут"):
+    elif unit == "полминуты":
+        delta = timedelta(minutes=1)
+    elif unit.startswith("мин"):
         delta = timedelta(minutes=n)
     elif unit.startswith("час"):
-        delta = timedelta(hours=n)
-    elif unit.startswith("д"):
-        return (now + timedelta(days=n)).date(), None, m.span()
+        delta = timedelta(minutes=round(n * 60))
+    elif unit.startswith("д") or unit.startswith("сут"):
+        return (now + timedelta(days=int(n))).date(), None, m.span()
+    elif unit.startswith("недел"):
+        return (now + timedelta(weeks=int(n))).date(), None, m.span()
     else:
-        return (now + timedelta(weeks=n)).date(), None, m.span()
-    moment = now + delta
+        month = now.month - 1 + int(n)
+        year, month = now.year + month // 12, month % 12 + 1
+        day = min(now.day, [31, 29 if year % 4 == 0 else 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][month - 1])
+        return date(year, month, day), None, m.span()
+    moment = now + delta + extra
     return moment.date(), moment.strftime("%H:%M"), m.span()
 
 

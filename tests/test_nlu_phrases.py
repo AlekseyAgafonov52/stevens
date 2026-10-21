@@ -26,6 +26,12 @@ RELATIVE = [
     ("через 2 часа созвон с Машей", "2026-10-21", "14:00"),
     ("через 3 дня сдать лабу", "2026-10-24", None),
     ("через неделю в 10 встреча с Иваном", "2026-10-28", "10:00"),
+    ("напомни через пять минут проверить духовку", "2026-10-21", "12:05"),
+    ("через час и 20 минут созвон с Машей", "2026-10-21", "13:20"),
+    ("напомни через 1,5 часа забрать посылку", "2026-10-21", "13:30"),
+    ("через пару дней в 10 встреча с Иваном", "2026-10-23", "10:00"),
+    ("через месяц оплатить интернет", "2026-11-21", None),
+    ("что у меня через неделю", "2026-10-28", None),
 ]
 
 fails = 0
@@ -36,7 +42,8 @@ for phrase, kind, text in CASES:
         print(f"«{phrase}» → {p.type} {p.text!r}, ждали {kind} {text!r}")
 for phrase, day, time in RELATIVE:
     p = parse(phrase, NOW)
-    if (p.date and p.date.isoformat(), p.time) != (day, time):
+    got_day = p.date or (p.period.start if p.period else None)
+    if (got_day and got_day.isoformat(), p.time) != (day, time):
         fails += 1
         print(f"«{phrase}» → {p.date} {p.time}, ждали {day} {time}")
 print("fails:", fails)
