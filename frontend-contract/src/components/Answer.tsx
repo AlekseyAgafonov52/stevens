@@ -6,6 +6,7 @@ import { dayTitle, groupByDay } from '../lib/dates';
 import { pressButton } from '../state/chat';
 import { useApp, type AnswerMessage } from '../state/store';
 import { AnswerExtraButtons, RecordCardOverride, cardEditHandler } from '../extensions/points';
+import { NotifyOffer } from './NotifyOffer';
 import { Pill, type PillVariant } from './Pill';
 import { RecordCard } from './RecordCard';
 
@@ -97,6 +98,7 @@ export function Answer({ message, isLast }: Props) {
           ))}
         </div>
       )}
+      {isLast && response.kind === 'created' && <NotifyOffer messageId={message.id} />}
     </div>
   );
 }
