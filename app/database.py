@@ -17,7 +17,7 @@ if not DATABASE_URL:
     raise ValueError("DATABASE_URL is not set in .env file")
 
 # Теперь Pylance точно знает, что здесь строка (str)
-engine = create_async_engine(DATABASE_URL, echo=True)
+engine = create_async_engine(DATABASE_URL, echo=os.getenv("SQL_ECHO") == "1")
 
 AsyncSessionLocal = async_sessionmaker(
     bind=engine,

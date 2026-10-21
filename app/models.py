@@ -1,8 +1,14 @@
+"""Таблицы по контракту v1.4: аккаунты по логину (раздел 14), песочницы по
+X-Client-Id, записи с мягким удалением (15.4).
+
+Имена таблиц новые (accounts, records…): старые таблицы прежней версии
+(users, tasks) в той же базе не мешают и не используются.
+"""
 import enum
 from datetime import datetime as dt
 
-from sqlalchemy import DateTime, Enum, String, Text, func, ForeignKey
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy import DateTime, Enum, ForeignKey, Index, String, func
+from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
 
@@ -14,57 +20,77 @@ class TaskType(str, enum.Enum):
 
 
 class TaskStatus(str, enum.Enum):
-    open = "open" 
+    open = "open"
     done = "done"
 
 
 class DateKind(str, enum.Enum):
-    exact = "exact"      # В этот момент
-    deadline = "deadline" # До этой даты
-    none = "none"        # Без срока
+    exact = "exact"        # в этот момент
+    deadline = "deadline"  # до этой даты
+    none = "none"          # без срока
 
 
-class Task(Base):
-    __tablename__ = "tasks"
-
-    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    type: Mapped[TaskType] = mapped_column(
-        Enum(TaskType, name="task_type"), default=TaskType.task, nullable=False
-    )
-    text: Mapped[str] = mapped_column(String(255), nullable=False) # <-- Было title, стало text
-    date: Mapped[str | None] = mapped_column(String(10), nullable=True) # "YYYY-MM-DD"
-    time: Mapped[str | None] = mapped_column(String(5), nullable=True)  # "HH:MM"
-    date_kind: Mapped[DateKind] = mapped_column(
-        Enum(DateKind, name="date_kind"), default=DateKind.none, nullable=False
-    )
-    status: Mapped[TaskStatus] = mapped_column(
-        Enum(TaskStatus, name="task_status"), default=TaskStatus.open, nullable=False
-    )
-    created_at: Mapped[dt] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
-    )
-    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True) # Пока разрешаем null для старых записей
-    user: Mapped["User"] = relationship(back_populates="tasks")
-
-    def __repr__(self) -> str:
-        return f"<Task id={self.id} text={self.text!r} type={self.type}>"
-
-class User(Base):
-    __tablename__ = "users"
+class Account(Base):
+    __tablename__ = "accounts"
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    email: Mapped[str] = mapped_column(String(255), unique=True, index=True, nullable=False)
-    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    # Храним как ввели, сравниваем в нижнем регистре (Р-189)
+    login: Mapped[str] = mapped_column(String(32), nullable=False)
+    login_lower: Mapped[str] = mapped_column(String(32), unique=True, index=True, nullable=False)
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     created_at: Mapped[dt] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
-    tasks: Mapped[list["Task"]] = relationship(back_populates="user")
 
-class AuthSession(Base):
-    __tablename__ = "auth_sessions"
+class AuthToken(Base):
+    __tablename__ = "auth_tokens"
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
-    token_hash: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    account_id: Mapped[int] = mapped_column(ForeignKey("accounts.id"), index=True)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
     expires_at: Mapped[dt] = mapped_column(DateTime(timezone=True))
     revoked_at: Mapped[dt | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class Sandbox(Base):
+    """Песочница: своя копия демо-данных на устройство (раздел 14)."""
+    __tablename__ = "sandboxes"
+
+    client_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    created_at: Mapped[dt] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class Record(Base):
+    __tablename__ = "records"
+    __table_args__ = (
+        Index("ix_records_account_date", "account_id", "date"),
+        Index("ix_records_sandbox_date", "sandbox_id", "date"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    # Владелец — ровно один из двух
+    account_id: Mapped[int | None] = mapped_column(ForeignKey("accounts.id"), nullable=True)
+    sandbox_id: Mapped[str | None] = mapped_column(ForeignKey("sandboxes.client_id"), nullable=True)
+
+    type: Mapped[TaskType | None] = mapped_column(Enum(TaskType, name="record_type"), nullable=True)
+    text: Mapped[str] = mapped_column(String(300), nullable=False)
+    date: Mapped[str | None] = mapped_column(String(10), nullable=True)  # "YYYY-MM-DD"
+    time: Mapped[str | None] = mapped_column(String(5), nullable=True)   # "HH:MM"
+    date_kind: Mapped[DateKind] = mapped_column(Enum(DateKind, name="record_date_kind"), nullable=False)
+    status: Mapped[TaskStatus | None] = mapped_column(Enum(TaskStatus, name="record_status"), nullable=True)
+    created_at: Mapped[dt | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    deleted_at: Mapped[dt | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    def to_contract(self, marks: list[str] | None = None, highlight: str | None = None) -> dict:
+        """Record из раздела 6 контракта."""
+        return {
+            "id": self.id,
+            "type": self.type.value if self.type else None,
+            "text": self.text,
+            "date": self.date,
+            "time": self.time,
+            "date_kind": self.date_kind.value,
+            "status": self.status.value if self.status else None,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "marks": marks if marks is not None else (["deleted"] if self.deleted_at else []),
+            "highlight": highlight,
+        }
