@@ -14,7 +14,7 @@ import writeRead from '../../assets/mascot/stevens-write-read.svg?raw';
 import write1 from '../../assets/mascot/stevens-write-1.svg?raw';
 import write2 from '../../assets/mascot/stevens-write-2.svg?raw';
 import write3 from '../../assets/mascot/stevens-write-3.svg?raw';
-import { capDrop, gestureAt, gestureSvg, shakeAt, type Gesture } from './bow';
+import { capShift, gestureAt, gestureSvg, shakeAt, type Gesture } from './bow';
 import { onAssistantResponse, onUiActivity } from '../../state/events';
 import { recordingStore } from '../../state/recording';
 import { store, useApp } from '../../state/store';
@@ -257,7 +257,8 @@ export function MascotPerch() {
   const { frame, fade } = useFrame(mood, night);
   const bow = useGesture(gesture);
   const amp = useHornAmplitude(mood === 'listen');
-  const style = { '--stv-amp': amp, '--stv-cap-drop': bow === null ? 0 : capDrop(mood === 'bow' ? 'bow' : 'shake', bow) } as CSSProperties;
+  const cap = bow === null ? { x: 0, y: 0 } : capShift(mood === 'bow' ? 'bow' : 'shake', bow);
+  const style = { '--stv-amp': amp, '--stv-cap-x': cap.x, '--stv-cap-drop': cap.y } as CSSProperties;
   return (
     <div className="stevens-perch" aria-hidden="true" onClick={onClick} style={style}>
       {/* Поклон рисуется поверх; при k = 0 он совпадает с покоем, поэтому подмена незаметна */}

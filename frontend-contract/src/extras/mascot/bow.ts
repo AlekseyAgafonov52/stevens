@@ -1,20 +1,22 @@
 /**
  * Поклон и покачивание головой без отдельных кадров: фигура считается для доли движения k,
  * поэтому движение плавное. При k = 0 рисунок совпадает с stevens-rest.svg (ночью — с rest-night).
- * Поклон — наклоняется всё тело (k от 0 до глубины поклона). Покачивание — лицо мягко сдвигается
- * влево-вправо без поворота (k от −1 до 1), глаза прикрыты, улыбка остаётся.
+ * Поклон — наклоняется всё тело (k от 0 до глубины поклона). Покачивание — макушка с лицом мягко
+ * сдвигается влево-вправо без поворота (k от −1 до 1), низ стоит на месте; глаза прикрыты, улыбка остаётся.
  */
 const T = 'var(--c-text)';
 const A = 'var(--c-accent)';
 
 const f = (n: number) => Math.round(n * 100) / 100;
 
-function bodyPath(k: number): string {
+/** dx — сдвиг макушки вбок (покачивание): голова целиком, плечи наполовину, низ на месте */
+function bodyPath(k: number, dx = 0): string {
   const top = 16 + 9 * k;
   const w = 1.5 * k;
+  const h = dx / 2;
   return (
-    `M43 128 C37 128 36 122 37 112 L${f(40 - w)} ${f(42 + 6 * k)} C${f(41 - w)} ${f(25 + 8 * k)} ${f(49 - w)} ${f(top)} 60 ${f(top)} ` +
-    `C${f(71 + w)} ${f(top)} ${f(79 + w)} ${f(25 + 8 * k)} ${f(80 + w)} ${f(42 + 6 * k)} L83 112 C84 122 83 128 77 128 Z`
+    `M43 128 C37 128 36 122 37 112 L${f(40 - w + h)} ${f(42 + 6 * k)} C${f(41 - w + dx)} ${f(25 + 8 * k)} ${f(49 - w + dx)} ${f(top)} ${f(60 + dx)} ${f(top)} ` +
+    `C${f(71 + w + dx)} ${f(top)} ${f(79 + w + dx)} ${f(25 + 8 * k)} ${f(80 + w + h)} ${f(42 + 6 * k)} L83 112 C84 122 83 128 77 128 Z`
   );
 }
 
@@ -39,7 +41,7 @@ export type Gesture = 'bow' | 'shake';
 export function gestureSvg(kind: Gesture, k: number, night: boolean): string {
   const shift = kind === 'shake' ? 2.2 * k : 0;
   k = kind === 'bow' ? k : 0;
-  const d = bodyPath(k);
+  const d = bodyPath(k, shift);
   const nightEyesY = night && k < 0.2 ? 0.4 : 0;
   const closed = k > 0.6 || kind === 'shake';
   const mouth =
@@ -66,8 +68,8 @@ export function gestureSvg(kind: Gesture, k: number, night: boolean): string {
   );
 }
 
-/** Насколько опускается верх головы (единицы viewBox) — колпак едет вместе с ним */
-export const capDrop = (kind: Gesture, k: number) => (kind === 'bow' ? 9 * k : 0);
+/** Куда сдвигается макушка (единицы viewBox) — колпак едет вместе с ней */
+export const capShift = (kind: Gesture, k: number) => (kind === 'bow' ? { x: 0, y: 9 * k } : { x: 2.2 * k, y: 0 });
 
 const ease = (t: number) => (t < 0.5 ? 2 * t * t : 1 - (-2 * t + 2) ** 2 / 2);
 

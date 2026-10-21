@@ -80,12 +80,12 @@
 @keyframes stv-glasses { 0% { transform: none; } 45% { transform: translateY(-2.4px); } 100% { transform: translateY(-1.2px); } }
 .stevens--concern .stv-glasses { transform-box: view-box; animation: stv-glasses 700ms var(--ease) 200ms both; }
 
-/* ── Ночь: колпак поверх любого кадра, в поклоне опускается вместе с головой ── */
+/* ── Ночь: колпак поверх любого кадра, в поклоне и покачивании едет вместе с макушкой ── */
 .stevens-cap {
   position: absolute;
   inset: 0;
   pointer-events: none;
-  transform: translateY(calc(var(--stv-cap-drop, 0) / 140 * 100%));
+  transform: translate(calc(var(--stv-cap-x, 0) / 120 * 100%), calc(var(--stv-cap-drop, 0) / 140 * 100%));
 }
 .stevens-cap svg { display: block; width: 100%; height: 100%; overflow: visible; }
 
