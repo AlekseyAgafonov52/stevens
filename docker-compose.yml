@@ -32,6 +32,14 @@ services:
       postgres:
         condition: service_healthy
 
+  # Озвучка голосом Silero «aidar». Первый запуск докачивает модель (~100 МБ) в том tts_models;
+  # пока её нет, фронт говорит голосом браузера.
+  tts:
+    build: ./tts
+    restart: unless-stopped
+    volumes:
+      - tts_models:/models
+
   frontend-contract:
     build:
       context: ./frontend-contract
@@ -45,3 +53,4 @@ services:
 
 volumes:
   voice_assistant_pg_data:
+  tts_models:
