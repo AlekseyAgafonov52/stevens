@@ -11,11 +11,11 @@ import { createStore, store } from './store';
 
 export const wakeStore = createStore({ enabled: false, armed: false });
 
-function update(): void {
+function update(inGesture = false): void {
   const s = store.get();
   const free = s.screen === 'app' && !s.waiting && !s.recording && !isSpeaking()
     && (typeof document === 'undefined' || document.visibilityState === 'visible');
-  voice.setArmed(wakeStore.get().enabled && free);
+  voice.setArmed(wakeStore.get().enabled && free, inGesture);
 }
 
 export function setWakeWord(on: boolean): void {
@@ -25,20 +25,20 @@ export function setWakeWord(on: boolean): void {
   }
   storage.setWakeWord(on);
   wakeStore.set({ enabled: on });
-  update();
+  update(true); // вызывается из нажатия «Да»: Safari запускает распознавание только в нём
 }
 
 export function initWakeWord(): void {
   if (!voice.isSupported()) return;
   wakeStore.set({ enabled: storage.wakeWord() });
-  store.subscribe(update);
-  onSpeech(update);
+  store.subscribe(() => update());
+  onSpeech(() => update());
   voice.on('armed', (armed) => wakeStore.set({ armed }));
   voice.on('wakeDenied', () => {
     storage.setWakeWord(false);
     wakeStore.set({ enabled: false, armed: false });
     setHint('voice_denied');
   });
-  if (typeof document !== 'undefined') document.addEventListener('visibilitychange', update);
+  if (typeof document !== 'undefined') document.addEventListener('visibilitychange', () => update());
   update();
 }
