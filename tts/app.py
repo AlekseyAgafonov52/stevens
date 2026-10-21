@@ -17,11 +17,12 @@ from pydantic import BaseModel, Field
 from normalize import normalize
 
 SPEAKER = "aidar"
-RATE = 48000
+# 24 кГц заметно быстрее 48 кГц на слабом процессоре Codespaces, на слух почти не отличается
+RATE = int(os.getenv("TTS_RATE", "24000"))
 MODEL_URL = os.getenv("SILERO_MODEL_URL", "https://models.silero.ai/models/tts/ru/v4_ru.pt")
 MODEL_PATH = os.path.join(os.getenv("MODELS_DIR", "/models"), "v4_ru.pt")
 
-torch.set_num_threads(int(os.getenv("TTS_THREADS", "2")))
+torch.set_num_threads(int(os.getenv("TTS_THREADS", str(os.cpu_count() or 2))))
 app = FastAPI(title="Stevens TTS")
 
 model = None
@@ -42,6 +43,8 @@ def load() -> None:
             os.replace(tmp, MODEL_PATH)
         m = torch.package.PackageImporter(MODEL_PATH).load_pickle("tts_models", "model")
         m.to(torch.device("cpu"))
+        # Прогрев: первая фраза после загрузки идёт в разы дольше, пусть это случится до первого ответа
+        m.apply_tts(text="Добрый день.", speaker=SPEAKER, sample_rate=RATE, put_accent=True, put_yo=True)
         model = m
         print("модель готова, голос", SPEAKER, flush=True)
     except Exception as exc:  # без модели сервис живёт и отвечает 503 — фронт уйдёт на голос браузера

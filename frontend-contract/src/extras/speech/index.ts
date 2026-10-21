@@ -68,43 +68,95 @@ function stop(reason: string): void {
   emitSpeech('cancelled');
 }
 
+/** Режем ответ на предложения: первое звучит, пока сервер готовит остальные.
+ *  Граница — знак конца, пробел и заглавная буква, чтобы «1. созвон» и «15.10» не рвались */
+export function splitSentences(text: string): string[] {
+  const parts = text.split(/(?<=[.!?…])\s+(?=[А-ЯЁA-Z«"])/).map((t) => t.trim()).filter(Boolean);
+  return parts.length ? parts : [text];
+}
+
+/** Ставит кусок звука в плеер: started — начал играть, ended — доиграл (ошибка — звук битый) */
+function playBlob(player: HTMLAudioElement, blob: Blob): { started: Promise<void>; ended: Promise<void> } {
+  if (audioUrl) URL.revokeObjectURL(audioUrl);
+  audioUrl = URL.createObjectURL(blob);
+  const ended = new Promise<void>((resolve, reject) => {
+    player.onended = () => resolve();
+    player.onerror = () => reject(new Error('битый звук'));
+  });
+  ended.catch(() => undefined);
+  player.src = audioUrl;
+  return { started: player.play(), ended };
+}
+
+/** Не доиграли с сервера — остаток договариваем голосом браузера */
+function fallbackToBrowser(rest: string): void {
+  log('ошибка проигрывания, договариваю голосом браузера');
+  releaseAudio();
+  if (isSpeaking() && rest) sayBrowser(rest);
+}
+
+/** Остальные предложения по очереди; запросы за ними ушли заранее */
+async function playRest(controller: AbortController, parts: string[], blobs: Promise<Blob>[], first: Promise<void>): Promise<void> {
+  let ended = first;
+  for (let i = 0; ; i++) {
+    try {
+      await ended;
+    } catch {
+      if (request === controller) fallbackToBrowser(parts.slice(i).join(' '));
+      return;
+    }
+    if (request !== controller) return;
+    if (i + 1 >= parts.length) {
+      log('договорил (сервер)');
+      finish();
+      return;
+    }
+    try {
+      const blob = await blobs[i + 1];
+      if (request !== controller || !audio) return;
+      const next = playBlob(audio, blob);
+      await next.started;
+      ended = next.ended;
+    } catch {
+      if (request === controller) fallbackToBrowser(parts.slice(i + 1).join(' '));
+      return;
+    }
+  }
+}
+
 /** Голос Stevens с сервера. false — сервер недоступен или звук не проигрался, тогда говорит браузер */
 async function sayServer(text: string): Promise<boolean | 'aborted'> {
   if (!audio || Date.now() < serverDownUntil) return false;
   const controller = new AbortController();
   request = controller;
   const timer = setTimeout(() => controller.abort(), SERVER_TIMEOUT_MS);
-  try {
+  const parts = splitSentences(text);
+  // Все запросы уходят сразу и по порядку: сервер готовит их один за другим, пока играет предыдущее
+  const blobs = parts.map(async (part) => {
     const res = await fetch(TTS_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text }),
+      body: JSON.stringify({ text: part }),
       signal: controller.signal,
     });
     if (!res.ok) throw new Error(`tts ${res.status}`);
-    const blob = await res.blob();
+    return res.blob();
+  });
+  blobs.forEach((b) => b.catch(() => undefined));
+  try {
+    const blob = await blobs[0];
     if (request !== controller) return 'aborted';
     clearTimeout(timer);
-    audioUrl = URL.createObjectURL(blob);
-    const player = audio;
-    player.src = audioUrl;
-    player.onended = () => {
-      log('договорил (сервер)');
-      finish();
-    };
-    player.onerror = () => {
-      // Звук пришёл битым — договариваем голосом браузера
-      log('ошибка проигрывания, говорю голосом браузера');
-      releaseAudio();
-      if (isSpeaking()) sayBrowser(text);
-    };
-    await player.play();
-    log('говорю голосом сервера', JSON.stringify(text));
+    const first = playBlob(audio, blob);
+    await first.started;
+    log('говорю голосом сервера', JSON.stringify(text), `(${parts.length} предл.)`);
+    void playRest(controller, parts, blobs, first.ended);
     return true;
   } catch (err) {
     clearTimeout(timer);
     // Оборвали сами (кнопка, ввод, микрофон) — молчим, голос браузера не нужен
     if (request !== controller) return 'aborted';
+    request?.abort();
     request = null;
     if ((err as Error).name === 'NotAllowedError') {
       log('браузер не дал проиграть звук без нажатия');
