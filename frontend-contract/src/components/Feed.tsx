@@ -3,10 +3,12 @@ import { ArrowDown, CircleAlert, Mic, RotateCw } from 'lucide-react';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { T } from '../content/texts';
 import { feedBottomInsetClass, waitingWithDots } from '../extensions/flags';
+import { useBriefingOffer } from '../state/briefing';
 import { retry, send } from '../state/chat';
 import { emitActivity } from '../state/events';
 import { lastAnswerId, store, useApp, type FeedMessage, type PendingMessage } from '../state/store';
 import { Answer } from './Answer';
+import { BriefingOffer } from './BriefingOffer';
 import { Dots } from './Dots';
 import { Pill } from './Pill';
 
@@ -76,9 +78,13 @@ function FeedItem({ message, isLast, lastError }: { message: FeedMessage; isLast
 
 function StartScreen() {
   const waiting = useApp((s) => s.waiting);
+  const offer = useBriefingOffer();
   return (
     <div className="start">
       <div className="start__subtitle">{T.start_subtitle}</div>
+      {offer ? (
+        <BriefingOffer className="start__offer" />
+      ) : (
       <div className="start__examples">
         {T.examples.map((example) => (
           <Pill key={example} disabled={waiting} onClick={() => { emitActivity('button-press'); send(example, 'button'); }}>
@@ -86,6 +92,7 @@ function StartScreen() {
           </Pill>
         ))}
       </div>
+      )}
     </div>
   );
 }
@@ -158,6 +165,7 @@ export function Feed() {
             {messages.map((m) => (
               <FeedItem key={m.id} message={m} isLast={m.id === lastAnswer} lastError={m.id === lastErrorId} />
             ))}
+            <BriefingOffer className="feed__offer" />
           </div>
         )}
       </div>
