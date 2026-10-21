@@ -9,5 +9,5 @@
     "8080": { "label": "Stevens", "onAutoForward": "openBrowser" },
     "8000": { "label": "API (Swagger: /docs)" }
   },
-  "postStartCommand": "docker compose up --build -d"
+  "postStartCommand": "bash .devcontainer/start.sh"
 }

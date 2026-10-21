@@ -51,4 +51,4 @@ docker-compose.override.yml
 *.swp
 *.swo
 .DS_Store
-Thumbs.db
+Thumbs.dbstart.log
