@@ -41,7 +41,7 @@ WHICH_LIMIT = 5
 
 @dataclass
 class Pending:
-    kind: str                      # draft | confirm | conflict | new_time | confirm_no
+    kind: str                      # draft | confirm | conflict | new_time | confirm_no | multi
     draft: dict = field(default_factory=dict)
 
 
@@ -340,6 +340,59 @@ async def save(ctx: Ctx, draft: dict) -> dict:
     return reply("created", text, speech, records=[data], buttons=undo_button(ctx, record))
 
 
+# ── Несколько дел одной фразой ────────────────────────
+
+def ready_draft(ctx: Ctx, draft: dict) -> bool:
+    """Можно записать без уточнений: всё нужное есть и не в прошлом."""
+    kind = draft["type"]
+    if not draft.get("text") or (kind == "meeting" and not draft.get("has_subject", True)):
+        return False
+    if kind in ("meeting", "reminder") and not (draft.get("date") and draft.get("time")):
+        return False
+    if kind == "task" and draft.get("time") and not draft.get("date"):
+        return False
+    today = ctx.today.isoformat()
+    if draft.get("date") and (draft["date"] < today or (draft["date"] == today and draft.get("time")
+                                                        and draft["time"] <= ctx.now.strftime("%H:%M"))):
+        return False
+    if kind == "task" and not draft.get("date"):
+        draft["date_kind"], draft["time"] = "none", None
+    elif draft.get("date_kind") == "none":
+        draft["date_kind"] = "exact"
+    return True
+
+
+async def answer_many(ctx: Ctx, parses: list[nlu.Parse]) -> dict | None:
+    """Несколько дел: показываем все карточки и спрашиваем «Записать все?». None — не вышло, разбираем как одно."""
+    drafts = [draft_from(p, ctx.today) for p in parses]
+    if not all(ready_draft(ctx, d) for d in drafts):
+        return None
+    ctx.conv.pending = Pending("multi", {"drafts": drafts})
+    text, speech = ctx.say("multi_confirm", {"count": len(drafts)})
+    return reply("confirm", text, speech, records=[draft_record(d, ["draft"]) for d in drafts], awaiting=True,
+                 buttons=[button_action("Да, записать все", "confirm_yes"),
+                          button_action("Нет", "cancel", style="secondary")])
+
+
+async def save_many(ctx: Ctx, drafts: list[dict]) -> dict:
+    ctx.conv.pending = None
+    saved = []
+    for draft in drafts:
+        record = ctx.owner.new_record(
+            type=TaskType(draft["type"]), text=draft["text"][:300], date=draft.get("date"), time=draft.get("time"),
+            date_kind=DateKind(draft["date_kind"]),
+            status=None if draft["type"] == "meeting" else TaskStatus.open,
+            created_at=datetime.now(timezone.utc),
+        )
+        ctx.db.add(record)
+        saved.append(record)
+    await ctx.db.commit()
+    for record in saved:
+        await ctx.db.refresh(record)
+    text, speech = ctx.say("multi_created", {"count": len(saved)})
+    return reply("created", text, speech, records=[r.to_contract(marks=["new"]) for r in saved])
+
+
 def undo_button(ctx: Ctx, record: Record) -> list[dict]:
     """Д10: «Отменить» под каждым created с одной сохранённой записью (15.4)."""
     return [button_action("Отменить", "undo", record.id, style="secondary")] if "d10" in ctx.features else []
@@ -612,6 +665,8 @@ async def handle_action(ctx: Ctx, action_id: str, record_id: int | None) -> dict
         ctx.conv.pending = None
         text, speech = ctx.say("cancelled")
         return reply("cancelled", text, speech)
+    if action_id == "confirm_yes" and pending and pending.kind == "multi":
+        return await save_many(ctx, pending.draft["drafts"])
     if action_id == "confirm_yes" and pending and pending.kind == "confirm":
         return await process_draft(ctx, {**pending.draft, "confirmed": True})
     if action_id == "confirm_no" and pending and pending.kind == "confirm":
@@ -704,6 +759,9 @@ async def respond(ctx: Ctx, payload: ChatRequest) -> dict:
         p.intent = "unknown"
 
     if p.intent == "create":
+        many = nlu.parse_many(raw, ctx.now)
+        if many and (answer := await answer_many(ctx, many)):
+            return answer
         return await process_draft(ctx, draft_from(p, ctx.today))
     if p.intent == "list":
         return await answer_list(ctx, p)
