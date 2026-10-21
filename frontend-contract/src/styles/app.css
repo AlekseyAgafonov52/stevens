@@ -256,15 +256,32 @@
 .icon-btn--off { background: var(--c-line); color: var(--c-surface); cursor: default; }
 .icon-btn--ghost { background: transparent; border: 1px solid var(--c-ghost); color: var(--c-text-2); }
 .icon-btn:disabled { cursor: default; }
-/* Вызов по имени «Стивенс» */
-.wake-btn { position: relative; }
-.wake-btn--on { color: var(--c-text); border-color: var(--c-text-2); }
-.wake-btn__dot {
-  position: absolute; top: 5px; right: 5px; width: 6px; height: 6px; border-radius: 50%;
-  background: var(--c-text-2); animation: wake-breathe 2.4s ease-in-out infinite;
+/* Вызов по имени «Стивенс»: точка в углу микрофона и плашка над ней */
+.mic-wrap { position: relative; display: inline-flex; flex-shrink: 0; }
+.wake { position: absolute; top: -7px; right: -7px; }
+.wake__hit {
+  width: 20px; height: 20px; padding: 0; border: 0; background: transparent; cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center;
 }
-@keyframes wake-breathe { 0%, 100% { opacity: 0.35; } 50% { opacity: 1; } }
-@media (prefers-reduced-motion: reduce) { .wake-btn__dot { animation: none; } }
+.wake__dot {
+  width: 10px; height: 10px; border-radius: 50%;
+  background: var(--c-surface); border: 1.5px solid var(--c-text-2);
+}
+.wake__dot--on { background: var(--c-accent); border-color: var(--c-surface); }
+.wake__dot--armed { animation: wake-breathe 2.4s ease-in-out infinite; }
+@keyframes wake-breathe { 0%, 100% { opacity: 0.45; } 50% { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .wake__dot--armed { animation: none; } }
+.wake__pop {
+  position: absolute; bottom: calc(100% + 6px); left: -14px; z-index: 20;
+  width: min(260px, calc(100vw - 48px));
+  display: flex; flex-direction: column; gap: var(--sp-3);
+  padding: var(--sp-5); border-radius: var(--r-card);
+  background: var(--c-surface); border: 1px solid var(--c-line); box-shadow: var(--shadow-float);
+  text-align: left;
+}
+.wake__title { font-weight: 600; color: var(--c-text); }
+.wake__text { font-size: 13px; line-height: 1.4; color: var(--c-text-2); }
+.wake__actions { display: flex; gap: var(--sp-3); }
 .icon-btn--dark:disabled { opacity: 0.4; }
 
 .composer__field { flex: 1; min-width: 0; position: relative; display: flex; }

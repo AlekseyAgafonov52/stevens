@@ -25,7 +25,6 @@ export function setWakeWord(on: boolean): void {
   }
   storage.setWakeWord(on);
   wakeStore.set({ enabled: on });
-  if (on) setHint('wake_on');
   update();
 }
 

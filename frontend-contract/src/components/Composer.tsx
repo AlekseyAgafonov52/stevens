@@ -1,8 +1,9 @@
 /** Строка ввода — 02-screens.md, 2.5–2.6. */
-import { ArrowUp, Ear, Mic, Trash2 } from 'lucide-react';
+import { ArrowUp, Mic, Trash2 } from 'lucide-react';
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { T, fill } from '../content/texts';
 import { InputBarOverlay } from '../extensions/points';
+import { Pill } from './Pill';
 import { send } from '../state/chat';
 import { emitActivity } from '../state/events';
 import { cancelRecording, recordingStore, startRecording, stopRecording } from '../state/recording';
@@ -68,17 +69,50 @@ function RecordingRow() {
   );
 }
 
-/** Вызов по имени: включить или выключить. Пока слушает фоном — у кнопки тихая точка */
-function WakeToggle() {
+/**
+ * Вызов по имени: точка в углу микрофона. Пустая — выключено, закрашенная — включено
+ * (дышит, пока слушает фоном). По нажатию — плашка с объяснением и «Да / Нет».
+ */
+function WakeDot() {
   const { enabled, armed } = useSyncExternalStore(wakeStore.subscribe, wakeStore.get);
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLSpanElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      if (!rootRef.current?.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && setOpen(false);
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
   if (!voice.isSupported()) return null;
+  const choose = (on: boolean) => {
+    emitActivity('button-press');
+    setOpen(false);
+    setWakeWord(on);
+  };
   return (
-    <button type="button" className={`icon-btn icon-btn--ghost wake-btn ${enabled ? 'wake-btn--on' : ''}`}
-      aria-pressed={enabled} aria-label={enabled ? T.btn_wake_off : T.btn_wake_on} title={enabled ? T.btn_wake_off : T.btn_wake_on}
-      onClick={() => { emitActivity('button-press'); setWakeWord(!enabled); }}>
-      <Ear size={18} strokeWidth={1.5} aria-hidden="true" />
-      {enabled && armed && <span className="wake-btn__dot" aria-hidden="true" />}
-    </button>
+    <span className="wake" ref={rootRef}>
+      <button type="button" className="wake__hit" aria-label={enabled ? T.wake_label_on : T.wake_label_off}
+        aria-expanded={open} onClick={() => setOpen((v) => !v)}>
+        <span className={`wake__dot ${enabled ? 'wake__dot--on' : ''} ${enabled && armed ? 'wake__dot--armed' : ''}`} aria-hidden="true" />
+      </button>
+      {open && (
+        <span className="wake__pop" role="dialog" aria-label={T.wake_label_off}>
+          <span className="wake__title">{enabled ? T.wake_title_on : T.wake_title_off}</span>
+          <span className="wake__text">{T.wake_text}</span>
+          <span className="wake__actions">
+            <Pill variant="primary" onClick={() => choose(true)}>{T.wake_yes}</Pill>
+            <Pill variant="secondary" onClick={() => choose(false)}>{T.wake_no}</Pill>
+          </span>
+        </span>
+      )}
+    </span>
   );
 }
 
@@ -119,11 +153,13 @@ export function Composer() {
           <RecordingRow />
         ) : (
           <>
-            <WakeToggle />
-            <button type="button" className="icon-btn icon-btn--dark" aria-label={T.btn_mic} disabled={waiting}
-              onClick={() => { emitActivity('button-press'); startRecording(); }}>
-              <Mic size={18} strokeWidth={1.5} aria-hidden="true" />
-            </button>
+            <span className="mic-wrap">
+              <button type="button" className="icon-btn icon-btn--dark" aria-label={T.btn_mic} disabled={waiting}
+                onClick={() => { emitActivity('button-press'); startRecording(); }}>
+                <Mic size={18} strokeWidth={1.5} aria-hidden="true" />
+              </button>
+              <WakeDot />
+            </span>
             <div className="composer__field">
               <textarea
                 ref={ref}
