@@ -17,9 +17,10 @@ export function feedBottomInsetClass(): string {
   return features.d14_mascot ? 'feed--with-mascot' : '';
 }
 
-/** Допы без своего места на экране: Д12 озвучка, Д13 автослушание, CSS персонажа */
+/** Допы без своего места на экране: Д12 озвучка, Д13 автослушание, CSS персонажа; Д15 — подписка на ответы */
 export function initExtras(): void {
   if (features.d12_speech) void import('../extras/speech').then((m) => m.init());
   if (features.d13_autolisten) void import('../extras/autolisten').then((m) => m.init());
   if (features.d14_mascot) void import('../styles/mascot.css');
+  if (features.d15_tour) void import('../extras/tour/state').then((m) => m.init());
 }
