@@ -128,14 +128,37 @@ function transcriptOf(event: RecognitionEvent): string {
   return text;
 }
 
-/** Фоновая запись до имени. Браузер сам обрывает её раз в минуту или на тишине — запускаем заново */
-function arm(): void {
+/**
+ * Safari может не дать запустить распознавание вне нажатия. Тогда не выключаем вызов по имени,
+ * а ждём любого следующего касания страницы и запускаем фоновую запись прямо в нём.
+ */
+let waitingGesture = false;
+function armOnNextGesture(): void {
+  if (waitingGesture || typeof document === 'undefined') return;
+  waitingGesture = true;
+  const go = () => {
+    document.removeEventListener('pointerdown', go, true);
+    document.removeEventListener('keydown', go, true);
+    waitingGesture = false;
+    arm(true);
+  };
+  document.addEventListener('pointerdown', go, true);
+  document.addEventListener('keydown', go, true);
+}
+
+/**
+ * Фоновая запись до имени. Браузер сам обрывает её раз в минуту или на тишине — запускаем заново.
+ * inGesture — запуск прямо в нажатии: если и тогда отказ, значит, распознавание действительно запрещено.
+ */
+function arm(inGesture = false): void {
   const Ctor = ctor();
   if (!Ctor || !wantArmed || recognition || armedRec) return;
   const rec = new Ctor();
   rec.lang = 'ru-RU';
   rec.interimResults = true;
-  rec.continuous = true;
+  // Safari в непрерывном режиме может не отдавать результаты: там одна фраза за запуск,
+  // поэтому имя и просьбу говорим на одном дыхании: «Стивенс, завтра в 10 созвон»
+  rec.continuous = !isSafari();
   let woke = false;
   let resolveEnded: () => void = () => undefined;
   armedEnded = new Promise((resolve) => { resolveEnded = resolve; });
@@ -163,7 +186,8 @@ function arm(): void {
       emit('state', 'recording');
       maxTimer = setTimeout(finish, MAX_MS);
       silenceTimer = setTimeout(finish, WAKE_WAIT_MS);
-      void navigator.mediaDevices?.getUserMedia({ audio: true }).then((media) => {
+      // Столбики — вторым захватом микрофона; Safari от этого сбивает распознавание
+      if (!isSafari()) void navigator.mediaDevices?.getUserMedia({ audio: true }).then((media) => {
         if (recognition !== rec) { media.getTracks().forEach((t) => t.stop()); return; }
         stream = media;
         startLevel(media);
@@ -185,8 +209,12 @@ function arm(): void {
   };
   rec.onerror = (event) => {
     if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
-      wantArmed = false;
-      emit('wakeDenied');
+      if (inGesture || !isSafari()) {
+        wantArmed = false;
+        emit('wakeDenied');
+      } else {
+        refusedOutsideGesture = true;
+      }
     }
     if (woke && event.error !== 'no-speech' && event.error !== 'aborted') cancelled = true;
   };
@@ -204,14 +232,18 @@ function arm(): void {
       if (!cancelled && finalText.trim()) emit('final', finalText.trim());
     }
     clearTimeout(rearmTimer);
-    if (wantArmed) rearmTimer = setTimeout(arm, 400);
+    if (!wantArmed) return;
+    if (refusedOutsideGesture) armOnNextGesture();
+    else rearmTimer = setTimeout(arm, 400);
   };
+  let refusedOutsideGesture = false;
   try {
     rec.start();
     armedRec = rec;
     emit('armed', true);
   } catch {
     armedEnded = null;
+    if (!inGesture && isSafari()) armOnNextGesture();
   }
 }
 
@@ -328,11 +360,13 @@ export const voice = {
   },
 
   /** Слушать имя фоном (true) или нет. Пока идёт обычная запись, фоновая не мешает: включится после */
-  setArmed(on: boolean): void {
+  setArmed(on: boolean, inGesture = false): void {
     wantArmed = on;
     clearTimeout(rearmTimer);
-    // С задержкой: сразу после записи уходит запрос, и включать фоновую запись на миг незачем
-    if (on) rearmTimer = setTimeout(arm, 400);
+    // Прямо в нажатии «Да» — сразу: Safari разрешает распознавание только так.
+    // Иначе с задержкой: сразу после записи уходит запрос, и включать фоновую запись на миг незачем
+    if (on && inGesture) arm(true);
+    else if (on) rearmTimer = setTimeout(arm, 400);
     else void disarmAndWait();
   },
 
