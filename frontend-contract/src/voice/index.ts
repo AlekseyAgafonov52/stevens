@@ -54,7 +54,11 @@ const ERRORS: Record<string, VoiceError> = {
   'audio-capture': 'no-mic',
   // Safari: распознавание недоступно (выключена Диктовка или Siri, нет разрешения на распознавание речи)
   'service-not-allowed': 'service',
+  'language-not-supported': 'service',
 };
+
+/** Строки в консоли браузера (F12) — по ним видно, почему не слышит */
+const log = (...args: unknown[]) => console.info('[Stevens · микрофон]', ...args);
 
 const isSafari = () => typeof navigator !== 'undefined' && /^((?!chrome|chromium|android|crios|fxios|edg).)*safari/i.test(navigator.userAgent);
 
@@ -244,9 +248,11 @@ export const voice = {
     recognition = rec;
     rec.lang = 'ru-RU';
     rec.interimResults = true;
-    // Слушаем сами до паузы SILENCE_MS: браузер в обычном режиме обрывает запись уже через ~1 с тишины
-    rec.continuous = true;
+    // Слушаем сами до паузы SILENCE_MS: браузер в обычном режиме обрывает запись уже через ~1 с тишины.
+    // В Safari непрерывный режим ненадёжен (результаты могут не приходить до конца) — там браузер решает сам
+    rec.continuous = !isSafari();
     rec.onstart = () => {
+      log('слушаю');
       permissionGranted = true;
       // Столбики громкости — вторым захватом микрофона. Safari от этого сбивает распознавание, там без столбиков
       if (isSafari()) return;
@@ -276,6 +282,7 @@ export const voice = {
       if (shown) silenceTimer = setTimeout(() => rec.stop(), SILENCE_MS);
     };
     rec.onerror = (event) => {
+      log('ошибка', event.error);
       if (cancelled) return;
       if (event.error === 'no-speech') return; // сообщим в onend
       if (event.error === 'aborted') return;
@@ -283,6 +290,7 @@ export const voice = {
       emit('error', ERRORS[event.error] ?? 'failed');
     };
     rec.onend = () => {
+      log('закончил, текст:', JSON.stringify((finalText + ' ' + interimText).trim()));
       recognition = null;
       cleanupAudio();
       emit('state', 'idle');
@@ -298,7 +306,8 @@ export const voice = {
       // Синхронно, в том же нажатии: разрешение на микрофон браузер спросит сам
       rec.start();
       emit('state', 'recording');
-    } catch {
+    } catch (error) {
+      log('не запустился', error);
       recognition = null;
       cleanupAudio();
       emit('state', 'idle');

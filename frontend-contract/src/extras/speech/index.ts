@@ -3,6 +3,8 @@ import { setHint } from '../../state/chat';
 import { emitSpeech, isSpeaking, onAssistantResponse, onUiActivity } from '../../state/events';
 
 let voice: SpeechSynthesisVoice | null = null;
+/** Голоса, которые отказали (synthesis-failed бывает у Microsoft Irina в Chrome) — больше их не берём */
+const broken = new Set<string>();
 /** Держим ссылку: Chrome иначе может собрать фразу сборщиком мусора, и onend не придёт */
 let current: SpeechSynthesisUtterance | null = null;
 let endTimer: ReturnType<typeof setTimeout> | undefined;
@@ -13,7 +15,8 @@ let warnedNoVoice = false;
 const log = (...args: unknown[]) => console.info('[Stevens · озвучка]', ...args);
 
 function pickVoice(): void {
-  const voices = window.speechSynthesis.getVoices().filter((v) => v.lang.toLowerCase().startsWith('ru'));
+  const voices = window.speechSynthesis.getVoices()
+    .filter((v) => v.lang.toLowerCase().startsWith('ru') && !broken.has(v.name));
   voice = voices.find((v) => v.localService) ?? voices[0] ?? null;
 }
 
@@ -48,6 +51,17 @@ function say(text: string, chosen: SpeechSynthesisVoice): void {
     if (current !== utterance) return;
     // Без единого нажатия на странице (например, вызвали по имени сразу после загрузки) Chrome молчит
     if (event.error === 'not-allowed') setHint('speech_blocked');
+    // Голос сломан — та же фраза следующим русским голосом
+    if (event.error === 'synthesis-failed' || event.error === 'voice-unavailable' || event.error === 'synthesis-unavailable') {
+      broken.add(chosen.name);
+      pickVoice();
+      if (voice) {
+        clearTimeout(endTimer);
+        say(text, voice);
+        return;
+      }
+      setHint('speech_no_voice');
+    }
     finish();
   };
   current = utterance;
