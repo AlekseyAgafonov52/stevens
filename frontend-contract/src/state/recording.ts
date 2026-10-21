@@ -20,6 +20,7 @@ const ERROR_HINT: Record<VoiceError, keyof typeof T> = {
   'no-mic': 'voice_no_mic',
   'no-speech': 'voice_no_speech',
   failed: 'voice_error',
+  service: 'voice_service',
 };
 
 export function startRecording(options: { auto?: boolean } = {}): void {

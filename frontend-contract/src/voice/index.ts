@@ -7,7 +7,7 @@
  * становится обычной (событие wake, затем state recording), и всё сказанное после имени
  * уходит в final. Так нет паузы между именем и фразой: «Стивенс, завтра в 10 созвон».
  */
-export type VoiceError = 'denied' | 'no-mic' | 'no-speech' | 'failed';
+export type VoiceError = 'denied' | 'no-mic' | 'no-speech' | 'failed' | 'service';
 export type VoiceState = 'idle' | 'asking' | 'recording';
 
 type Events = {
@@ -48,6 +48,15 @@ const STOP_WORD = /(?:^|\s)стоп[.!]?$/i;
 const WAKE_WORD = /(?:^|[\s,.!?])(стив[еи]н\S*|stevens?\S*|steven\S*)[\s,.!?—-]*/i;
 /** Сказали только имя и молчат — ждём фразу столько, потом снова слушаем фоном */
 const WAKE_WAIT_MS = 6000;
+
+const ERRORS: Record<string, VoiceError> = {
+  'not-allowed': 'denied',
+  'audio-capture': 'no-mic',
+  // Safari: распознавание недоступно (выключена Диктовка или Siri, нет разрешения на распознавание речи)
+  'service-not-allowed': 'service',
+};
+
+const isSafari = () => typeof navigator !== 'undefined' && /^((?!chrome|chromium|android|crios|fxios|edg).)*safari/i.test(navigator.userAgent);
 
 function ctor(): RecognitionCtor | null {
   const w = window as unknown as { SpeechRecognition?: RecognitionCtor; webkitSpeechRecognition?: RecognitionCtor };
@@ -225,33 +234,28 @@ export const voice = {
   async start(): Promise<void> {
     const Ctor = ctor();
     if (!Ctor || recognition) return;
-    await disarmAndWait();
+    // Только если фоном слушали имя: иначе ждать нечего, а Safari запускает распознавание лишь прямо в нажатии
+    if (armedRec) await disarmAndWait();
     if (recognition) return;
     cancelled = false;
     finalText = '';
     interimText = '';
-    let asking = true;
-    const askTimer = setTimeout(() => asking && emit('state', 'asking'), 300);
-    try {
-      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    } catch (error) {
-      asking = false;
-      clearTimeout(askTimer);
-      const name = (error as { name?: string }).name;
-      emit('state', 'idle');
-      emit('error', name === 'NotFoundError' || name === 'OverconstrainedError' ? 'no-mic' : 'denied');
-      return;
-    }
-    asking = false;
-    clearTimeout(askTimer);
-    permissionGranted = true;
-    startLevel(stream);
     const rec = new Ctor();
     recognition = rec;
     rec.lang = 'ru-RU';
     rec.interimResults = true;
     // Слушаем сами до паузы SILENCE_MS: браузер в обычном режиме обрывает запись уже через ~1 с тишины
     rec.continuous = true;
+    rec.onstart = () => {
+      permissionGranted = true;
+      // Столбики громкости — вторым захватом микрофона. Safari от этого сбивает распознавание, там без столбиков
+      if (isSafari()) return;
+      void navigator.mediaDevices.getUserMedia({ audio: true }).then((media) => {
+        if (recognition !== rec) { media.getTracks().forEach((t) => t.stop()); return; }
+        stream = media;
+        startLevel(media);
+      }).catch(() => undefined);
+    };
     rec.onresult = (event) => {
       let interim = '';
       for (let i = event.resultIndex; i < event.results.length; i += 1) {
@@ -276,7 +280,7 @@ export const voice = {
       if (event.error === 'no-speech') return; // сообщим в onend
       if (event.error === 'aborted') return;
       cancelled = true;
-      emit('error', event.error === 'not-allowed' ? 'denied' : event.error === 'audio-capture' ? 'no-mic' : 'failed');
+      emit('error', ERRORS[event.error] ?? 'failed');
     };
     rec.onend = () => {
       recognition = null;
@@ -291,6 +295,7 @@ export const voice = {
     };
     maxTimer = setTimeout(() => rec.stop(), MAX_MS);
     try {
+      // Синхронно, в том же нажатии: разрешение на микрофон браузер спросит сам
       rec.start();
       emit('state', 'recording');
     } catch {

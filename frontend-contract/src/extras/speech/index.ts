@@ -9,6 +9,9 @@ let endTimer: ReturnType<typeof setTimeout> | undefined;
 let startTimer: ReturnType<typeof setTimeout> | undefined;
 let warnedNoVoice = false;
 
+/** Строки в консоли браузера (F12) — по ним видно, где озвучка останавливается */
+const log = (...args: unknown[]) => console.info('[Stevens · озвучка]', ...args);
+
 function pickVoice(): void {
   const voices = window.speechSynthesis.getVoices().filter((v) => v.lang.toLowerCase().startsWith('ru'));
   voice = voices.find((v) => v.localService) ?? voices[0] ?? null;
@@ -20,9 +23,10 @@ function finish(): void {
   if (isSpeaking()) emitSpeech('end');
 }
 
-function stop(): void {
+function stop(reason: string): void {
   clearTimeout(startTimer);
   if (!isSpeaking()) return;
+  log('оборвал:', reason);
   clearTimeout(endTimer);
   current = null;
   window.speechSynthesis.cancel();
@@ -34,8 +38,13 @@ function say(text: string, chosen: SpeechSynthesisVoice): void {
   const utterance = new SpeechSynthesisUtterance(text);
   utterance.voice = chosen;
   utterance.lang = chosen.lang;
-  utterance.onend = () => current === utterance && finish();
+  utterance.onstart = () => log('говорю', chosen.name);
+  utterance.onend = () => {
+    log('договорил');
+    if (current === utterance) finish();
+  };
   utterance.onerror = (event) => {
+    log('ошибка', event.error);
     if (current !== utterance) return;
     // Без единого нажатия на странице (например, вызвали по имени сразу после загрузки) Chrome молчит
     if (event.error === 'not-allowed') setHint('speech_blocked');
@@ -48,6 +57,7 @@ function say(text: string, chosen: SpeechSynthesisVoice): void {
   // Chrome: speak сразу после cancel иногда теряет фразу — даём очереди очиститься
   const busy = synth.speaking || synth.pending;
   synth.cancel();
+  log('фраза', JSON.stringify(text), 'голос', chosen.name);
   startTimer = setTimeout(() => {
     synth.resume();
     synth.speak(utterance);
@@ -59,6 +69,18 @@ export function init(): void {
   pickVoice();
   window.speechSynthesis.addEventListener('voiceschanged', pickVoice);
 
+  // Safari (и иногда Chrome) разрешает говорить вслух, только если первая фраза прозвучала прямо в нажатии.
+  // Поэтому при первом нажатии на странице произносим беззвучный пробел — дальше ответы можно озвучивать когда угодно
+  const unlock = () => {
+    document.removeEventListener('pointerdown', unlock, true);
+    document.removeEventListener('keydown', unlock, true);
+    const silent = new SpeechSynthesisUtterance(' ');
+    silent.volume = 0;
+    window.speechSynthesis.speak(silent);
+  };
+  document.addEventListener('pointerdown', unlock, true);
+  document.addEventListener('keydown', unlock, true);
+
   onAssistantResponse((response, request) => {
     if (request.source !== 'voice') return;
     const text = response.speech ?? response.text;
@@ -66,6 +88,7 @@ export function init(): void {
     // Голоса в Chrome подгружаются не сразу — переспрашиваем перед каждой фразой
     if (!voice) pickVoice();
     if (!voice) {
+      log('нет русского голоса');
       if (!warnedNoVoice) setHint('speech_no_voice');
       warnedNoVoice = true;
       return;
@@ -77,6 +100,6 @@ export function init(): void {
 
   // Обрывает любое действие: кнопка, ввод, микрофон, «Новый диалог», сворачивание вкладки
   onUiActivity((kind) => {
-    if (['typing', 'button-press', 'recording-start', 'new-dialog', 'tab-hidden'].includes(kind)) stop();
+    if (['typing', 'button-press', 'recording-start', 'new-dialog', 'tab-hidden'].includes(kind)) stop(kind);
   });
 }
