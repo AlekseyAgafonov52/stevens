@@ -76,9 +76,11 @@ def apply_patch(record: Record, body: dict) -> str | None:
         return "invalid_time"
     status = body.get("status")
     if "status" in body:
-        if status not in ("open", "done") or record.type == TaskType.meeting:
+        if status not in ("open", "done") or record.type in (TaskType.meeting, TaskType.note):
             return "invalid_status"
 
+    if record.type == TaskType.note and (new_date is not None or new_time is not None):
+        return "invalid_date"  # у заметки нет даты и времени
     kind = record.date_kind
     if record.type in (TaskType.meeting, TaskType.reminder):
         # У встречи и напоминания дата и время обязательны

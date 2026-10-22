@@ -63,6 +63,11 @@ export type MetaPart = { field: 'date' | 'time' | null; text: string };
 /** Части меты после слова типа: [дата] · [время] — 02-screens.md, 3.1 */
 export function metaParts(record: RecordItem, withDate: boolean, today: Date = now()): MetaPart[] {
   const parts: MetaPart[] = [];
+  if (record.type === 'note') {
+    // У заметки нет срока — в мете день, когда её записали
+    if (record.created_at) parts.push({ field: 'date', text: metaDate(isoDate(new Date(record.created_at)), today) });
+    return parts;
+  }
   if (record.date_kind === 'none' || !record.date) {
     parts.push({ field: 'date', text: T.date_none });
   } else if (record.date_kind === 'deadline') {
