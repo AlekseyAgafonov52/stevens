@@ -189,6 +189,13 @@ export const T = {
   records_count: { one: '{count} запись', few: '{count} записи', many: '{count} записей' },
   calendar_day_label: '{weekday}, {day} {month}, {count}',
   calendar_day_label_empty: '{weekday}, {day} {month}',
+  /** Перенос перетаскиванием */
+  calendar_drag_hint: 'Отпустите на нужном дне. Под календарём ведите вверх или вниз — другое время.',
+  calendar_drag_cancel: 'Отпустите здесь, чтобы не переносить',
+  calendar_moved: 'Перенесено: {when}',
+  calendar_move_undo: 'Вернуть как было',
+  calendar_move_clash: 'В {time} уже «{text}». Всё равно перенести?',
+  calendar_move_confirm: 'Перенести',
 } as const;
 
 /** Д15 Обучение в песочнице: шаги. say — фраза-подсказка (нажать или сказать), press — кнопка под ответом */
