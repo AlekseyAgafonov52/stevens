@@ -25,7 +25,7 @@ const EXPECT: Kind[][] = [
 ];
 const STEP_DONE_MS = 1400;
 
-export const tourStore = createStore({ status: 'off' as TourStatus, step: 0, sub: 0, stepDone: false });
+export const tourStore = createStore({ status: 'off' as TourStatus, step: 0, sub: 0, stepDone: false, again: false });
 
 let doneTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -61,6 +61,8 @@ export async function startTour(): Promise<void> {
 
 export function declineTour(): void {
   storage.setTourSeen();
+  dismissedFor = store.get().conversationId;
+  entry = null;
   tourStore.set({ status: 'off' });
 }
 
@@ -98,13 +100,30 @@ export function lastButton(label: string) {
   return null;
 }
 
+/** «Не сейчас» прячет предложение до следующего входа или нового диалога */
+let dismissedFor: string | null = null;
+/** Сколько сообщений человека было в диалоге при входе: плашка уходит с первым новым */
+let entry: { conversationId: string; users: number } | null = null;
+
+/**
+ * Предложение над строкой ввода: в песочнице после входа или нового диалога, пока человек ничего не отправил.
+ * Первый раз — «Показать, что я умею?», потом (новый диалог, сброс, повторный вход) — «Пройти обучение?»
+ */
 function maybeOffer(): void {
   const s = store.get();
-  if (tourStore.get().status === 'off' && s.screen === 'app' && s.mode === 'sandbox' && !storage.tourSeen()) {
-    tourStore.set({ status: 'offer' });
+  const status = tourStore.get().status;
+  if (s.mode !== 'sandbox') {
+    // Вышли из песочницы — обучение прячем
+    if (status !== 'off') closeTour();
+    return;
   }
-  // Вышли из песочницы — обучение прячем
-  if (s.mode !== 'sandbox' && tourStore.get().status !== 'off') closeTour();
+  const users = s.messages.filter((m) => m.kind === 'user').length;
+  // Вход в приложение (и перезагрузка) или новый диалог — отсчёт сообщений заново
+  if (s.screen !== 'app') entry = null;
+  else if (!entry || entry.conversationId !== s.conversationId) entry = { conversationId: s.conversationId, users };
+  const fresh = !!entry && users <= entry.users && s.conversationId !== dismissedFor;
+  if (status === 'off' && fresh) tourStore.set({ status: 'offer', again: storage.tourSeen() });
+  else if (status === 'offer' && !fresh) tourStore.set({ status: 'off' });
 }
 
 export function init(): void {
