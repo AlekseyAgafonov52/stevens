@@ -52,22 +52,14 @@ function useNight(): boolean {
  * Приоритет: слушает → думает → пишет → конфликт → поклон/кивок → не понял/готово → покой.
  * «Конфликт» держится, пока не ушёл следующий запрос; поклон — после входа, «Нового диалога» и по клику.
  */
-function useMood(): { mood: Mood; gesture: GestureRun | null; onClick: () => void } {
-  const recording = useApp((s) => s.recording);
-  const waiting = useApp((s) => s.waiting);
-  const hasText = useApp((s) => s.input.trim().length > 0);
-  const [flash, setFlash] = useState<'puzzled' | 'done' | null>(null);
-  const [typing, setTyping] = useState(false);
-  const [conflict, setConflict] = useState(false);
+/** Поклоны и покачивание: запуск жеста и счёт кликов — общие для персонажа в чате и на экране входа */
+function useGestures(onPlay?: () => void) {
   const [gesture, setGesture] = useState<GestureRun | null>(null);
-  const flashTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  const typingTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const clicks = useRef({ at: 0, count: 0 });
 
   const play = (kind: Gesture, greet = false) => {
     if (reducedMotion()) return;
-    clearTimeout(flashTimer.current);
-    setFlash(null);
+    onPlay?.();
     const plan = greet ? GREET : BOW;
     const run =
       kind === 'shake'
@@ -77,6 +69,42 @@ function useMood(): { mood: Mood; gesture: GestureRun | null; onClick: () => voi
   };
   const playRef = useRef(play);
   playRef.current = play;
+
+  // Поклон гаснет сам; таймер в эффекте, а не в play — переживает повторный запуск эффектов
+  useEffect(() => {
+    if (!gesture) return;
+    const timer = setTimeout(() => setGesture(null), gesture.duration);
+    return () => clearTimeout(timer);
+  }, [gesture]);
+
+  // Клик: первые три — поклон, дальше мягко качает головой; после 10 с без кликов счёт сначала
+  const onClick = () => {
+    const now = Date.now();
+    const since = now - clicks.current.at;
+    if (since < CLICK_COOLDOWN_MS) return;
+    const s = store.get();
+    if (s.recording || s.waiting) return;
+    const count = since > CLICK_RESET_MS ? 1 : clicks.current.count + 1;
+    clicks.current = { at: now, count };
+    play(count > BOWS_BEFORE_SHAKE ? 'shake' : 'bow');
+  };
+
+  return { gesture, setGesture, playRef, onClick };
+}
+
+function useMood(): { mood: Mood; gesture: GestureRun | null; onClick: () => void } {
+  const recording = useApp((s) => s.recording);
+  const waiting = useApp((s) => s.waiting);
+  const hasText = useApp((s) => s.input.trim().length > 0);
+  const [flash, setFlash] = useState<'puzzled' | 'done' | null>(null);
+  const [typing, setTyping] = useState(false);
+  const [conflict, setConflict] = useState(false);
+  const flashTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const typingTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const { gesture, setGesture, playRef, onClick } = useGestures(() => {
+    clearTimeout(flashTimer.current);
+    setFlash(null);
+  });
 
   useEffect(() => {
     // Приветствие: при каждом открытии чата (вход, перезагрузка) и при «Новом диалоге»
@@ -115,26 +143,8 @@ function useMood(): { mood: Mood; gesture: GestureRun | null; onClick: () => voi
       clearTimeout(flashTimer.current);
       clearTimeout(typingTimer.current);
     };
-  }, []);
-
-  // Поклон гаснет сам; таймер в эффекте, а не в play — переживает повторный запуск эффектов
-  useEffect(() => {
-    if (!gesture) return;
-    const timer = setTimeout(() => setGesture(null), gesture.duration);
-    return () => clearTimeout(timer);
-  }, [gesture]);
-
-  // Клик: первые три — поклон, дальше мягко качает головой; после 10 с без кликов счёт сначала
-  const onClick = () => {
-    const now = Date.now();
-    const since = now - clicks.current.at;
-    if (since < CLICK_COOLDOWN_MS) return;
-    const s = store.get();
-    if (s.recording || s.waiting) return;
-    const count = since > CLICK_RESET_MS ? 1 : clicks.current.count + 1;
-    clicks.current = { at: now, count };
-    play(count > BOWS_BEFORE_SHAKE ? 'shake' : 'bow');
-  };
+    // playRef и setGesture не меняются между отрисовками — эффект по-прежнему один раз
+  }, [playRef, setGesture]);
 
   let mood: Mood = 'rest';
   if (recording) mood = 'listen';
@@ -271,9 +281,14 @@ export function MascotPerch() {
   );
 }
 
-const TITLE_SVG = rest.replace('viewBox="0 0 120 140"', 'viewBox="34 12 52 117.4"');
+const TITLE_BOX = (svg: string) => svg.replace('viewBox="0 0 120 140"', 'viewBox="34 12 52 117.4"');
+const TITLE_SVG = TITLE_BOX(rest);
 
-/** На экране входа справа от «Stevens», не анимируется */
+/** На экране входа справа от «Stevens»: при каждом открытии глубоко кланяется, по клику — как в чате */
 export function MascotTitle() {
-  return <span className="stevens-title" aria-hidden="true" dangerouslySetInnerHTML={{ __html: TITLE_SVG }} />;
+  const { gesture, playRef, onClick } = useGestures();
+  const k = useGesture(gesture);
+  useEffect(() => playRef.current('bow', true), [playRef]);
+  const svg = gesture && k !== null ? TITLE_BOX(gestureSvg(gesture.kind, k, false)) : TITLE_SVG;
+  return <span className="stevens-title" aria-hidden="true" onClick={onClick} dangerouslySetInnerHTML={{ __html: svg }} />;
 }

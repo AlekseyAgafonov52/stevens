@@ -17,6 +17,19 @@
   align-items: center;
 }
 .header__left { display: flex; align-items: center; }
+
+/* Установленное приложение (PWA) на компьютере: шапка Stevens встаёт на место полосы заголовка окна.
+   Слева и справа отступаем на зону кнопок окна (свернуть, закрыть, значки браузера), за шапку окно можно тянуть */
+@media (display-mode: window-controls-overlay) {
+  .header {
+    height: max(var(--header-h), env(titlebar-area-height, 0px));
+    padding-left: calc(env(titlebar-area-x, 0px) + var(--gutter));
+    padding-right: calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw) + var(--gutter));
+    app-region: drag;
+    -webkit-app-region: drag;
+  }
+  .header button, .header a, .header [role='menu'] { app-region: no-drag; -webkit-app-region: no-drag; }
+}
 .header__name { font: 500 var(--fs-name) / 1 var(--font-serif); color: var(--c-text); user-select: none; }
 .header__right { display: flex; align-items: center; justify-content: flex-end; gap: var(--sp-3); }
 

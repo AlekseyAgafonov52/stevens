@@ -29,7 +29,7 @@
 /* ── Рядом с «Stevens» на экране входа ─────────────────── */
 /* Ряд «слово + персонаж»: display:flex; align-items:baseline; gap:8px.
    SVG здесь — обрезанный по фигуре: viewBox="34 12 52 117.4" */
-.stevens-title { width: 29.2px; height: 66px; flex-shrink: 0; }
+.stevens-title { width: 29.2px; height: 66px; flex-shrink: 0; -webkit-tap-highlight-color: transparent; }
 @media (max-width: 760px) { .stevens-title { width: 25.7px; height: 58px; } }
 
 /* ── Смена состояний: два слоя, мягкая смена ───────────── */
