@@ -22,7 +22,7 @@ from app.owner import Owner, get_owner
 from app.schemas import ChatRequest
 from app.templates import render
 from app.textfmt import (
-    MONTHS_GEN, TYPE_FORMS, TYPE_GEN_PLURAL, TYPE_WORD, client_now, date_speech, date_text, parse_date, plural,
+    MONTHS_GEN, TYPE_FORMS, TYPE_GEN_PLURAL, TYPE_WORD, capitalize, client_now, date_speech, date_text, parse_date, plural,
     when_text,
 )
 
@@ -843,21 +843,89 @@ async def answer_move(ctx: Ctx, p: nlu.Parse) -> dict:
     return answer
 
 
+async def day_windows(ctx: Ctx, day: date, need: int, skip: int | None = None) -> list[tuple[int, int]]:
+    """Свободные окна дня длиной need; skip — запись, которую переносим (её место свободно)."""
+    if day < ctx.today:
+        return []
+    start = DAY_START
+    if day == ctx.today:
+        start = max(DAY_START, (ctx.now.hour * 60 + ctx.now.minute) // STEP * STEP + STEP)
+    rows = await owner_records(ctx, Record.date == day.isoformat(), Record.time.is_not(None))
+    busy = [(minutes(r.time), minutes(r.time) + LENGTH.get(r.type.value, 30))
+            for r in rows if r.status != TaskStatus.done and r.id != skip]
+    return free_windows(busy, start, need)
+
+
+MOVE_DAYS = 3   # кнопок с ближайшими свободными днями
+MOVE_TIMES = 8  # кнопок со временем
+
+
+def needs_time(record: Record) -> bool:
+    """Задаче без времени хватает дня; встрече, напоминанию и делу со временем нужно время."""
+    return record.type != TaskType.task or bool(record.time)
+
+
+async def ask_move_day(ctx: Ctx, record: Record, time: str | None = None) -> dict:
+    """«На какой день перенести?» — ближайшие дни со свободным окном и тот же день через неделю."""
+    ctx.conv.pending = Pending("move_when", {"record_id": record.id, "time": time})
+    need = LENGTH.get(record.type.value, 30)
+    days: list[date] = []
+    for shift in range(14):
+        day = ctx.today + timedelta(days=shift)
+        if len(days) == MOVE_DAYS:
+            break
+        if day.isoformat() == record.date and not time:
+            continue
+        windows = await day_windows(ctx, day, need, skip=record.id)
+        if time:
+            t = minutes(time)
+            fits = any(b <= t and t + need <= e for b, e in windows)
+        else:
+            fits = bool(windows)
+        if fits:
+            days.append(day)
+    # Тот же день недели на следующей неделе: от дня записи, а если она в прошлом — от сегодня
+    base = max(parse_date(record.date) or ctx.today, ctx.today)
+    next_week = base + timedelta(days=7)
+    if next_week not in days:
+        days.append(next_week)
+    buttons = [button_text(capitalize(date_text(d, ctx.today)), f"{d.day} {MONTHS_GEN[d.month - 1]} {d.year}")
+               for d in days]
+    text, speech = ctx.say("move_ask_day", {"text": record.text})
+    return reply("clarify", text, speech, records=[record.to_contract()], awaiting=True, buttons=buttons + [CANCEL])
+
+
+async def ask_move_time(ctx: Ctx, record: Record, day: date) -> dict:
+    """«Во сколько?» — свободные окна выбранного дня кнопками."""
+    ctx.conv.pending = Pending("move_when", {"record_id": record.id, "date": day.isoformat()})
+    need = LENGTH.get(record.type.value, 30)
+    windows = await day_windows(ctx, day, need, skip=record.id)
+    values = {"day": date_text(day, ctx.today), "text": record.text}
+    if not windows:
+        text, speech = ctx.say("move_ask_time_full", values, {"day": date_speech(day, ctx.today)})
+        return reply("clarify", text, speech, records=[record.to_contract()], awaiting=True, buttons=[CANCEL])
+    spans = [f"{hhmm(b)}–{hhmm(e)}" for b, e in windows]
+    values["slots"] = spans[0] if len(spans) == 1 else ", ".join(spans[:-1]) + " и " + spans[-1]
+    times = [hhmm(t) for t in window_starts(windows, need)][:MOVE_TIMES]
+    text, speech = ctx.say("move_ask_time", values, {"day": date_speech(day, ctx.today)})
+    buttons = [button_text(t, f"в {t}") for t in times]
+    return reply("clarify", text, speech, records=[record.to_contract()], awaiting=True, buttons=buttons + [CANCEL])
+
+
 async def move_one(ctx: Ctx, record: Record, changes: dict) -> dict:
+    """Переносим, только когда сказаны и день, и время (или сдвиг «на час позже»); иначе спрашиваем."""
     ctx.conv.focus = record.id
-    new_date, new_time = changes.get("date") or record.date, changes.get("time") or record.time
+    new_date, new_time = changes.get("date"), changes.get("time")
     if changes.get("shift") and record.time:
+        new_date = new_date or record.date
         start = max(0, min(minutes(record.time) + changes["shift"], 23 * 60 + 59))
         new_time = hhmm(start)
-    if not (changes.get("date") or changes.get("time") or changes.get("shift")):
-        ctx.conv.pending = Pending("move_when", {"record_id": record.id})
-        text, speech = ctx.say("conflict_move_existing", {"text": record.text})
-        return reply("clarify", text, speech, records=[record.to_contract()], awaiting=True, buttons=[CANCEL])
-    if new_time and not new_date:
-        ctx.conv.pending = Pending("move_when", {"record_id": record.id, "time": new_time})
-        text, speech = ctx.say("clarify_day")
-        return reply("clarify", text, speech, awaiting=True,
-                     buttons=[button_text("Сегодня", "сегодня"), button_text("Завтра", "завтра"), CANCEL])
+    if not new_date:
+        return await ask_move_day(ctx, record, new_time)
+    if not new_time and needs_time(record):
+        day = parse_date(new_date)
+        if day and day >= ctx.today:
+            return await ask_move_time(ctx, record, day)
     today = ctx.today.isoformat()
     if new_date < today or (new_date == today and new_time and new_time <= ctx.now.strftime("%H:%M")):
         ctx.conv.pending = Pending("move_when", {"record_id": record.id})
@@ -891,6 +959,7 @@ async def answer_move_when(ctx: Ctx, pending: Pending, raw: str) -> dict | None:
         return None
     changes = move_changes(p)
     changes["time"] = changes["time"] or pending.draft.get("time")
+    changes["date"] = changes["date"] or pending.draft.get("date")
     return await move_one(ctx, record, changes)
 
 
