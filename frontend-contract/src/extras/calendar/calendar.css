@@ -108,3 +108,45 @@
 .cal__check--done svg circle { fill: var(--c-accent); }
 .cal__check--done svg path { stroke: var(--c-surface); }
 .cal__check-space { width: 20px; flex-shrink: 0; }
+
+/* Перенос перетаскиванием */
+.cal__item { -webkit-touch-callout: none; user-select: none; -webkit-user-select: none; }
+.cal__item--dragging { opacity: 0.4; }
+.cal__day--drop .cal__num { background: var(--c-accent); border-color: var(--c-accent); color: var(--c-on-dark); }
+body.cal-dragging, body.cal-dragging * { cursor: grabbing !important; user-select: none; -webkit-user-select: none; }
+.cal-ghost {
+  position: fixed;
+  z-index: 100;
+  pointer-events: none;
+  /* Над пальцем, чтобы было видно, куда ляжет */
+  transform: translate(-50%, calc(-100% - var(--sp-6)));
+  max-width: 260px;
+  padding: var(--sp-4) var(--sp-5);
+  border-radius: var(--r-card);
+  border: 1px solid var(--c-accent);
+  background: var(--c-surface);
+  box-shadow: var(--shadow-float);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+.cal-ghost__text { font-size: var(--fs-button); color: var(--c-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cal-ghost__where { font-size: var(--fs-small); color: var(--c-text-2); }
+.cal-ghost__where--on { color: var(--c-text); font-weight: 600; }
+.cal-notice {
+  flex-shrink: 0;
+  padding: var(--sp-5) var(--sp-11);
+  border-top: 1px solid var(--c-line);
+  background: var(--c-surface);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3) var(--sp-5);
+  font-size: var(--fs-meta);
+  color: var(--c-text);
+  animation: cal-in var(--t-expand) var(--ease) both;
+}
+.cal-notice--hint { color: var(--c-text-2); }
+.cal-notice--error { justify-content: flex-start; gap: var(--sp-2); color: var(--c-alarm); }
+.cal-notice__buttons { display: flex; gap: var(--sp-3); margin-left: auto; }

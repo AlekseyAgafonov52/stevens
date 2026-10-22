@@ -11,9 +11,11 @@ import { now } from '../../lib/clock';
 import { dayTitle, isoDate } from '../../lib/dates';
 import { onAssistantResponse, onRecordsChanged } from '../../state/events';
 import { sessionExpired } from '../../state/session';
-import { createStore, store, useApp } from '../../state/store';
+import { store, useApp } from '../../state/store';
 import { EditForm } from '../edit/EditForm';
-import { conflictIds, countByDate, dayLabel, dotsFor, gridDays, gridRange, sortDay } from './month';
+import { DragGhost, MoveNotice, startDrag, takeSuppressedClick, useDrag } from './move';
+import { calendar, load, shiftMonth } from './state';
+import { conflictIds, countByDate, dayLabel, dotsFor, gridDays, sortDay } from './month';
 import './calendar.css';
 
 const RELOAD_KINDS = new Set(['created', 'completed', 'deleted', 'cancelled', 'updated']);
@@ -36,35 +38,6 @@ function useLayout(): Layout {
     },
     layoutNow,
   );
-}
-
-const today = () => now();
-const calendar = createStore({
-  year: today().getFullYear(),
-  month: today().getMonth(),
-  selected: isoDate(today()),
-  records: [] as RecordItem[],
-  loading: true,
-  failed: false,
-  version: 0,
-});
-
-let loadToken = 0;
-async function load(): Promise<void> {
-  const { year, month } = calendar.get();
-  const token = ++loadToken;
-  calendar.set({ loading: true, failed: false });
-  try {
-    const { from, to } = gridRange(year, month);
-    const records = await api.records(from, to);
-    if (token === loadToken) calendar.set({ records, loading: false });
-  } catch (error) {
-    if (error instanceof ApiFailure && error.error.type === 'unauthorized') {
-      sessionExpired();
-      return;
-    }
-    if (token === loadToken) calendar.set({ loading: false, failed: true });
-  }
 }
 
 /** Перечитывать после ответа ассистента с нужным kind и после правок в ленте */
@@ -98,19 +71,14 @@ export function CalendarToggle() {
   );
 }
 
-function shiftMonth(delta: number, selectDay?: string) {
-  const { year, month } = calendar.get();
-  const date = new Date(year, month + delta, 1);
-  calendar.set({ year: date.getFullYear(), month: date.getMonth(), ...(selectDay ? { selected: selectDay } : {}) });
-  void load();
-}
-
 function MonthGrid() {
   const state = useSyncExternalStore(calendar.subscribe, calendar.get);
   const { year, month, selected, records, loading } = state;
   const todayIso = isoDate(now());
   const counts = loading ? new Map<string, number>() : countByDate(records);
   const isCurrent = year === now().getFullYear() && month === now().getMonth();
+  const drag = useDrag();
+  const dropDay = drag?.target.kind === 'day' && drag.target.date !== drag.record.date ? drag.target.date : null;
 
   return (
     <>
@@ -126,10 +94,10 @@ function MonthGrid() {
               {T.calendar_today}
             </Pill>
           )}
-          <button type="button" className="cal__arrow" aria-label={T.calendar_prev} onClick={() => shiftMonth(-1)}>
+          <button type="button" className="cal__arrow" aria-label={T.calendar_prev} data-drop-month="-1" onClick={() => shiftMonth(-1)}>
             <ChevronLeft size={16} strokeWidth={1.5} aria-hidden="true" />
           </button>
-          <button type="button" className="cal__arrow" aria-label={T.calendar_next} onClick={() => shiftMonth(1)}>
+          <button type="button" className="cal__arrow" aria-label={T.calendar_next} data-drop-month="1" onClick={() => shiftMonth(1)}>
             <ChevronRight size={16} strokeWidth={1.5} aria-hidden="true" />
           </button>
         </span>
@@ -148,6 +116,7 @@ function MonthGrid() {
             !outside && iso < todayIso && 'cal__day--past',
             iso === todayIso && 'cal__day--today',
             iso === selected && 'cal__day--selected',
+            iso === dropDay && 'cal__day--drop',
           ].filter(Boolean).join(' ');
           return (
             <button
@@ -156,6 +125,7 @@ function MonthGrid() {
               className={classes}
               aria-label={dayLabel(iso, count)}
               aria-pressed={iso === selected}
+              data-drop-day={iso}
               onClick={() => {
                 if (outside) shiftMonth(day.getFullYear() * 12 + day.getMonth() - (year * 12 + month), iso);
                 else calendar.set({ selected: iso });
@@ -203,6 +173,7 @@ function DayList({ canComplete, canDelete }: { canComplete: boolean; canDelete: 
   const ghostList = Object.values(ghosts).map((g) => g.record).filter((r) => r.date === selected && !dayRecords.some((d) => d.id === r.id));
   const list = sortDay([...dayRecords, ...ghostList]);
   const conflicts = conflictIds(dayRecords);
+  const drag = useDrag();
 
   const toggleDone = async (record: RecordItem) => {
     if (record.id === null) return;
@@ -314,14 +285,18 @@ function DayList({ canComplete, canDelete }: { canComplete: boolean; canDelete: 
             <span className="cal__check-space" aria-hidden="true" />
           );
           return (
-            <div key={id} className="cal__item">
+            <div
+              key={id}
+              className={`cal__item ${drag?.record.id === id ? 'cal__item--dragging' : ''}`}
+              onPointerDown={(e) => startDrag(e, record)}
+            >
               <RecordCard
                 record={{ ...record, marks: [], highlight: null }}
                 withDate={false}
                 compact
                 conflict={conflicts.has(id)}
                 leading={leading}
-                onClick={() => setEditingId(id)}
+                onClick={() => { if (!takeSuppressedClick()) setEditingId(id); }}
               />
               {errors[id] && (
                 <div className="cal__error">
@@ -371,6 +346,8 @@ export function CalendarPanel({ canComplete, canDelete }: { canComplete: boolean
         <div className="cal__divider" />
         <DayList canComplete={canComplete} canDelete={canDelete} />
       </div>
+      <MoveNotice />
+      <DragGhost />
     </aside>
   );
   if (layout === 'mid') {
