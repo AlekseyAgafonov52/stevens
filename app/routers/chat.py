@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import os
+import re
 import time as clock
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
@@ -963,6 +964,76 @@ async def answer_move_when(ctx: Ctx, pending: Pending, raw: str) -> dict | None:
     return await move_one(ctx, record, changes)
 
 
+# ── Поправка ослышки: «исправь и вам на Иван», «не и вам, а Иван» ──
+
+FIX_RE = re.compile(
+    r"^(?:(?:стив\w*|stevens?|steve)[\s,]+)?(?:нет[\s,]+)?"
+    r"(?:(?:исправь|исправить|поправь|замени)\s+(?P<a>.+?)\s+на\s+(?P<b>.+?)|не\s+(?P<c>.+?)[\s,—-]+а\s+(?P<d>.+?))"
+    r"[\s.!?]*$",
+    re.I,
+)
+QUOTES_RE = re.compile(r"[«»\"„“”']")
+
+
+def fix_words(raw: str) -> tuple[str, str] | None:
+    """Что на что исправить, если фраза — поправка."""
+    m = FIX_RE.match(raw.strip())
+    if not m:
+        return None
+    wrong, right = (m["a"], m["b"]) if m["a"] else (m["c"], m["d"])
+    wrong = QUOTES_RE.sub("", wrong).strip(" ,.!?—-")
+    right = QUOTES_RE.sub("", right).strip(" ,.!?—-")
+    return (wrong, right) if wrong and right else None
+
+
+def replace_words(text: str, wrong: str, right: str) -> str | None:
+    """Последнее вхождение целыми словами, без учёта регистра и ё/е. Нет вхождения — None."""
+    flex = re.sub("[её]", "[её]", r"\s+".join(re.escape(w) for w in wrong.split()))
+    hits = list(re.finditer(rf"(?<![\w])({flex})(?![\w])", text, re.I))
+    if not hits:
+        return None
+    hit = hits[-1]
+    if hit.start() == 0 and text[:1].isupper():
+        right = right[:1].upper() + right[1:]
+    return text[:hit.start()] + right + text[hit.end():]
+
+
+async def answer_fix(ctx: Ctx, wrong: str, right: str) -> dict | None:
+    """Чиним текст: сначала недописанная запись (Стивенс переспрашивает), потом та, о которой шла речь,
+    потом последние созданные. Слова «и вам» нигде нет — это не поправка, разбираем фразу как обычно."""
+    pending = ctx.conv.pending
+    if pending and pending.draft.get("text"):
+        fixed = replace_words(pending.draft["text"], wrong, right)
+        if fixed:
+            answer = await process_draft(ctx, {**pending.draft, "text": fixed})
+            if answer["kind"] == "clarify":
+                # Переспрос не показывает текст — говорим, что исправили, и спрашиваем дальше
+                head, _ = ctx.say("fixed", {"text": fixed})
+                answer["text"] = f"{head} {answer['text']}"
+            return answer
+    candidates: list[Record] = []
+    if focus := await owned_record(ctx, ctx.conv.focus):
+        if focus.deleted_at is None:
+            candidates.append(focus)
+    rows = await ctx.db.execute(select(Record).where(ctx.owner.filter(), Record.deleted_at.is_(None),
+                                                     Record.created_at.is_not(None))
+                                .order_by(Record.created_at.desc(), Record.id.desc()).limit(5))
+    candidates += [r for r in rows.scalars().all() if r not in candidates]
+    for record in candidates:
+        fixed = replace_words(record.text, wrong, right)
+        if not fixed:
+            continue
+        ctx.conv.pending = None
+        ctx.conv.focus = record.id
+        record.text = fixed[:300]
+        await ctx.db.commit()
+        data = record.to_contract(marks=["new"])
+        values, speech_values = ctx.record_values(data)
+        text, speech = ctx.say("fixed", values, speech_values)
+        return reply("updated", text, speech, records=[data])
+    return None
+
+
 # ── Кнопки-действия (раздел 6, 15.3) ──────────────────
 
 async def owned_record(ctx: Ctx, record_id: int | None) -> Record | None:
@@ -1061,6 +1132,8 @@ async def respond(ctx: Ctx, payload: ChatRequest) -> dict:
             return answer
 
     raw = payload.text.strip()
+    if (fix := fix_words(raw)) and (answer := await answer_fix(ctx, *fix)):
+        return answer
     p = nlu.parse(raw, ctx.now)
 
     # Ответ на уточнение (Р-45); не ответ — новый запрос, уточнение забываем (Р-33)
