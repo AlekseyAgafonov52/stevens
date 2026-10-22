@@ -79,7 +79,7 @@ function say(text: string, chosen: SpeechSynthesisVoice): void {
     finish();
   };
   current = utterance;
-  if (!isSpeaking()) emitSpeech('start');
+  if (!isSpeaking()) emitSpeech('start', text);
   // Если onend так и не придёт (бывает в Chrome), не держим «говорит» вечно: иначе не включатся автослушание и «Стивенс»
   endTimer = setTimeout(finish, 3000 + text.length * 120);
   // Chrome: speak сразу после cancel иногда теряет фразу — даём очереди очиститься

@@ -60,14 +60,20 @@ export function emitRecordsChanged(): void {
 export type SpeechPhase = 'start' | 'end' | 'cancelled';
 const speechListeners = new Set<(phase: SpeechPhase) => void>();
 let speaking = false;
+let speakingText = '';
 export function isSpeaking(): boolean {
   return speaking;
+}
+/** Что Стивенс сейчас говорит вслух — чтобы не принять его голос из динамиков за человека */
+export function spokenText(): string {
+  return speaking ? speakingText : '';
 }
 export function onSpeech(listener: (phase: SpeechPhase) => void): () => void {
   speechListeners.add(listener);
   return () => speechListeners.delete(listener);
 }
-export function emitSpeech(phase: SpeechPhase): void {
+export function emitSpeech(phase: SpeechPhase, text = ''): void {
   speaking = phase === 'start';
+  speakingText = speaking ? text : '';
   speechListeners.forEach((listener) => listener(phase));
 }
