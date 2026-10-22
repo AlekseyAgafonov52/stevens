@@ -1688,6 +1688,17 @@ async def handle_action(ctx: Ctx, action_id: str, record_id: int | None) -> dict
 
 # ── Эндпоинт ──────────────────────────────────────────
 
+def answers_time(pending: Pending, raw: str, now: datetime) -> bool:
+    """Ждём время, а в ответе оно есть без глагола «запиши/напомни»: «не слушай 13:00» — это ответ, мусор отбросим."""
+    if pending.kind == "multi_ask":
+        waiting = True
+    else:
+        waiting = not pending.draft.get("time")
+    if not waiting or nlu.CREATE_VERB_RE.search(raw.strip().lower()):
+        return False
+    return bool(nlu.parse_when(raw, now)[0] or nlu.reply_time(raw)[0])
+
+
 def is_new_request(p: nlu.Parse, raw: str) -> bool:
     if p.intent in ("list", "search", "help", "off_topic", "delete", "complete", "thanks", "move", "edit"):
         return True
@@ -1749,7 +1760,8 @@ async def respond(ctx: Ctx, payload: ChatRequest) -> dict:
         ctx.conv.pending = None
         text, speech = ctx.say("cancelled")
         return reply("cancelled", text, speech)
-    if pending and pending.kind in ("draft", "new_time", "confirm_no", "multi_ask") and not is_new_request(p, raw):
+    if pending and pending.kind in ("draft", "new_time", "confirm_no", "multi_ask") and (
+            not is_new_request(p, raw) or answers_time(pending, raw, ctx.now)):
         if pending.kind == "multi_ask":
             answer = await answer_multi_ask(ctx, pending, raw)
         else:
