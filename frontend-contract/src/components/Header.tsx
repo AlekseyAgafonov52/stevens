@@ -4,8 +4,8 @@ import { useState } from 'react';
 import { features } from '../config/features';
 import { T } from '../content/texts';
 import { HeaderRightStart, sandboxMenuExtra } from '../extensions/points';
-import { newDialog, resetSandbox } from '../state/chat';
-import { install, useCanInstall } from '../lib/install';
+import { install, installHintKey, isInstalled, useCanInstall } from '../lib/install';
+import { newDialog, resetSandbox, setHint } from '../state/chat';
 import { emitActivity } from '../state/events';
 import { goAuth, logout } from '../state/session';
 import { useApp } from '../state/store';
@@ -18,7 +18,11 @@ export function Header() {
   const empty = useApp((s) => s.messages.length === 0);
   const busy = useApp((s) => s.waiting || s.recording);
   const [dialog, setDialog] = useState<'new' | 'reset' | null>(null);
-  const installItem = useCanInstall() ? [{ label: T.menu_install, onSelect: () => void install() }] : [];
+  const canInstall = useCanInstall();
+  // Браузер не дал установить кнопкой — пункт всё равно есть и подсказывает, как установить через меню браузера
+  const installItem = isInstalled()
+    ? []
+    : [{ label: T.menu_install, onSelect: () => (canInstall ? void install() : setHint(installHintKey())) }];
 
   const sandboxItems = [
     ...sandboxMenuExtra(T.menu_tour),

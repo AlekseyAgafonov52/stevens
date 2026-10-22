@@ -8,7 +8,8 @@
     <meta name="description" content="Stevens — задачи, встречи и напоминания голосом и текстом." />
     <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
     <!-- PWA: «Установить как приложение» в Chrome, «Добавить в Dock» в Safari -->
-    <link rel="manifest" href="./manifest.webmanifest" />
+    <!-- use-credentials: в Codespaces порт закрыт входом GitHub, без куки браузер получает вместо манифеста страницу входа -->
+    <link rel="manifest" href="./manifest.webmanifest" crossorigin="use-credentials" />
     <link rel="apple-touch-icon" href="./apple-touch-icon.png" />
     <meta name="apple-mobile-web-app-title" content="Stevens" />
     <title>Stevens</title>

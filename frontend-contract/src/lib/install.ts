@@ -41,3 +41,15 @@ export async function install(): Promise<void> {
   deferred = null;
   notify();
 }
+
+/** Уже открыто как установленное приложение — пункт меню не нужен */
+export function isInstalled(): boolean {
+  if (typeof window === 'undefined') return false;
+  return window.matchMedia?.('(display-mode: standalone)').matches || (navigator as { standalone?: boolean }).standalone === true;
+}
+
+/** Подсказка, как установить вручную, когда браузер не прислал beforeinstallprompt (Safari, Firefox, Chrome без манифеста) */
+export function installHintKey(): 'install_safari' | 'install_manual' {
+  const ua = navigator.userAgent;
+  return /Safari/.test(ua) && !/Chrome|Chromium|Edg|CriOS|Android/.test(ua) ? 'install_safari' : 'install_manual';
+}

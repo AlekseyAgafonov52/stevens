@@ -46,5 +46,5 @@
 
 ## Установка как приложение (PWA)
 
-`public/manifest.webmanifest` и иконки (`icon-192.png`, `icon-512.png`, `icon-maskable-512.png`, `apple-touch-icon.png`, нарисованы из `stevens-rest.svg`). Chrome/Edge: значок установки в адресной строке или пункт меню «Установить как приложение» в шапке (`src/lib/install.ts`). Safari на Mac: «Файл → Добавить в Dock». Нужен https (Codespaces даёт) или localhost. Сервис-воркера нет специально: Chrome ставит и без него, а кэш мешал бы видеть свежие сборки.
+`public/manifest.webmanifest` и иконки (`icon-192.png`, `icon-512.png`, `icon-maskable-512.png`, `apple-touch-icon.png`, нарисованы из `stevens-rest.svg`). Chrome/Edge: значок установки в адресной строке или пункт меню «Установить как приложение» в шапке (`src/lib/install.ts`). Safari на Mac: «Файл → Добавить в Dock». Нужен https (Codespaces даёт) или localhost. Манифест подключён с `crossorigin="use-credentials"`: закрытый порт Codespaces без куки входа отдаёт вместо него страницу входа GitHub, и установка молча не работает. Если браузер не прислал `beforeinstallprompt`, пункт меню показывает подсказку, как установить вручную. Сервис-воркера нет специально: Chrome ставит и без него, а кэш мешал бы видеть свежие сборки.
 
