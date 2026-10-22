@@ -60,3 +60,42 @@ test('«Стивенс, …, отмена» — ничего не уходит, 
   voice.setArmed(false);
   vi.useRealTimers();
 });
+
+test('своё имя из динамиков не зовёт Стивенса, после фразы фоновая запись начинается заново', async () => {
+  vi.useFakeTimers();
+  const events: string[] = [];
+  const off = voice.on('wake', () => events.push('wake'));
+  voice.setArmed(true);
+  vi.advanceTimersByTime(500);
+  const first = FakeRec.last!;
+  voice.setEcho('Меня зовут Стивенс, я записал встречу');
+  first.say('меня зовут Стивенс я записал');
+  expect(events).toEqual([]);
+  voice.setEcho(null);
+  await vi.advanceTimersByTimeAsync(700);
+  const second = FakeRec.last!;
+  expect(second).not.toBe(first);
+  second.say('Стив, отмени');
+  expect(events).toEqual(['wake']);
+  off();
+  second.stop();
+  voice.setArmed(false);
+  await vi.advanceTimersByTimeAsync(700);
+  vi.useRealTimers();
+});
+
+test('пока Стивенс говорит фразу без имени, «Стив» зовёт его', () => {
+  vi.useFakeTimers();
+  const events: string[] = [];
+  const off = voice.on('wake', () => events.push('wake'));
+  voice.setArmed(true);
+  vi.advanceTimersByTime(500);
+  voice.setEcho('Записал на завтра в 10');
+  FakeRec.last!.say('записал на завтра Стив подожди');
+  expect(events).toEqual(['wake']);
+  voice.setEcho(null);
+  off();
+  FakeRec.last!.stop();
+  voice.setArmed(false);
+  vi.useRealTimers();
+});

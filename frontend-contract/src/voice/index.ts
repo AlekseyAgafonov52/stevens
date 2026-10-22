@@ -9,6 +9,10 @@
  *
  * «стоп» / «отмена» последним словом — отмена: микрофон выключается, в final ничего не уходит.
  * Сразу — когда браузер закрепил это слово (isFinal), иначе по паузе: «отмена встречи» так не оборвётся.
+ *
+ * Перебить по имени: пока Стивенс говорит, фоновая запись идёт дальше (кроме Safari), и «Стив» обрывает озвучку.
+ * Его собственный голос из динамиков тоже попадает в микрофон: если в его фразе есть имя, пока он говорит,
+ * имя не ловим (setEcho), а после фразы перезапускаем фоновую запись, чтобы старый текст не сработал.
  */
 import { isCancel } from './edit';
 
@@ -103,6 +107,9 @@ let armedRec: Recognition | null = null;
 let armedEnded: Promise<void> | null = null;
 let wantArmed = false;
 let rearmTimer: ReturnType<typeof setTimeout> | undefined;
+/** Фраза, которую Стивенс сейчас говорит вслух, и есть ли в ней имя */
+let echoHasName = false;
+let echoHeard = false;
 
 function cleanupAudio(): void {
   clearInterval(levelTimer);
@@ -186,6 +193,11 @@ function arm(inGesture = false): void {
     if (!woke) {
       const hit = WAKE_WORD.exec(whole);
       if (!hit) return;
+      if (echoHasName) {
+        // Скорее всего, это он сам себя услышал из динамиков
+        echoHeard = true;
+        return;
+      }
       // Имя услышано: эта запись становится обычной
       woke = true;
       armedRec = null;
@@ -373,6 +385,24 @@ export const voice = {
     cancelled = true;
     if (recognition) recognition.abort();
     else cleanupAudio();
+  },
+
+  /** Перебивать по имени, пока Стивенс говорит: Safari при включённом микрофоне глушит и уводит звук в разговорный динамик */
+  canBargeIn(): boolean {
+    return !isSafari();
+  },
+
+  /** Что Стивенс говорит вслух (null — замолчал). Его голос из динамиков не должен звать его самого */
+  setEcho(text: string | null): void {
+    const wasHeard = echoHeard;
+    echoHasName = !!text && WAKE_WORD.test(text);
+    echoHeard = false;
+    // Имя из его фразы уже в тексте фоновой записи — начинаем её заново
+    if (!text && wasHeard && armedRec && wantArmed) {
+      void disarmAndWait().then(() => {
+        if (wantArmed) rearmTimer = setTimeout(arm, 100);
+      });
+    }
   },
 
   /** Слушать имя фоном (true) или нет. Пока идёт обычная запись, фоновая не мешает: включится после */
