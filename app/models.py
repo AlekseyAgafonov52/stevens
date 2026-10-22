@@ -94,3 +94,34 @@ class Record(Base):
             "marks": marks if marks is not None else (["deleted"] if self.deleted_at else []),
             "highlight": highlight,
         }
+
+
+class PushSubscription(Base):
+    """Подписка браузера на пуш-уведомления (Web Push). Владелец — как у записей."""
+    __tablename__ = "push_subscriptions"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    account_id: Mapped[int | None] = mapped_column(ForeignKey("accounts.id"), nullable=True, index=True)
+    sandbox_id: Mapped[str | None] = mapped_column(ForeignKey("sandboxes.client_id"), nullable=True, index=True)
+    endpoint: Mapped[str] = mapped_column(String(1000), unique=True, nullable=False)
+    p256dh: Mapped[str] = mapped_column(String(200), nullable=False)
+    auth: Mapped[str] = mapped_column(String(100), nullable=False)
+    # Часовой пояс браузера: записи хранятся в местном времени
+    timezone: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[dt] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class PushSent(Base):
+    """Уже отправленные пуши: запись и момент, на который она стояла."""
+    __tablename__ = "push_sent"
+
+    key: Mapped[str] = mapped_column(String(80), primary_key=True)
+    sent_at: Mapped[dt] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class AppSetting(Base):
+    """Настройки сервера, которые нужно помнить между запусками (ключи VAPID)."""
+    __tablename__ = "app_settings"
+
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    value: Mapped[str] = mapped_column(String(4000), nullable=False)

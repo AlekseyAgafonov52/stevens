@@ -13,6 +13,7 @@ from pathlib import Path
 
 from fastapi import Depends, Header, HTTPException
 from sqlalchemy import delete, insert, select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
@@ -74,8 +75,12 @@ async def ensure_sandbox(db: AsyncSession, client_id: str) -> None:
     """Неизвестный id → заводим песочницу и копируем в неё демо-данные."""
     if await db.get(Sandbox, client_id):
         return
-    db.add(Sandbox(client_id=client_id))
-    await db.flush()
+    # Первые запросы новой вкладки идут разом: песочницу заводит только один из них
+    created = await db.execute(
+        pg_insert(Sandbox).values(client_id=client_id).on_conflict_do_nothing().returning(Sandbox.client_id)
+    )
+    if created.scalar() is None:
+        return
     await seed_sandbox(db, client_id)
     await db.commit()
 
