@@ -119,6 +119,17 @@ class PushSent(Base):
     sent_at: Mapped[dt] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class PushSnooze(Base):
+    """«Через 10 минут» в пуше: когда напомнить о записи ещё раз."""
+    __tablename__ = "push_snoozes"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    account_id: Mapped[int | None] = mapped_column(ForeignKey("accounts.id"), nullable=True, index=True)
+    sandbox_id: Mapped[str | None] = mapped_column(ForeignKey("sandboxes.client_id"), nullable=True, index=True)
+    record_id: Mapped[int] = mapped_column(nullable=False)
+    at: Mapped[dt] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+
+
 class AppSetting(Base):
     """Настройки сервера, которые нужно помнить между запусками (ключи VAPID)."""
     __tablename__ = "app_settings"

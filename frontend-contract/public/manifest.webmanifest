@@ -6,12 +6,55 @@
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
-  "display_override": ["window-controls-overlay"],
+  "display_override": [
+    "window-controls-overlay"
+  ],
   "background_color": "#F8F6F0",
   "theme_color": "#FCFBF7",
   "icons": [
-    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png" },
-    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png" },
-    { "src": "icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+    {
+      "src": "icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    },
+    {
+      "src": "icon-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Новое напоминание",
+      "short_name": "Напомнить",
+      "description": "Написать Стивенсу новое напоминание",
+      "url": "./?do=new",
+      "icons": [
+        {
+          "src": "icon-192.png",
+          "sizes": "192x192",
+          "type": "image/png"
+        }
+      ]
+    },
+    {
+      "name": "Что сегодня",
+      "short_name": "Сегодня",
+      "description": "Спросить Стивенса, что на сегодня",
+      "url": "./?do=today",
+      "icons": [
+        {
+          "src": "icon-192.png",
+          "sizes": "192x192",
+          "type": "image/png"
+        }
+      ]
+    }
   ]
 }

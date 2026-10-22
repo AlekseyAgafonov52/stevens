@@ -1,12 +1,14 @@
-"""Подписка на пуш-уведомления: ключ сервера, подписаться, отписаться."""
+"""Подписка на пуш-уведомления: ключ сервера, подписаться, отписаться, отложить на 10 минут."""
 from fastapi import APIRouter, Body, Depends
 from fastapi.responses import JSONResponse, Response
+from datetime import datetime, timezone
+
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import push
 from app.database import get_db
-from app.models import PushSubscription
+from app.models import PushSnooze, PushSubscription, Record
 from app.owner import Owner, get_owner
 
 router = APIRouter(prefix="/api/push", tags=["push"])
@@ -50,4 +52,24 @@ async def unsubscribe(body: dict = Body(...), db: AsyncSession = Depends(get_db)
     if isinstance(endpoint, str):
         await db.execute(delete(PushSubscription).where(PushSubscription.endpoint == endpoint))
         await db.commit()
+    return Response(status_code=204)
+
+
+@router.post("/snooze", status_code=204)
+async def snooze(body: dict = Body(...), db: AsyncSession = Depends(get_db)):
+    """Кнопка «Через 10 минут» в пуше. Service worker не знает токена входа,
+    поэтому браузер узнаём по адресу его подписки — он есть только у него самого."""
+    endpoint, record_id = body.get("endpoint"), body.get("record_id")
+    if not isinstance(endpoint, str) or not isinstance(record_id, int):
+        return JSONResponse(status_code=422, content={"error": "invalid_snooze"})
+    sub = (await db.execute(select(PushSubscription).where(PushSubscription.endpoint == endpoint))).scalars().first()
+    record = await db.get(Record, record_id)
+    if not sub or not record or (record.account_id, record.sandbox_id) != (sub.account_id, sub.sandbox_id):
+        return JSONResponse(status_code=404, content={"error": "not_found"})
+    await db.execute(delete(PushSnooze).where(PushSnooze.record_id == record_id))
+    db.add(PushSnooze(
+        account_id=sub.account_id, sandbox_id=sub.sandbox_id, record_id=record_id,
+        at=datetime.now(timezone.utc) + push.SNOOZE,
+    ))
+    await db.commit()
     return Response(status_code=204)
