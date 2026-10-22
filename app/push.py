@@ -1,7 +1,8 @@
 """Пуш-уведомления (Web Push): приходят, даже когда вкладка закрыта.
 
 Раз в 30 секунд смотрим записи тех, кто подписался: напоминание звонит в своё время,
-встреча — за 10 минут. Время записи местное, поэтому пояс берём из подписки браузера.
+встреча — за 10 минут. У пуша кнопки «Посмотреть» и «Через 10 минут» (public/sw.js);
+отложенное лежит в push_snoozes и уходит ещё раз в свой срок. Время записи местное, поэтому пояс берём из подписки браузера.
 Демо-записи песочницы (без created_at) не звонят — только то, что человек завёл сам.
 """
 import asyncio
@@ -16,13 +17,14 @@ from pywebpush import WebPushException, webpush
 from sqlalchemy import delete, select
 
 from app.database import AsyncSessionLocal
-from app.models import AppSetting, PushSent, PushSubscription, Record, TaskStatus, TaskType
+from app.models import AppSetting, PushSent, PushSnooze, PushSubscription, Record, TaskStatus, TaskType
 
 MEETING_EARLY_MIN = 10
 TICK_SECONDS = 30
 # Опоздали больше чем на столько (сервер спал) — уже не шлём
 LATE_LIMIT = timedelta(minutes=15)
 CLAIMS = {"sub": "mailto:stevens@example.com"}
+SNOOZE = timedelta(minutes=10)
 
 _vapid: Vapid | None = None
 
@@ -73,9 +75,17 @@ def record_key(record: Record) -> str:
     return f"{record.id}@{record.date}T{record.time}"
 
 
-def payload(record: Record) -> str:
-    body = f"Через {MEETING_EARLY_MIN} минут: {record.text}" if record.type == TaskType.meeting else record.text
-    return json.dumps({"title": "Stevens", "body": body, "tag": record_key(record)}, ensure_ascii=False)
+def payload(record: Record, snoozed: bool = False) -> str:
+    if record.type == TaskType.meeting and not snoozed:
+        body = f"Через {MEETING_EARLY_MIN} минут: {record.text}"
+    elif record.type == TaskType.meeting:
+        body = f"Встреча: {record.text}"
+    else:
+        body = record.text
+    return json.dumps({
+        "title": "Stevens", "body": body, "tag": record_key(record),
+        "record_id": record.id, "snoozed": snoozed,
+    }, ensure_ascii=False)
 
 
 def send(sub: PushSubscription, data: str, key: Vapid) -> bool:
@@ -123,6 +133,20 @@ async def tick() -> None:
                         dead.append(sub.id)
                 db.add(PushSent(key=record_key(record)))
                 sent.add(record_key(record))
+        # Отложенные «Через 10 минут»: запись могли уже выполнить или удалить — тогда молчим
+        due = (await db.execute(
+            select(PushSnooze).where(PushSnooze.at <= datetime.now(timezone.utc))
+        )).scalars().all()
+        for snooze in due:
+            await db.delete(snooze)
+            record = await db.get(Record, snooze.record_id)
+            if record is None or record.deleted_at is not None or record.status == TaskStatus.done:
+                continue
+            group = owners.get((snooze.account_id, snooze.sandbox_id), [])
+            data = payload(record, snoozed=True)
+            for sub in group:
+                if sub.id not in dead and not await asyncio.to_thread(send, sub, data, key):
+                    dead.append(sub.id)
         if dead:
             await db.execute(delete(PushSubscription).where(PushSubscription.id.in_(dead)))
         # Старые отметки больше не нужны

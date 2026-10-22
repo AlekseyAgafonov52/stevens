@@ -7,6 +7,7 @@
  * только сообщение Стивенса в ленте и тихий звук двумя нотами.
  * Вернулся на вкладку или открыл по пушу — в ленте сообщение Стивенса о том, что подошло без него.
  * Звонят только записи, заведённые человеком: у демо-записей песочницы нет created_at.
+ * У пуша кнопки «Посмотреть» (Стивенс присылает запись в чат) и «Через 10 минут» — см. public/sw.js.
  */
 import { api } from '../api';
 import type { RecordItem } from '../api/types';
@@ -17,9 +18,12 @@ import { storage } from '../storage';
 import { onAssistantResponse, onRecordsChanged } from './events';
 import { createStore, lastAnswerId, store } from './store';
 
+type PushMessage = { type?: string; recordId?: number; snoozed?: boolean };
+
 export const notifyStore = createStore<{ offer: { messageId: string; time: string } | null }>({ offer: null });
 
 const MEETING_EARLY_MIN = 10;
+const SNOOZE_MS = 10 * 60 * 1000;
 const RESCAN_MS = 30 * 60 * 1000;
 /** Насколько назад смотреть пропущенное при открытии */
 const MISSED_MAX_MS = 12 * 60 * 60 * 1000;
@@ -65,8 +69,13 @@ function chime(): void {
 const keyOf = (record: RecordItem) => `${record.id}@${record.date}T${record.time}`;
 
 /** Системное уведомление через service worker: так оно не пропадает и склеивается с пушем */
-async function systemNotify(body: string, tag: string): Promise<void> {
-  const options = { body, tag, icon: '/icon-192.png', badge: '/icon-192.png', requireInteraction: true };
+async function systemNotify(body: string, tag: string, recordId: number): Promise<void> {
+  const options = {
+    body, tag, icon: '/icon-192.png', badge: '/icon-192.png', requireInteraction: true, renotify: true,
+    data: { recordId },
+    // Кнопки обрабатывает public/sw.js; TypeScript о них пока не знает
+    actions: [{ action: 'view', title: 'Посмотреть' }, { action: 'snooze', title: 'Через 10 минут' }],
+  } as NotificationOptions;
   try {
     const registration = await navigator.serviceWorker?.getRegistration();
     if (registration) {
@@ -77,7 +86,8 @@ async function systemNotify(body: string, tag: string): Promise<void> {
     /* попробуем напрямую */
   }
   try {
-    const n = new Notification('Stevens', options);
+    // Без service worker кнопок не бывает — только клик
+    const n = new Notification('Stevens', { ...options, actions: undefined } as NotificationOptions);
     n.onclick = () => { window.focus(); n.close(); };
   } catch {
     /* браузер не дал показать */
@@ -105,7 +115,42 @@ function fire(record: RecordItem, key: string): void {
   const body = record.type === 'meeting' ? `Через ${MEETING_EARLY_MIN} минут: ${record.text}` : record.text;
   remindInFeed([record], record.type === 'meeting' ? T.remind_meeting : T.remind_one);
   if (document.visibilityState === 'visible') chime();
-  else if (notifyGranted()) void systemNotify(body, key);
+  else if (notifyGranted() && record.id !== null) void systemNotify(body, key, record.id);
+}
+
+async function findRecord(id: number): Promise<RecordItem | null> {
+  const now = Date.now();
+  try {
+    const records = await api.records(isoDay(new Date(now - 24 * 60 * 60 * 1000)), isoDay(new Date(now + 24 * 60 * 60 * 1000)));
+    return records.find((r) => r.id === id) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** «Посмотреть» в пуше: Стивенс присылает запись в чат (если только что не прислал её сам) */
+async function showRecord(id: number, ring = false): Promise<void> {
+  const record = await findRecord(id);
+  if (!record) return;
+  const last = store.get().messages.at(-1);
+  if (last?.kind === 'answer' && last.response.kind === 'reminder' && last.response.records.some((r) => r.id === id)) return;
+  const key = keyOf(record);
+  const fired = storage.notifyFired();
+  if (!fired.includes(key)) storage.setNotifyFired([...fired, key]);
+  remindInFeed([record], record.type === 'meeting' && !ring ? T.remind_meeting : T.remind_one);
+  if (ring) chime();
+}
+
+/** «Через 10 минут», когда пуша с сервера нет: откладывает сама вкладка */
+function snoozeHere(id: number): void {
+  setTimeout(() => {
+    void findRecord(id).then((record) => {
+      if (!record || record.status === 'done' || record.marks.includes('deleted')) return;
+      remindInFeed([record], T.remind_one);
+      if (document.visibilityState === 'visible') chime();
+      else if (notifyGranted()) void systemNotify(record.text, keyOf(record), id);
+    });
+  }, SNOOZE_MS);
 }
 
 /** Подписка на пуш с сервера: нужен service worker и разрешение на уведомления */
@@ -236,9 +281,22 @@ export function initNotify(): void {
   }
   setInterval(() => void reschedule(), RESCAN_MS);
   // Пуш пришёл, когда человек на вкладке: пуша не было, показываем сообщение (если таймер его ещё не показал)
-  navigator.serviceWorker?.addEventListener('message', (event: MessageEvent<{ type?: string }>) => {
-    if (event.data?.type === 'stevens-reminder') void remindMissed(Date.now() - 15 * 60 * 1000, false);
+  navigator.serviceWorker?.addEventListener('message', (event: MessageEvent<PushMessage>) => {
+    const data = event.data ?? {};
+    const id = typeof data.recordId === 'number' ? data.recordId : null;
+    if (data.type === 'stevens-reminder' && data.snoozed && id !== null) void showRecord(id, true);
+    else if (data.type === 'stevens-reminder') void remindMissed(Date.now() - 15 * 60 * 1000, false);
+    else if (data.type === 'stevens-open' && id !== null) void showRecord(id);
+    else if (data.type === 'stevens-snooze' && id !== null) snoozeHere(id);
   });
+  // Приложение открыли кнопкой «Посмотреть» из пуша: /?remind=<номер записи>
+  const remindParam = typeof location !== 'undefined' ? new URLSearchParams(location.search).get('remind') : null;
+  let remindId = remindParam && /^\d+$/.test(remindParam) ? Number(remindParam) : null;
+  if (remindParam !== null) {
+    const url = new URL(location.href);
+    url.searchParams.delete('remind');
+    history.replaceState(history.state, '', url);
+  }
   let booted = false;
   let owner: string | null = null;
   store.subscribe(() => {
@@ -246,7 +304,9 @@ export function initNotify(): void {
     if (screen !== 'app') return;
     if (!booted) {
       booted = true;
-      void remindMissed(previous);
+      const id = remindId;
+      remindId = null;
+      void remindMissed(previous).then(() => (id === null ? undefined : showRecord(id)));
     }
     // Вошли в аккаунт или вернулись в песочницу — пуши и таймеры переезжают к новому владельцу
     if (owner !== `${mode}:${userId}`) {

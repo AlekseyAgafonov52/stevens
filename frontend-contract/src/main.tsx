@@ -16,12 +16,14 @@ import './state/recording';
 import { boot } from './state/session';
 import { initBriefing } from './state/briefing';
 import { initNotify } from './state/notify';
+import { initShortcuts } from './state/shortcuts';
 import { initWakeWord } from './state/wake';
 
 initExtras();
 initWakeWord();
 initNotify();
 initBriefing();
+initShortcuts();
 void boot();
 
 createRoot(document.getElementById('root')!).render(
