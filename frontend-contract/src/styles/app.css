@@ -1,7 +1,7 @@
 /* Первый вариант — 02-screens.md и 04-style.md. Числа без токена — из этих документов. */
 
 /* ── Каркас (02, 2) ─────────────────────────────────── */
-.app { height: 100dvh; display: flex; flex-direction: column; }
+.app { height: 100dvh; display: flex; flex-direction: column; padding: 0 env(safe-area-inset-right) 0 env(safe-area-inset-left); }
 .app__body { flex: 1; display: flex; min-height: 0; position: relative; }
 .app__main { flex: 1; min-width: 0; display: flex; flex-direction: column; position: relative; background: var(--c-bg); }
 
@@ -226,7 +226,8 @@
 @media (max-width: 760px) { .pill { white-space: normal; text-align: left; } }
 
 /* ── Низ: статус и строка ввода (02, 2.4–2.6) ───────── */
-.bottom { flex-shrink: 0; padding: var(--sp-3) var(--gutter) calc(var(--sp-8) + env(safe-area-inset-bottom)); }
+/* iPhone: снизу полоска «домой» и скруглённые углы экрана — поле ввода держим выше них */
+.bottom { flex-shrink: 0; padding: var(--sp-3) var(--gutter) max(var(--sp-8), calc(env(safe-area-inset-bottom) + var(--sp-3))); }
 .bottom__column { max-width: var(--column); margin: 0 auto; }
 .status {
   padding-left: var(--sp-1);
@@ -473,7 +474,7 @@
 /* ── Телефон (02, 5) ────────────────────────────────── */
 @media (max-width: 760px) {
   .new-dialog { width: 36px; padding: 0; justify-content: center; }
-  .header__right { gap: var(--sp-2); }
+  .header__right, .header__left { gap: var(--sp-2); }
   .new-dialog__text { display: none; }
   .sandbox-badge { height: 28px; padding: 0 var(--sp-2) 0 9px; font-size: var(--fs-small); gap: 2px; }
   .sandbox-badge__chevron { width: 12px; height: 12px; }

@@ -54,17 +54,18 @@ export function installHintKey(): 'install_safari' | 'install_manual' {
   return /Safari/.test(ua) && !/Chrome|Chromium|Edg|CriOS|Android/.test(ua) ? 'install_safari' : 'install_manual';
 }
 
-const WCO_QUERY = '(display-mode: window-controls-overlay)';
-
-/** Установленное приложение, где шапка Stevens стоит на месте полосы заголовка окна */
-export function useTitlebarMode(): boolean {
+/** Подписка на медиазапрос из кода (там, где одной вёрстки мало — нужно переставить кнопки) */
+export function useMedia(query: string): boolean {
   return useSyncExternalStore(
     (l) => {
-      const mq = window.matchMedia?.(WCO_QUERY);
+      const mq = window.matchMedia?.(query);
       mq?.addEventListener('change', l);
       return () => mq?.removeEventListener('change', l);
     },
-    () => window.matchMedia?.(WCO_QUERY).matches ?? false,
+    () => window.matchMedia?.(query).matches ?? false,
     () => false,
   );
 }
+
+/** Установленное приложение, где шапка Stevens стоит на месте полосы заголовка окна */
+export const useTitlebarMode = (): boolean => useMedia('(display-mode: window-controls-overlay)');

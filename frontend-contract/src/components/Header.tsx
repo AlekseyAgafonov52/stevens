@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { features } from '../config/features';
 import { T } from '../content/texts';
 import { HeaderRightStart, sandboxMenuExtra } from '../extensions/points';
-import { install, installHintKey, isInstalled, useCanInstall, useTitlebarMode } from '../lib/install';
+import { install, installHintKey, isInstalled, useCanInstall, useMedia, useTitlebarMode } from '../lib/install';
 import { newDialog, resetSandbox, setHint } from '../state/chat';
 import { emitActivity } from '../state/events';
 import { goAuth, logout } from '../state/session';
@@ -21,6 +21,8 @@ export function Header() {
   const canInstall = useCanInstall();
   // В окне приложения справа кнопки окна и значки браузера — свои кнопки ставим слева, «Stevens» остаётся по центру окна
   const titlebar = useTitlebarMode();
+  // На телефоне справа тесно: календарь уходит влево к «Новому диалогу», иначе «Stevens» съезжает с центра
+  const phone = useMedia('(max-width: 760px)');
   // Браузер не дал установить кнопкой — пункт всё равно есть и подсказывает, как установить через меню браузера
   const installItem = isInstalled()
     ? []
@@ -33,9 +35,9 @@ export function Header() {
     ...(features.auth ? [{ label: T.menu_go_auth, onSelect: goAuth }] : []),
   ];
 
-  const tools = (
+  const calendar = <HeaderRightStart />;
+  const menu = (
     <>
-      <HeaderRightStart />
       {mode === 'sandbox' && (
         <Menu
           items={sandboxItems}
@@ -76,10 +78,14 @@ export function Header() {
             <span className="new-dialog__text">{T.btn_new_dialog}</span>
           </button>
         )}
-        {titlebar && tools}
+        {(titlebar || phone) && calendar}
+        {titlebar && menu}
       </div>
       <div className="header__name">{T.app_name}</div>
-      <div className="header__right">{!titlebar && tools}</div>
+      <div className="header__right">
+        {!titlebar && !phone && calendar}
+        {!titlebar && menu}
+      </div>
       {dialog === 'new' && (
         <Modal
           title={T.new_dialog_title}
