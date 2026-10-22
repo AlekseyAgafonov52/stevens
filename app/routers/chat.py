@@ -43,7 +43,7 @@ WHICH_LIMIT = 5
 
 @dataclass
 class Pending:
-    kind: str                      # draft | confirm | conflict | new_time | confirm_no | multi | multi_ask | move | move_when | move_all
+    kind: str                      # draft | confirm | conflict | new_time | confirm_no | multi | multi_ask | move | move_when | move_all | edit | bulk_delete
     draft: dict = field(default_factory=dict)
 
 
@@ -52,6 +52,8 @@ class Conversation:
     pending: Pending | None = None
     variants: dict[str, int] = field(default_factory=dict)
     focus: int | None = None       # о какой записи шла речь: «перенеси её», «удали это»
+    found: list[int] = field(default_factory=list)  # что нашёл поиск: «удали её» после нескольких — спросим какую
+    bulk_deleted: list[int] = field(default_factory=list)  # «Вернуть все» после массового удаления
     touched: float = field(default_factory=clock.time)
 
 
@@ -119,6 +121,7 @@ class Ctx:
     conv: Conversation
     now: datetime
     features: set[str]
+    found: list[int] = field(default_factory=list)  # найденное прошлым ответом
 
     @property
     def today(self) -> date:
@@ -197,6 +200,10 @@ async def find(ctx: Ctx, p: nlu.Parse, types: set[str] | None = None) -> list[Re
     rows = await owner_records(ctx, *conditions)
     if not p.keywords:
         return rows if (p.filter_type or p.period or p.date) else []
+    return by_keywords(rows, p)
+
+
+def by_keywords(rows: list[Record], p: nlu.Parse) -> list[Record]:
     if p.required:
         rows = [r for r in rows if all(nlu.record_has(record_words(r), key) for key in p.required)]
     scored = [(matches(r, p.keywords), r) for r in rows]
@@ -745,6 +752,8 @@ async def answer_search(ctx: Ctx, p: nlu.Parse) -> dict:
             text, speech = ctx.say("found_some", {"count": len(found)})
     if len(found) == 1 or p.ask == "when":
         ctx.conv.focus = ordered[0].id
+    else:
+        ctx.conv.found = [r.id for r in ordered[:FOUND_LIMIT]]  # «удали её» — спросим, какую из найденных
     records = [r.to_contract(highlight=highlight) for r in ordered[:FOUND_LIMIT]]
     return reply("found", text, speech, records=records, total=len(found))
 
@@ -827,8 +836,16 @@ async def complete_one(ctx: Ctx, record: Record) -> dict:
     return reply("completed", text, speech, records=[data])
 
 
+def exact(found: list[Record], p: nlu.Parse) -> list[Record]:
+    """«Встреча с Машей» — запись ровно с этими словами, а не «Встреча с Марией по сайту»."""
+    want = set(p.keywords) | {"~встреч", "~звон"}
+    return [r for r in found if set(nlu.keywords(r.text)) <= want]
+
+
 def single(ctx: Ctx, found: list[Record]) -> Record | None:
-    """Одна запись — она. Несколько с одинаковым текстом (повторы) — ближайшая из них."""
+    """Одна запись — она. Среди нескольких та, о которой только что шла речь. Повторы — ближайшая."""
+    if ctx.conv.focus is not None and (focus := [r for r in found if r.id == ctx.conv.focus]):
+        return focus[0]
     if len({r.text.lower() for r in found}) == 1:
         return nearest_first(found, ctx.now)[0]
     return None
@@ -838,6 +855,16 @@ async def focused(ctx: Ctx, p: nlu.Parse, types: set[str] | None = None) -> list
     """«Её», «это» — запись, о которой только что шла речь; «последнюю» без контекста — последняя созданная."""
     if not p.ref or p.keywords:
         return []
+    if ctx.found:
+        rows = await ctx.db.execute(select(Record).where(ctx.owner.filter(), Record.deleted_at.is_(None),
+                                                         Record.id.in_(ctx.found)))
+        order = {rid: i for i, rid in enumerate(ctx.found)}
+        found = sorted([r for r in rows.scalars().all() if not types or r.type.value in types],
+                       key=lambda r: order[r.id])
+        if p.filter_type:
+            found = [r for r in found if r.type.value == p.filter_type] or found
+        if found:
+            return found
     record = await owned_record(ctx, ctx.conv.focus)
     if record and record.deleted_at is None and (not types or record.type.value in types):
         return [record]
@@ -853,8 +880,10 @@ async def focused(ctx: Ctx, p: nlu.Parse, types: set[str] | None = None) -> list
 
 
 async def answer_delete(ctx: Ctx, p: nlu.Parse) -> dict:
+    if p.bulk:
+        return await answer_bulk_delete(ctx, p)
     if near := await focused(ctx, p):
-        return await delete_one(ctx, near[0])
+        return await delete_one(ctx, near[0]) if len(near) == 1 else which_one(ctx, near, "delete")
     if not (p.keywords or p.date or p.filter_type):
         text, speech = ctx.say("clarify_generic")
         return reply("clarify", text, speech, awaiting=True, buttons=[CANCEL])
@@ -864,7 +893,7 @@ async def answer_delete(ctx: Ctx, p: nlu.Parse) -> dict:
     if not found:
         text, speech = ctx.say("found_none")
         return reply("found", text, speech, total=0)
-    if one := single(ctx, found):
+    if one := single(ctx, exact(found, p) or found):
         return await delete_one(ctx, one)
     return which_one(ctx, found, "delete")
 
@@ -874,7 +903,8 @@ async def answer_complete(ctx: Ctx, p: nlu.Parse) -> dict:
         text, speech = ctx.say("completed_meeting_no")
         return reply("clarify", text, speech, awaiting=True, buttons=[CANCEL])
     if near := await focused(ctx, p):
-        return await complete_one(ctx, near[0])
+        open_near = [r for r in near if r.status != TaskStatus.done] or near
+        return await complete_one(ctx, open_near[0]) if len(open_near) == 1 else which_one(ctx, open_near, "complete")
     if not (p.keywords or p.date or p.filter_type):
         text, speech = ctx.say("clarify_generic")
         return reply("clarify", text, speech, awaiting=True, buttons=[CANCEL])
@@ -890,6 +920,146 @@ async def answer_complete(ctx: Ctx, p: nlu.Parse) -> dict:
     if one := single(ctx, open_ones):
         return await complete_one(ctx, one)
     return which_one(ctx, open_ones, "complete")
+
+
+# ── Массовое удаление: «удали все дела на завтра», «убери всё за все дни» ──
+
+YES_RE = re.compile(r"^(?:(?:стив\w*|stevens?)[\s,]+)?(?:(?:да|ага|угу|давай|подтверждаю|конечно|точно|ок|окей)\b[^?]*"
+                    r"|(?:удаляй|удали)(?:\s+(?:все|всё|их))?[\s.!]*)$", re.I)
+NO_RE = re.compile(r"^(?:(?:стив\w*|stevens?)[\s,]+)?(?:нет|не\s+надо|не\s+удаляй|не\s+нужно|отмена|отмени|стоп|оставь)\b", re.I)
+
+
+def bulk_scope(ctx: Ctx, p: nlu.Parse) -> str:
+    if p.period:
+        return p.period.label
+    if p.date:
+        return nlu.describe_period(p.date, p.date, ctx.today).label
+    return "за все дни"
+
+
+async def answer_bulk_delete(ctx: Ctx, p: nlu.Parse) -> dict:
+    """Сначала показываем, что удалится, и спрашиваем; одну запись удаляем сразу (с «Вернуть»)."""
+    rows = await focused(ctx, p) if p.ref and ctx.found else []
+    if not rows:
+        conditions = []
+        if p.filter_type:
+            conditions.append(Record.type == TaskType(p.filter_type))
+        if p.period:
+            conditions += [Record.date >= p.period.start.isoformat(), Record.date <= p.period.end.isoformat()]
+        if p.date:
+            conditions.append(Record.date == p.date.isoformat())
+        rows = await owner_records(ctx, *conditions)
+        if p.keywords:
+            rows = by_keywords(rows, p)
+    forms = TYPE_FORMS[p.filter_type] if p.filter_type else None
+    scope = bulk_scope(ctx, p)
+    if not rows:
+        text, speech = ctx.say("bulk_none", {"scope": scope})
+        return reply("found", text, speech, total=0)
+    if len(rows) == 1:
+        return await delete_one(ctx, rows[0])
+    ordered = sorted(rows, key=lambda r: (r.date or "9999-99-99", r.time or "99:99", r.id))
+    ctx.conv.pending = Pending("bulk_delete", {"ids": [r.id for r in ordered], "forms": forms})
+    text, speech = ctx.say("bulk_delete_confirm", {"count": len(rows), "scope": scope}, count_forms=forms)
+    return reply("confirm", text, speech, records=[r.to_contract() for r in ordered[:FOUND_LIMIT]], total=len(rows),
+                 awaiting=True, buttons=[button_action("Да, удалить все", "confirm_yes"),
+                                         button_action("Нет", "cancel", style="secondary")])
+
+
+async def bulk_delete(ctx: Ctx, pending: Pending) -> dict:
+    ctx.conv.pending = None
+    rows = await owner_records(ctx, Record.id.in_(pending.draft["ids"]))
+    stamp = datetime.now(timezone.utc)
+    for record in rows:
+        record.deleted_at = stamp
+    await ctx.db.commit()
+    ctx.conv.bulk_deleted = [r.id for r in rows]
+    ctx.conv.focus = None
+    forms = pending.draft.get("forms")
+    text, speech = ctx.say("bulk_deleted", {"count": len(rows)}, count_forms=tuple(forms) if forms else None)
+    ordered = sorted(rows, key=lambda r: (r.date or "9999-99-99", r.time or "99:99", r.id))
+    return reply("deleted", text, speech, records=[r.to_contract(marks=["deleted"]) for r in ordered[:FOUND_LIMIT]],
+                 total=len(rows), buttons=[button_action("Вернуть все", "restore_all", style="secondary")])
+
+
+async def restore_all(ctx: Ctx) -> dict:
+    ids = ctx.conv.bulk_deleted
+    rows = await ctx.db.execute(select(Record).where(ctx.owner.filter(), Record.id.in_(ids or [-1]),
+                                                     Record.deleted_at.is_not(None)))
+    rows = list(rows.scalars().all())
+    for record in rows:
+        record.deleted_at = None
+    await ctx.db.commit()
+    ctx.conv.bulk_deleted = []
+    if not rows:
+        text, speech = ctx.say("found_none")
+        return reply("found", text, speech, total=0)
+    ordered = sorted(rows, key=lambda r: (r.date or "9999-99-99", r.time or "99:99", r.id))
+    text, speech = ctx.say("bulk_restored", {"count": len(rows)})
+    return reply("created", text, speech, records=[r.to_contract(marks=["new"]) for r in ordered[:FOUND_LIMIT]],
+                 total=len(rows))
+
+
+# ── Правка фразой: название, тип, заметка, слово в тексте ──
+
+def edit_changes(p: nlu.Parse) -> dict:
+    return {"text": p.new_text, "type": p.new_type, "note": p.note}
+
+
+async def answer_edit(ctx: Ctx, p: nlu.Parse) -> dict:
+    changes = edit_changes(p)
+    types = {p.filter_type} if p.filter_type else None
+    found = await focused(ctx, p, types)
+    if not found and (p.keywords or p.date):
+        found = await find(ctx, nlu.Parse(keywords=p.keywords, required=p.required, filter_type=p.filter_type,
+                                           date=p.date))
+        if p.time:
+            found = [r for r in found if r.time == p.time] or found
+        found = exact(found, p) or [r for r in found if is_future(r, ctx.now) or not r.date] or found
+    if not found:
+        if p.ref:
+            text, speech = ctx.say("clarify_generic")
+            return reply("clarify", text, speech, awaiting=True, buttons=[CANCEL])
+        text, speech = ctx.say("found_none")
+        return reply("found", text, speech, total=0)
+    if one := single(ctx, found):
+        return await edit_one(ctx, one, changes)
+    answer = which_one(ctx, found, "edit")
+    ctx.conv.pending = Pending("edit", changes)
+    return answer
+
+
+async def edit_one(ctx: Ctx, record: Record, changes: dict) -> dict:
+    ctx.conv.pending = None
+    ctx.conv.focus = record.id
+    template = "fixed"
+    if changes.get("replace"):
+        record.text = (replace_words(record.text, *changes["replace"]) or record.text)[:300]
+    if changes.get("text"):
+        record.text = changes["text"][:300]
+        template = "renamed"
+    if changes.get("note"):
+        record.text = f"{record.text} — {changes['note']}"[:300]
+        template = "noted"
+    new_type = changes.get("type")
+    if new_type and record.type.value != new_type:
+        record.type = TaskType(new_type)
+        record.status = None if new_type == "meeting" else (record.status or TaskStatus.open)
+        if new_type != "task" and record.date_kind != DateKind.exact:
+            record.date_kind = DateKind.exact
+        template = "retyped"
+    await ctx.db.commit()
+    data = record.to_contract(marks=["new"])
+    values, speech_values = ctx.record_values(data)
+    values["type"] = TYPE_WORD[record.type.value]
+    text, speech = ctx.say(template, values, speech_values)
+    # Встрече и напоминанию нужны день и время — спрашиваем, как при переносе
+    if new_type and new_type != "task" and not (record.date and record.time):
+        day = parse_date(record.date)
+        ask = await (ask_move_time(ctx, record, day) if day and day >= ctx.today else ask_move_day(ctx, record))
+        ask["text"] = f"{text} {ask['text']}"
+        return ask
+    return reply("updated", text, speech, records=[data])
 
 
 # ── Перенос фразой: «перенеси её на завтра», «сдвинь встречу с Иваном на час позже» ──
@@ -1202,28 +1372,35 @@ async def answer_move_all_reply(ctx: Ctx, pending: Pending, raw: str) -> dict | 
 
 FIX_RE = re.compile(
     r"^(?:(?:стив\w*|stevens?|steve)[\s,]+)?(?:нет[\s,]+)?"
-    r"(?:(?:исправь|исправить|поправь|замени)\s+(?P<a>.+?)\s+на\s+(?P<b>.+?)|не\s+(?P<c>.+?)[\s,—-]+а\s+(?P<d>.+?))"
+    r"(?:(?:исправь|исправить|поправь|замени|поменяй|смени|измени)\s+(?P<a>.+?)\s+на\s+(?P<b>.+?)|не\s+(?P<c>.+?)[\s,—-]+а\s+(?P<d>.+?))"
     r"[\s.!?]*$",
     re.I,
 )
 QUOTES_RE = re.compile(r"[«»\"„“”']")
 
 
-def fix_words(raw: str) -> tuple[str, str] | None:
-    """Что на что исправить, если фраза — поправка."""
+def fix_words(raw: str, now: datetime) -> tuple[str, str, bool] | None:
+    """Что на что исправить, если фраза — поправка; третье — сказан глагол («поменяй Ивана на Петра»)."""
     m = FIX_RE.match(raw.strip())
     if not m:
         return None
     wrong, right = (m["a"], m["b"]) if m["a"] else (m["c"], m["d"])
     wrong = QUOTES_RE.sub("", wrong).strip(" ,.!?—-")
     right = QUOTES_RE.sub("", right).strip(" ,.!?—-")
-    return (wrong, right) if wrong and right else None
+    # «поменяй её на завтра», «поменяй встречу на задачу» — это перенос и смена типа, не замена слов
+    if nlu.REF_RE.fullmatch(wrong) or nlu.RETYPE_RE.match(raw.strip()) or nlu.parse_edit(raw.strip(), now):
+        return None
+    if m["a"] and nlu._has_when("на " + right, now):
+        return None
+    return (wrong, right, bool(m["a"])) if wrong and right else None
 
 
 def replace_words(text: str, wrong: str, right: str) -> str | None:
     """Последнее вхождение целыми словами, без учёта регистра и ё/е. Нет вхождения — None."""
     flex = re.sub("[её]", "[её]", r"\s+".join(re.escape(w) for w in wrong.split()))
     hits = list(re.finditer(rf"(?<![\w])({flex})(?![\w])", text, re.I))
+    if not hits and len(wrong.split()) == 1 and len(right.split()) == 1:
+        return replace_word_form(text, wrong, right)
     if not hits:
         return None
     hit = hits[-1]
@@ -1232,11 +1409,35 @@ def replace_words(text: str, wrong: str, right: str) -> str | None:
     return text[:hit.start()] + right + text[hit.end():]
 
 
-async def answer_fix(ctx: Ctx, wrong: str, right: str) -> dict | None:
+def replace_word_form(text: str, wrong: str, right: str) -> str | None:
+    """«Поменяй Ивана на Петра» в «Созвон с Иваном» → «Созвон с Петром»: то же слово в другом падеже."""
+    morph = nlu._MORPH
+    if morph is None:
+        return None
+    key = nlu.word_key(wrong)
+    hits = [m for m in re.finditer(r"[А-Яа-яЁё]+", text) if nlu.word_key(m.group()) == key]
+    if not hits or len(key) < 3:
+        return None
+    hit = hits[-1]
+    form = morph.parse(hit.group())[0]
+    if key.startswith("@"):
+        form = next((f for f in morph.parse(hit.group()) if "Name" in f.tag), form)
+    grammemes = {g for g in (form.tag.case, form.tag.number) if g}
+    new = right
+    for parsed in morph.parse(right)[:3]:
+        if (inflected := parsed.inflect(grammemes)) is not None:
+            new = inflected.word
+            break
+    if hit.group()[:1].isupper() or right[:1].isupper():
+        new = new[:1].upper() + new[1:]
+    return text[:hit.start()] + new + text[hit.end():]
+
+
+async def answer_fix(ctx: Ctx, wrong: str, right: str, verb: bool = False) -> dict | None:
     """Чиним текст: сначала недописанная запись (Стивенс переспрашивает), потом та, о которой шла речь,
     потом последние созданные. Слова «и вам» нигде нет — это не поправка, разбираем фразу как обычно."""
     pending = ctx.conv.pending
-    if pending and pending.draft.get("text"):
+    if pending and pending.kind not in ("edit", "bulk_delete", "move", "move_when") and pending.draft.get("text"):
         fixed = replace_words(pending.draft["text"], wrong, right)
         if fixed:
             answer = await process_draft(ctx, {**pending.draft, "text": fixed})
@@ -1246,8 +1447,13 @@ async def answer_fix(ctx: Ctx, wrong: str, right: str) -> dict | None:
                 answer["text"] = f"{head} {answer['text']}"
             return answer
     candidates: list[Record] = []
+    if ctx.found:
+        found = [r for r in await owner_records(ctx, Record.id.in_(ctx.found)) if replace_words(r.text, wrong, right)]
+        if len(found) > 1:
+            return fix_which(ctx, found, wrong, right)
+        candidates += found
     if focus := await owned_record(ctx, ctx.conv.focus):
-        if focus.deleted_at is None:
+        if focus.deleted_at is None and focus not in candidates:
             candidates.append(focus)
     rows = await ctx.db.execute(select(Record).where(ctx.owner.filter(), Record.deleted_at.is_(None),
                                                      Record.created_at.is_not(None))
@@ -1265,7 +1471,21 @@ async def answer_fix(ctx: Ctx, wrong: str, right: str) -> dict | None:
         values, speech_values = ctx.record_values(data)
         text, speech = ctx.say("fixed", values, speech_values)
         return reply("updated", text, speech, records=[data])
+    if verb:
+        # «Поменяй Ивана на Петра» — ищем по всем записям, впереди важнее
+        found = [r for r in await owner_records(ctx) if replace_words(r.text, wrong, right)]
+        found = [r for r in found if is_future(r, ctx.now) or not r.date] or found
+        if one := single(ctx, found):
+            return await edit_one(ctx, one, {"replace": [wrong, right]})
+        if found:
+            return fix_which(ctx, found, wrong, right)
     return None
+
+
+def fix_which(ctx: Ctx, found: list[Record], wrong: str, right: str) -> dict:
+    answer = which_one(ctx, found, "edit")
+    ctx.conv.pending = Pending("edit", {"replace": [wrong, right]})
+    return answer
 
 
 # ── Кнопки-действия (раздел 6, 15.3) ──────────────────
@@ -1286,6 +1506,14 @@ async def handle_action(ctx: Ctx, action_id: str, record_id: int | None) -> dict
         return reply("cancelled", text, speech)
     if action_id == "briefing":
         return await answer_briefing(ctx)
+    if action_id == "confirm_yes" and pending and pending.kind == "bulk_delete" and "d2" in ctx.features:
+        return await bulk_delete(ctx, pending)
+    if action_id == "restore_all" and "d2" in ctx.features:
+        return await restore_all(ctx)
+    if action_id == "edit" and pending and pending.kind == "edit":
+        record = await owned_record(ctx, record_id)
+        if record and record.deleted_at is None:
+            return await edit_one(ctx, record, pending.draft)
     if action_id == "confirm_yes" and pending and pending.kind == "multi":
         return await save_many(ctx, pending.draft["drafts"])
     if action_id == "confirm_yes" and pending and pending.kind == "confirm":
@@ -1335,7 +1563,7 @@ async def handle_action(ctx: Ctx, action_id: str, record_id: int | None) -> dict
 # ── Эндпоинт ──────────────────────────────────────────
 
 def is_new_request(p: nlu.Parse, raw: str) -> bool:
-    if p.intent in ("list", "search", "help", "off_topic", "delete", "complete", "thanks", "move"):
+    if p.intent in ("list", "search", "help", "off_topic", "delete", "complete", "thanks", "move", "edit"):
         return True
     if p.intent == "create":
         return bool(nlu.CREATE_VERB_RE.search(raw.strip().lower()) or (p.text and len(nlu.keywords(p.text)) >= 2))
@@ -1362,13 +1590,22 @@ async def chat_endpoint(
 
 
 async def respond(ctx: Ctx, payload: ChatRequest) -> dict:
+    ctx.found, ctx.conv.found = ctx.conv.found, []
     if payload.action:
         answer = await handle_action(ctx, payload.action.id, payload.action.record_id)
         if answer:
             return answer
 
     raw = payload.text.strip()
-    if (fix := fix_words(raw)) and (answer := await answer_fix(ctx, *fix)):
+    pending = ctx.conv.pending
+    if pending and pending.kind == "bulk_delete" and "d2" in ctx.features:
+        if NO_RE.match(raw):
+            ctx.conv.pending = None
+            text, speech = ctx.say("cancelled")
+            return reply("cancelled", text, speech)
+        if YES_RE.match(raw):
+            return await bulk_delete(ctx, pending)
+    if (fix := fix_words(raw, ctx.now)) and (answer := await answer_fix(ctx, *fix)):
         return answer
     p = nlu.parse(raw, ctx.now)
 
@@ -1427,6 +1664,8 @@ async def respond(ctx: Ctx, payload: ChatRequest) -> dict:
         return await answer_complete(ctx, p)
     if p.intent == "move":
         return await answer_move(ctx, p)
+    if p.intent == "edit":
+        return await answer_edit(ctx, p)
     if p.intent == "help":
         return examples("help", "help", ctx, HELP_EXAMPLES)
     if p.intent == "thanks":

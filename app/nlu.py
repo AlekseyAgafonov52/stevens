@@ -51,6 +51,8 @@ STOPWORDS = {
     "сегодня", "завтра", "вчера", "послезавтра",
     "последнюю", "последний", "последнее", "последняя", "предыдущую", "эта", "перенеси", "перенести", "передвинь",
     "сдвинь", "подвинь", "поменяй", "измени", "время", "дату", "позже", "раньше", "выполненной", "готово",
+    "убери", "убрать", "сотри", "стереть", "очисти", "удалите", "всех", "дни", "дней", "день", "дел", "время",
+    "записей", "ней", "нему", "неё", "него", "этой", "этому", "из", "переименуй", "назови", "сделай",
 }
 
 
@@ -64,7 +66,7 @@ class Period:
 
 @dataclass
 class Parse:
-    intent: str = "unknown"  # create list search person help thanks off_topic delete complete free move unknown
+    intent: str = "unknown"  # create list search person help thanks off_topic delete complete free move edit unknown
     type: str | None = None
     text: str | None = None
     date: date | None = None
@@ -85,6 +87,10 @@ class Parse:
     duration: int = 60          # free: сколько минут нужно
     subject: str | None = None  # free: «Встреча с Ваней» для кнопок со временем
     person: str | None = None   # person: «Иваном» — с кем досье, в творительном падеже
+    bulk: bool = False          # delete: «удали все дела на завтра» — много записей, с подтверждением
+    new_text: str | None = None  # edit: «переименуй её в созвон с Иваном»
+    new_type: str | None = None  # edit: «сделай её напоминанием»
+    note: str | None = None      # edit: «добавь к встрече с Машей заметку взять ноутбук»
     all: bool = False           # move: «перенеси все встречи» — все записи дня source
     source: date | None = None  # move all: с какого дня переносим (по умолчанию сегодня)
 
@@ -522,15 +528,29 @@ def person_request(text: str) -> tuple[list[str], str] | None:
 
 THANKS_RE = re.compile(r"\b(спасибо|благодарю|благодарствую|спс)\b[,!.\s]*(стивенс|stevens)?[,!.]*", I)
 HELP_RE = re.compile(r"(что\s+ты\s+умеешь|что\s+умеешь|чем\s+(?:ты\s+)?(?:можешь\s+)?помочь|^помощь|^справка|как\s+(?:тобой|этим)\s+пользоваться)", I)
-DELETE_RE = re.compile(r"^(?:пожалуйста\s+)?(удали(?:те)?|удалить|убери|сотри)\b", I)
+DELETE_RE = re.compile(r"^(?:пожалуйста\s+)?(удали(?:те)?|удалить|убери(?:те)?|убрать|сотри|стереть|очисти(?:ть)?)\b", I)
+# «Удали все дела на завтра», «убери всё за все дни», «очисти пятницу»
+BULK_RE = re.compile(r"(\bвс[её]\b|\bвсех\b|^(?:пожалуйста\s+)?очисти)", I)
+ALL_DAYS_RE = re.compile(r"\b(?:за\s+)?(?:все\s+дни|вс[её]\s+время|всю\s+историю)\b", I)
 COMPLETE_RE = re.compile(rf"(\bотметь\b.*\bвыполнен|\bя\s+(?:уже\s+)?(?:сделал|сделала|выполнил|выполнила|закончил|закончила)\b|^(?:сделал|сделала|выполнил|выполнила)\b|\bотметь\b.*\bсделан)", I)
 SEARCH_RE = re.compile(rf"(\bнайди\b|\bнайти\b|\bпоищи\b|\bищи\b|^когда\b(?!-)|\bкогда\s+(?:у\s+меня\s+)?(?:был|была|было|будет)\b|\bставил)", I)
 LIST_RE = re.compile(rf"(что\s+у\s+меня|какие\s+(?:у\s+меня\s+)?(?:планы|дела|задачи|встречи|напоминания)|^покажи|что\s+(?:я\s+)?запланировано|есть\s+ли\s+у\s+меня|что\s+(?:было|будет)|мо[её]\s+расписание|\bпланы\s+на\b|чем\s+я\s+занят)", I)
 OFFTOPIC_RE = re.compile(r"(погод|анекдот|шутк|курс\s+(?:доллар|евро|валют)|новост|рецепт|кто\s+так|переведи|столиц|сколько\s+будет|расскажи\s+(?:о|про)\s+себе|как\s+дела|фильм|музык|игр[ау]|стих)", I)
 CREATE_VERB_RE = re.compile(r"^(?:пожалуйста\s+)?(напомни(?:те)?(?:\s+мне)?|поставь|запиши|добавь|создай|запланируй|назначь|внеси|заведи)\b", I)
 DONE_RE = re.compile(r"^(?:готово|сделано|выполнено|сделал|сделала)[\s.!]*$", I)
-REF_RE = re.compile(rf"\b(её|ее|его|это|эту|этот|эта|последн\w*|предыдущ\w*)\b", I)
+REF_RE = re.compile(rf"\b(её|ее|его|это|эту|этот|эта|ней|нему|неё|него|этой|этому|последн\w*|предыдущ\w*)\b", I)
 MOVE_RE = re.compile(r"^(?:перенеси(?:те)?|перенести|передвинь|сдвинь|подвинь|поменяй|измени)\b", I)
+# Правка записи: название, тип, заметка
+RENAME_RE = re.compile(r"^(?:переименуй(?:те)?|переименовать|переназови|назови|(?:поменяй|измени|смени)\s+название)\b\s*(?P<rest>.*)$", I)
+RETYPE_RE = re.compile(
+    r"^(?:сделай|сделать|преврати|переделай|поменяй|измени|смени)\s+(?P<target>.+?)\s+(?:тип\s+)?(?:(?:в|на)\s+)?"
+    r"(?P<type>задач(?:ей|у|а)|напоминани(?:ем|е)|встреч(?:ей|у|а))[\s.!?]*$", I)
+NOTE_WORDS = r"(?:заметку|примечание|комментарий|пометку|описание)"
+NOTE_RE = re.compile(
+    rf"^(?:добавь|допиши|припиши|добавить|дописать)\s+(?:(?:к|ко|в|во)\s+(?P<target>.+?)\s+{NOTE_WORDS}[\s:,—-]+(?P<note>.+)"
+    rf"|{NOTE_WORDS}\s+(?:(?:к|ко|в|во)\s+(?P<ref>ней|нему|не[её]|нему|этой\s+\w+|этому\s+\w+)[\s:,—-]+|(?:(?:к|ко|в|во)\s+(?P<target2>[^:—]+?))?\s*[:—]\s*)(?P<note2>.+))$",
+    I)
+TYPE_BY_STEM = {"задач": "task", "напомин": "reminder", "встреч": "meeting"}
 SHIFT_RE = re.compile(r"\bна\s+(полчаса|(\d+)?\s*час\w*|(\d+)\s*минут\w*)\s+(позже|раньше)\b", I)
 ALL_RE = re.compile(r"\b(?:вс[её]|всех)\b", I)
 SOURCE_RE = re.compile(
@@ -636,13 +656,29 @@ def parse(raw: str, now: datetime) -> Parse:
         result.intent = "help"
         return result
 
+    # «Переименуй её в созвон», «сделай встречу с Иваном задачей», «добавь к встрече с Машей заметку …»
+    if edit := parse_edit(text, now):
+        return edit
+
     if DELETE_RE.search(lower) or COMPLETE_RE.search(lower) or DONE_RE.search(lower):
         result.intent = "delete" if DELETE_RE.search(lower) else "complete"
         result.filter_type = _filter_type(lower)
-        rest = _cut(text, info.spans + time_spans)
+        if re.match(r"^(?:пожалуйста\s+)?очисти(?:ть)?\s+(?!на\b|в\b|во\b)", lower) and not info.date:
+            # «Очисти пятницу» — как «на пятницу»
+            text = re.sub(r"^((?:пожалуйста\s+)?очисти(?:ть)?)\s+", r"\1 на ", text, flags=I)
+            time, ambiguous, time_spans, info = parse_when(text, now)
+        spans = info.spans + time_spans
+        all_days = ALL_DAYS_RE.search(text)
+        if all_days:
+            spans.append(all_days.span())
+        rest = _cut(text, spans)
         result.keywords, result.required = search_keywords(rest, result.filter_type)
-        result.ref = bool(REF_RE.search(lower)) or bool(DONE_RE.search(lower))
-        result.date = info.date
+        result.ref = bool(REF_RE.search(rest)) or bool(DONE_RE.search(lower))
+        result.bulk = result.intent == "delete" and bool(BULK_RE.search(lower))
+        if not all_days:
+            result.date = info.date
+            if result.bulk and info.period and not info.date:
+                result.period = info.period
         result.time = time if not ambiguous else None
         return result
 
@@ -892,6 +928,57 @@ def parse_many(raw: str, now: datetime) -> list[Parse] | None:
         if not p.date and result[-1].date:
             p.date, p.date_kind = result[-1].date, "exact"
         result.append(p)
+    return result
+
+
+def _target(text: str, now: datetime) -> Parse:
+    """О какой записи речь в правке: ключи, тип, день, «её»."""
+    time, ambiguous, time_spans, info = parse_when(text, now)
+    target = Parse()
+    target.filter_type = _filter_type(text)
+    target.keywords, target.required = search_keywords(_cut(text, info.spans + time_spans), target.filter_type)
+    target.ref = bool(REF_RE.search(text)) or not (target.keywords or info.date)
+    target.date = info.date
+    target.time = time if not ambiguous else None
+    return target
+
+
+def _has_when(text: str, now: datetime) -> bool:
+    time, _, _, info = parse_when(text, now)
+    return bool(time or info.date or info.period)
+
+
+def _new_name(text: str) -> str:
+    return capitalize(re.sub(r"[«»\"„“”']", "", text).strip(" ,.!?:—-"))
+
+
+def parse_edit(text: str, now: datetime) -> Parse | None:
+    """Правка записи. Не правка — None."""
+    result: Parse | None = None
+    if m := RENAME_RE.match(text):
+        rest = m["rest"].strip()
+        # «переименуй встречу в субботу в созвон» — делим по тому «в», после которого не дата
+        for split in re.finditer(r"(?:^|\s)(?:в|на|как)\s+", rest, I):
+            new = rest[split.end():]
+            if new.strip() and not _has_when(rest[split.start():], now):
+                result = _target(rest[:split.start()], now)
+                result.new_text = _new_name(new)
+                break
+        else:
+            ref = re.match(r"^(её|ее|его|это|эту|этот)\s+(.+)$", rest, I)
+            if not ref:
+                return None
+            result = _target(ref[1], now)
+            result.new_text = _new_name(ref[2])
+    elif m := RETYPE_RE.match(text):
+        result = _target(re.sub(r"^(?:из|с)\s+", "", m["target"], flags=I), now)
+        result.new_type = next(v for k, v in TYPE_BY_STEM.items() if m["type"].lower().startswith(k))
+    elif m := NOTE_RE.match(text):
+        result = _target(m["target"] or m["ref"] or m["target2"] or "", now)
+        result.note = (m["note"] or m["note2"]).strip(" ,.!?:—-")
+    if not result or not (result.new_text or result.new_type or result.note):
+        return None
+    result.intent = "edit"
     return result
 
 
