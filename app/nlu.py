@@ -800,7 +800,7 @@ def parse(raw: str, now: datetime) -> Parse:
     is_meeting = bool(re.search(MEETING_WORD_RE, lower))
     has_verb = bool(CREATE_VERB_RE.search(lower))
     has_need = bool(re.search(r"\b(нужно|надо|необходимо|не\s+забыть|должен|должна|должны|пора)\b", lower))
-    is_task_word = bool(re.search(r"^(?:поставь|запиши|добавь|создай)\s+задач", lower))
+    is_task_word = bool(re.search(r"^(?:поставь|запиши|добавь|создай)\s+задач|^(?:идея|заметка|мысль)\s*[:—-]", lower))
     if not (has_verb or is_meeting or has_need or is_task_word or ((info.date or time) and len(keywords(_cut(text, info.spans + time_spans))) >= 1)):
         return result  # unknown
 
@@ -814,7 +814,8 @@ def parse(raw: str, now: datetime) -> Parse:
 
     body = _cut(text, info.spans + time_spans)
     body = re.sub(r"^\s*(?:пожалуйста\s+)?(?:напомни(?:те)?|поставь|запиши|добавь|создай|запланируй|назначь|внеси|заведи)(?:\s+мне)?\b", " ", body, flags=I)
-    body = re.sub(r"^\s*(?:новую\s+|новое\s+)?(?:задачу|задача|напоминание)\b", " ", body, flags=I)
+    body = re.sub(r"^\s*(?:новую\s+|новое\s+|новая\s+)?(?:задачу|задача|напоминание|идею|идея|мысль|заметку|заметка|в\s+заметки)\b"
+                  r"(?:\s*[:—-]|\s+(?:что|о\s+том,?\s+что)\b)?", " ", body, flags=I)
     body = re.sub(r"\b(?:у\s+меня|мне|нужно|надо|необходимо|не\s+забыть|пожалуйста)\b", " ", body, flags=I)
     body = strip_fillers(body)
     body = re.sub(r"\b(?:утром|вечером|днём|днем)\b", " ", body, flags=I)
