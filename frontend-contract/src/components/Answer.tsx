@@ -2,7 +2,7 @@
 import { useState } from 'react';
 import type { RecordItem } from '../api/types';
 import { T, fill } from '../content/texts';
-import { dayTitle, groupByDay } from '../lib/dates';
+import { dayTitle, groupByDay, groupByTense } from '../lib/dates';
 import { pressButton } from '../state/chat';
 import { useApp, type AnswerMessage } from '../state/store';
 import { AnswerExtraButtons, RecordCardOverride, cardEditHandler } from '../extensions/points';
@@ -18,7 +18,8 @@ export function Answer({ message, isLast }: Props) {
   const { response } = message;
   const waiting = useApp((s) => s.waiting);
   const editing = useApp((s) => s.editing);
-  const paging = response.kind === 'list' ? PAGE.list : response.kind === 'found' ? PAGE.found : null;
+  const paging =
+    response.kind === 'list' ? PAGE.list : response.kind === 'found' || response.kind === 'person' ? PAGE.found : null;
   const [shown, setShown] = useState<number>(paging ? paging.first : Infinity);
   const fresh = !message.restored;
 
@@ -62,7 +63,14 @@ export function Answer({ message, isLast }: Props) {
                   {group.records.map((r, i) => card(r, false, gi * 1000 + i))}
                 </div>
               ))
-            : visible.map((r, i) => card(r, true, i))}
+            : response.kind === 'person'
+              ? groupByTense(visible).map((group, gi) => (
+                  <div className="day-group" key={gi}>
+                    <div className="day-title">{group.ahead ? T.group_ahead : T.group_past}</div>
+                    {group.records.map((r, i) => card(r, true, gi * 1000 + i))}
+                  </div>
+                ))
+              : visible.map((r, i) => card(r, true, i))}
         </div>
       )}
 

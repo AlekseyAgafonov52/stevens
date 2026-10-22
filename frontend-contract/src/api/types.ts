@@ -51,7 +51,9 @@ export type ResponseKind =
   | 'deleted'
   | 'completed'
   // резерв: Д1 (изменение фразой) не делаем, бэк его не присылает; если придёт — рисовать по общим полям
-  | 'updated';
+  | 'updated'
+  // досье на человека: «что у меня с Иваном?» — записи сначала впереди, потом прошлые
+  | 'person';
 
 export interface ChatResponse {
   message_id: string;

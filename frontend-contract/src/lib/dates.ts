@@ -87,6 +87,20 @@ export function isPast(record: RecordItem, at: Date = now()): boolean {
   return record.date < today;
 }
 
+export type TenseGroup = { ahead: boolean; records: RecordItem[] };
+
+/** Досье на человека: «Впереди» и «Было», порядок — как прислал бэк */
+export function groupByTense(records: RecordItem[], at: Date = now()): TenseGroup[] {
+  const groups: TenseGroup[] = [];
+  for (const record of records) {
+    const ahead = !isPast(record, at) && !(!record.date && record.status === 'done');
+    const last = groups[groups.length - 1];
+    if (last && last.ahead === ahead) last.records.push(record);
+    else groups.push({ ahead, records: [record] });
+  }
+  return groups;
+}
+
 export type DayGroup = { date: string | null; records: RecordItem[] };
 
 /** Группы list по дням: подряд идущие с одной датой; без срока — одной группой в конце */

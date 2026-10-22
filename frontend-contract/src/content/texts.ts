@@ -139,6 +139,9 @@ export const T = {
   label_draft: 'Не сохранено',
   label_conflict: 'В то же время',
   group_no_date: 'Без срока',
+  // Досье на человека: «что у меня с Иваном?»
+  group_ahead: 'Впереди',
+  group_past: 'Было',
   type_task: 'Задача',
   type_reminder: 'Напоминание',
   type_meeting: 'Встреча',

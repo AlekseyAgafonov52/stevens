@@ -33,7 +33,7 @@ EXAMPLES = [
     "Что у меня на следующей неделе?",
     "Найди задачу про презентацию",
 ]
-HELP_EXAMPLES = EXAMPLES + ["Поставь встречу с Иваном завтра"]
+HELP_EXAMPLES = EXAMPLES + ["Поставь встречу с Иваном завтра", "Что у меня с Иваном?"]
 FOUND_LIMIT = 50
 WHICH_LIMIT = 5
 
@@ -675,6 +675,48 @@ async def answer_search(ctx: Ctx, p: nlu.Parse) -> dict:
     return reply("found", text, speech, records=records, total=len(found))
 
 
+def is_ahead(record: Record, now: datetime) -> bool:
+    """Впереди: будущее по дате или открытое дело без даты."""
+    return is_future(record, now) or (not record.date and record.status != TaskStatus.done)
+
+
+async def answer_person(ctx: Ctx, p: nlu.Parse) -> dict:
+    """Досье: все встречи и дела с человеком — сначала впереди, потом прошлые."""
+    conditions = [Record.type == TaskType(p.filter_type)] if p.filter_type else []
+    if p.period:
+        conditions += [Record.date >= p.period.start.isoformat(), Record.date <= p.period.end.isoformat()]
+    rows = [r for r in await owner_records(ctx, *conditions)
+            if any(nlu.record_has(record_words(r), key) for key in p.keywords)]
+    ahead = sorted([r for r in rows if is_ahead(r, ctx.now)], key=moment)
+    past = sorted([r for r in rows if not is_ahead(r, ctx.now)], key=moment, reverse=True)
+    values = {"name": p.person, "count": len(rows)}
+    meet = button_text("Найти время для встречи", f"Найди время встретиться с {p.person}")
+    if p.period:
+        values["period"] = p.period.label
+        speech_values = {"period": p.period.label_speech}
+        if not rows:
+            text, speech = ctx.say("person_period_none", values, speech_values)
+            return reply("person", text, speech, total=0, buttons=[meet])
+        text, speech = ctx.say("person_period", values, speech_values,
+                               count_forms=TYPE_FORMS[p.filter_type] if p.filter_type else None)
+        ahead, past = sorted(rows, key=moment), []  # за период — просто по порядку, как в списке
+    elif not rows:
+        text, speech = ctx.say("person_none", values)
+        return reply("person", text, speech, total=0, buttons=[meet])
+    else:
+        first = ahead[0] if ahead and ahead[0].date else past[0] if past else ahead[0]
+        rec_values, rec_speech = ctx.record_values(first.to_contract())
+        forms = TYPE_FORMS[p.filter_type] if p.filter_type else ("дело", "дела", "дел")
+        values.update(rec_values, ahead=plural(len(ahead), *forms))
+        text, speech = ctx.say("person_ahead" if first in ahead else "person_past", values,
+                               {"when": rec_speech["when"]})
+    ordered = ahead + past
+    ctx.conv.focus = ordered[0].id  # «перенеси её на завтра» — про ближайшее
+    records = [r.to_contract() for r in ordered[:FOUND_LIMIT]]
+    return reply("person", text, speech, records=records, total=len(rows),
+                 buttons=[meet] if not ahead else [])
+
+
 def which_one(ctx: Ctx, candidates: list[Record], action_id: str) -> dict:
     ctx.conv.pending = None
     chosen = nearest_first(candidates, ctx.now)[:WHICH_LIMIT]
@@ -982,6 +1024,8 @@ async def respond(ctx: Ctx, payload: ChatRequest) -> dict:
         return await answer_list(ctx, p)
     if p.intent == "search":
         return await answer_search(ctx, p)
+    if p.intent == "person":
+        return await answer_person(ctx, p)
     if p.intent == "delete":
         return await answer_delete(ctx, p)
     if p.intent == "complete":

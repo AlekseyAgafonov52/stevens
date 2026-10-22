@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { dayTitle, groupByDay, isPast, metaDate, metaParts, pluralKey, shortDate } from './dates';
+import { dayTitle, groupByDay, groupByTense, isPast, metaDate, metaParts, pluralKey, shortDate } from './dates';
 import type { RecordItem } from '../api/types';
 
 const today = new Date(2026, 9, 21, 10, 0);
@@ -15,6 +15,14 @@ describe('dates', () => {
     expect(metaDate('2026-10-22', today)).toBe('завтра');
     expect(dayTitle('2026-10-21', today)).toBe('Сегодня, ср 21 окт');
     expect(dayTitle('2026-10-23', today)).toBe('Пт, 23 окт');
+  });
+  it('splits a person dossier into ahead and past', () => {
+    const groups = groupByTense(
+      [rec({ id: 1 }), rec({ id: 2, date: null, date_kind: 'none' }), rec({ id: 3, date: '2026-10-20' }),
+        rec({ id: 4, date: null, date_kind: 'none', status: 'done' })],
+      today,
+    );
+    expect(groups.map((g) => [g.ahead, g.records.map((r) => r.id)])).toEqual([[true, [1, 2]], [false, [3, 4]]]);
   });
   it('builds meta parts', () => {
     expect(metaParts(rec({ time: '08:00' }), true, today).map((p) => p.text)).toEqual(['завтра', '08:00']);
