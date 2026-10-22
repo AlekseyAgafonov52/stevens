@@ -1,4 +1,5 @@
 """Stevens API по контракту v1.4 с допами (d2, d3, d10)."""
+import asyncio
 from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
@@ -10,7 +11,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app import models  # noqa: F401 — таблицы для create_all
 from app.database import Base, engine, get_db
 from app.owner import CLIENT_ID_RE, ensure_sandbox, seed_sandbox
+from app import push
 from app.routers import auth, chat, records
+from app.routers import push as push_router
 
 
 @asynccontextmanager
@@ -18,7 +21,9 @@ async def lifespan(app: FastAPI):
     async with engine.begin() as conn:  # type: ignore
         await conn.run_sync(Base.metadata.create_all)
     print("✅ База данных готова.")
+    pusher = asyncio.create_task(push.loop())
     yield
+    pusher.cancel()
     await engine.dispose()
 
 
@@ -47,6 +52,7 @@ async def validation_error(request: Request, exc: RequestValidationError):
 app.include_router(auth.router)
 app.include_router(chat.router)
 app.include_router(records.router)
+app.include_router(push_router.router)
 
 
 @app.get("/api/health")

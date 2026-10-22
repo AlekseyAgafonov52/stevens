@@ -1,10 +1,18 @@
 /**
- * Уведомления о напоминаниях и встречах, пока вкладка открыта.
+ * Уведомления о напоминаниях и встречах.
  * После первого созданного напоминания под ответом — плашка «Прислать уведомление в 10:00?».
- * Напоминание приходит в своё время, встреча — за 10 минут. Тихий звук — двумя нотами.
+ * Напоминание приходит в своё время, встреча — за 10 минут.
+ * Как в мессенджере: человек не на вкладке — пуш (с сервера через public/sw.js, а если вкладка
+ * открыта в фоне — ещё и отсюда, с тем же tag, браузер склеит), на вкладке — пуша нет,
+ * только сообщение Стивенса в ленте и тихий звук двумя нотами.
+ * Вернулся на вкладку или открыл по пушу — в ленте сообщение Стивенса о том, что подошло без него.
+ * Звонят только записи, заведённые человеком: у демо-записей песочницы нет created_at.
  */
 import { api } from '../api';
 import type { RecordItem } from '../api/types';
+import { T } from '../content/texts';
+import { timezone } from '../lib/clock';
+import { uuid } from '../lib/uuid';
 import { storage } from '../storage';
 import { onAssistantResponse, onRecordsChanged } from './events';
 import { createStore, lastAnswerId, store } from './store';
@@ -13,6 +21,8 @@ export const notifyStore = createStore<{ offer: { messageId: string; time: strin
 
 const MEETING_EARLY_MIN = 10;
 const RESCAN_MS = 30 * 60 * 1000;
+/** Насколько назад смотреть пропущенное при открытии */
+const MISSED_MAX_MS = 12 * 60 * 60 * 1000;
 const timers = new Map<string, ReturnType<typeof setTimeout>>();
 
 const supported = () => typeof window !== 'undefined' && 'Notification' in window;
@@ -23,7 +33,8 @@ function isoDay(d: Date): string {
 }
 
 function fireAt(record: RecordItem): number | null {
-  if (!record.date || !record.time || record.status === 'done' || record.type === 'task') return null;
+  if (!record.date || !record.time || !record.created_at || record.status === 'done' || record.type === 'task') return null;
+  if (record.marks.includes('deleted')) return null;
   const [h, m] = record.time.split(':').map(Number);
   const [y, mo, d] = record.date.split('-').map(Number);
   const at = new Date(y, mo - 1, d, h, m).getTime();
@@ -51,23 +62,109 @@ function chime(): void {
   }
 }
 
+const keyOf = (record: RecordItem) => `${record.id}@${record.date}T${record.time}`;
+
+/** Системное уведомление через service worker: так оно не пропадает и склеивается с пушем */
+async function systemNotify(body: string, tag: string): Promise<void> {
+  const options = { body, tag, icon: '/icon-192.png', badge: '/icon-192.png', requireInteraction: true };
+  try {
+    const registration = await navigator.serviceWorker?.getRegistration();
+    if (registration) {
+      await registration.showNotification('Stevens', options);
+      return;
+    }
+  } catch {
+    /* попробуем напрямую */
+  }
+  try {
+    const n = new Notification('Stevens', options);
+    n.onclick = () => { window.focus(); n.close(); };
+  } catch {
+    /* браузер не дал показать */
+  }
+}
+
+/** Сообщение Стивенса в ленте с карточками записей */
+function remindInFeed(records: RecordItem[], text: string): void {
+  if (store.get().screen !== 'app') return;
+  store.set((s) => ({
+    messages: [...s.messages, {
+      kind: 'answer', id: uuid(), restored: false, pressed: null, voice: false, edited: {}, flash: null,
+      response: {
+        message_id: '', kind: 'reminder', text, speech: null, records, nearest: null,
+        total: null, awaiting_reply: false, buttons: [],
+      },
+    }],
+  }));
+}
+
 function fire(record: RecordItem, key: string): void {
   const fired = storage.notifyFired();
   if (fired.includes(key)) return;
   storage.setNotifyFired([...fired, key]);
   const body = record.type === 'meeting' ? `Через ${MEETING_EARLY_MIN} минут: ${record.text}` : record.text;
+  remindInFeed([record], record.type === 'meeting' ? T.remind_meeting : T.remind_one);
+  if (document.visibilityState === 'visible') chime();
+  else if (notifyGranted()) void systemNotify(body, key);
+}
+
+/** Подписка на пуш с сервера: нужен service worker и разрешение на уведомления */
+async function subscribePush(): Promise<void> {
+  if (!notifyGranted() || !('serviceWorker' in navigator) || !('PushManager' in window)) return;
   try {
-    const n = new Notification('Stevens', { body, tag: key });
-    n.onclick = () => { window.focus(); n.close(); };
+    const registration = await navigator.serviceWorker.register('/sw.js');
+    await navigator.serviceWorker.ready;
+    let subscription = await registration.pushManager.getSubscription();
+    if (!subscription) {
+      const key = await api.pushKey();
+      subscription = await registration.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToBytes(key),
+      });
+    }
+    await api.pushSubscribe(subscription.toJSON(), timezone());
   } catch {
-    /* браузер не дал показать */
+    /* без пушей: остаются уведомления, пока вкладка открыта */
   }
+}
+
+function urlBase64ToBytes(value: string): Uint8Array<ArrayBuffer> {
+  const base64 = (value + '='.repeat((4 - (value.length % 4)) % 4)).replace(/-/g, '+').replace(/_/g, '/');
+  const raw = atob(base64);
+  const bytes = new Uint8Array(new ArrayBuffer(raw.length));
+  for (let i = 0; i < raw.length; i += 1) bytes[i] = raw.charCodeAt(i);
+  return bytes;
+}
+
+/** Что подошло, пока человека не было: одно сообщение Стивенса при открытии */
+async function remindMissed(since: number | null, away = true): Promise<void> {
+  if (since === null) return;
+  const from = Math.max(since, Date.now() - MISSED_MAX_MS);
+  const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000);
+  let records: RecordItem[];
+  try {
+    records = await api.records(isoDay(yesterday), isoDay(new Date()));
+  } catch {
+    return;
+  }
+  const fired = storage.notifyFired();
+  const missed = records.filter((r) => {
+    const at = fireAt(r);
+    return at !== null && r.id !== null && at > from && at <= Date.now() && !fired.includes(keyOf(r));
+  });
+  if (!missed.length) return;
+  storage.setNotifyFired([...fired, ...missed.map(keyOf)]);
+  if (away) {
+    remindInFeed(missed, T.remind_missed);
+    return;
+  }
+  remindInFeed(missed, missed.length === 1 && missed[0].type === 'meeting' ? T.remind_meeting : T.remind_one);
   chime();
 }
 
 /** Перестроить таймеры на сегодня и завтра */
 export async function reschedule(): Promise<void> {
-  if (!notifyGranted() || store.get().screen !== 'app') return;
+  if (store.get().screen !== 'app') return;
   const now = new Date();
   const tomorrow = new Date(now.getTime() + 24 * 60 * 60 * 1000);
   let records: RecordItem[];
@@ -82,7 +179,7 @@ export async function reschedule(): Promise<void> {
   for (const record of records) {
     const at = fireAt(record);
     if (at === null || record.id === null) continue;
-    const key = `${record.id}@${record.date}T${record.time}`;
+    const key = keyOf(record);
     const wait = at - Date.now();
     if (wait < -60 * 1000 || wait > 25 * 60 * 60 * 1000 || fired.includes(key)) continue;
     timers.set(key, setTimeout(() => fire(record, key), Math.max(0, wait)));
@@ -93,8 +190,10 @@ export async function acceptOffer(): Promise<void> {
   notifyStore.set({ offer: null });
   if (!supported()) return;
   const permission = await Notification.requestPermission();
-  if (permission === 'granted') void reschedule();
-  else storage.setNotifyDeclined();
+  if (permission === 'granted') {
+    void reschedule();
+    void subscribePush();
+  } else storage.setNotifyDeclined();
 }
 
 export function declineOffer(): void {
@@ -103,19 +202,18 @@ export function declineOffer(): void {
 }
 
 export function initNotify(): void {
-  if (!supported()) return;
+  // Время прошлого визита — до того, как его отметит брифинг
+  const previous = storage.lastSeen();
   onAssistantResponse((response) => {
     // Перенос, удаление и отметка фразой тоже меняют, когда звонить
     if (response.kind === 'updated' || response.kind === 'deleted' || response.kind === 'completed') {
-      if (notifyGranted()) void reschedule();
-      return;
-    }
-    if (response.kind !== 'created') return;
-    if (notifyGranted()) {
       void reschedule();
       return;
     }
-    if (Notification.permission !== 'default' || storage.notifyDeclined()) return;
+    if (response.kind !== 'created') return;
+    void reschedule();
+    if (notifyGranted()) return;
+    if (!supported() || Notification.permission !== 'default' || storage.notifyDeclined()) return;
     const record = response.records.find((r) => fireAt(r) !== null && (fireAt(r) ?? 0) > Date.now());
     const messageId = lastAnswerId(store.get().messages);
     if (record?.time && messageId) notifyStore.set({ offer: { messageId, time: record.time } });
@@ -126,14 +224,35 @@ export function initNotify(): void {
     if (offer && lastAnswerId(store.get().messages) !== offer.messageId) notifyStore.set({ offer: null });
   });
   if (typeof document !== 'undefined') {
-    document.addEventListener('visibilitychange', () => document.visibilityState === 'visible' && void reschedule());
+    let hiddenAt: number | null = null;
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'hidden') {
+        hiddenAt = Date.now();
+        return;
+      }
+      // Пока вкладка была в фоне, таймеры могли проспать (сон компьютера) — досказываем
+      void remindMissed(hiddenAt).then(() => reschedule());
+    });
   }
   setInterval(() => void reschedule(), RESCAN_MS);
+  // Пуш пришёл, когда человек на вкладке: пуша не было, показываем сообщение (если таймер его ещё не показал)
+  navigator.serviceWorker?.addEventListener('message', (event: MessageEvent<{ type?: string }>) => {
+    if (event.data?.type === 'stevens-reminder') void remindMissed(Date.now() - 15 * 60 * 1000, false);
+  });
   let booted = false;
+  let owner: string | null = null;
   store.subscribe(() => {
-    if (!booted && store.get().screen === 'app') {
+    const { screen, mode, userId } = store.get();
+    if (screen !== 'app') return;
+    if (!booted) {
       booted = true;
+      void remindMissed(previous);
+    }
+    // Вошли в аккаунт или вернулись в песочницу — пуши и таймеры переезжают к новому владельцу
+    if (owner !== `${mode}:${userId}`) {
+      owner = `${mode}:${userId}`;
       void reschedule();
+      void subscribePush();
     }
   });
 }

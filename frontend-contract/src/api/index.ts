@@ -137,6 +137,18 @@ export const api = {
     }).catch(() => undefined);
   },
 
+  /** Ключ сервера для пуш-подписки (applicationServerKey) */
+  async pushKey(): Promise<string> {
+    const response = await request('/api/push/key', { auth: false });
+    const key = ((await json(response)) as { key?: unknown }).key;
+    if (typeof key !== 'string') throw new ApiFailure({ type: 'server' });
+    return key;
+  },
+
+  async pushSubscribe(subscription: PushSubscriptionJSON, timezone: string): Promise<void> {
+    await request('/api/push/subscribe', { method: 'POST', body: { ...subscription, timezone } });
+  },
+
   async resetSandbox(): Promise<void> {
     await request('/api/sandbox/reset', { method: 'POST' });
   },
