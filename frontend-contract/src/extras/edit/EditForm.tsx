@@ -84,7 +84,7 @@ export function EditForm({ record, onSaved, onCancel, onDelete }: Props) {
         />
         {errors.text && <span className="edit-form__error">{T[errors.text]}</span>}
       </label>
-      {record.type !== 'note' && <div className="edit-form__row">
+      <div className="edit-form__row">
         <label className="edit-form__field edit-form__field--date">
           <span className="edit-form__label">{record.date_kind === 'deadline' ? T.edit_date_deadline : T.edit_date}</span>
           <input className="edit-form__input" type="date" value={date} disabled={busy}
@@ -95,7 +95,7 @@ export function EditForm({ record, onSaved, onCancel, onDelete }: Props) {
           <input className="edit-form__input" type="time" value={time} disabled={busy}
             onChange={(e) => { setTime(e.target.value); setErrors((v) => ({ ...v, datetime: undefined })); }} />
         </label>
-      </div>}
+      </div>
       {errors.datetime && <span className="edit-form__error">{T[errors.datetime]}</span>}
       {failure && (
         <div className="edit-form__failure" role="alert">

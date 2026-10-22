@@ -20,10 +20,9 @@ from app.routers import push as push_router
 async def lifespan(app: FastAPI):
     async with engine.begin() as conn:  # type: ignore
         await conn.run_sync(Base.metadata.create_all)
-    # Тип «заметка» появился позже таблицы: в старой базе его нет в перечислении
-    async with engine.connect() as conn:  # type: ignore
-        conn = await conn.execution_options(isolation_level="AUTOCOMMIT")
-        await conn.exec_driver_sql("ALTER TYPE record_type ADD VALUE IF NOT EXISTS 'note'")
+        # Отдельных заметок больше нет: сохранённые заметки становятся задачами без срока
+        await conn.exec_driver_sql(
+            "UPDATE records SET type = 'task', status = 'open', date_kind = 'none' WHERE type::text = 'note'")
     print("✅ База данных готова.")
     pusher = asyncio.create_task(push.loop())
     yield

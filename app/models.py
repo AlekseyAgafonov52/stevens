@@ -17,7 +17,6 @@ class TaskType(str, enum.Enum):
     task = "task"
     meeting = "meeting"
     reminder = "reminder"
-    note = "note"          # заметка: без даты и времени, вне расписания
 
 
 class TaskStatus(str, enum.Enum):

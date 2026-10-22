@@ -7,7 +7,6 @@ export type EditErrors = { text?: 'edit_err_text'; datetime?: 'edit_err_datetime
 export function validate(record: RecordItem, values: EditValues): EditErrors {
   const errors: EditErrors = {};
   if (!values.text.trim()) errors.text = 'edit_err_text';
-  if (record.type === 'note') return errors;
   const strict = record.type === 'meeting' || record.type === 'reminder';
   if (strict && (!values.date || !values.time)) errors.datetime = 'edit_err_datetime';
   if (!strict && values.time && !values.date) errors.datetime = 'edit_err_datetime';

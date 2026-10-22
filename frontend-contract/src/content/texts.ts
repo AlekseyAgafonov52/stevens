@@ -39,8 +39,6 @@ export const T = {
   menu_logout: 'Выйти',
   menu_install: 'Установить как приложение',
   menu_tour: 'Пройти обучение',
-  menu_notes: 'Мои заметки',
-  notes_command: 'Покажи мои заметки',
   profile_label: 'Профиль', // aria-label кружка аккаунта
 
   // ── Окно «Новый диалог» ─────────────────────────────
@@ -147,7 +145,6 @@ export const T = {
   type_task: 'Задача',
   type_reminder: 'Напоминание',
   type_meeting: 'Встреча',
-  type_note: 'Заметка',
   date_none: 'без срока',
   date_deadline: 'до {date}',
   date_today: 'сегодня',
