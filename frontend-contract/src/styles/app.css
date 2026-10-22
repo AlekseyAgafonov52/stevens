@@ -226,8 +226,13 @@
 @media (max-width: 760px) { .pill { white-space: normal; text-align: left; } }
 
 /* ── Низ: статус и строка ввода (02, 2.4–2.6) ───────── */
-/* iPhone: снизу полоска «домой» и скруглённые углы экрана — поле ввода держим выше них */
-.bottom { flex-shrink: 0; padding: var(--sp-3) var(--gutter) max(var(--sp-8), calc(env(safe-area-inset-bottom) + var(--sp-3))); }
+/* Низ как в мессенджерах: поле-«таблетка» стоит прямо над полоской «домой» iPhone,
+   лента мягко растворяется над ним, а не обрезается ровной линией */
+.bottom { position: relative; flex-shrink: 0; padding: var(--sp-3) var(--gutter) max(var(--sp-8), env(safe-area-inset-bottom)); }
+.bottom::before {
+  content: ''; position: absolute; left: 0; right: 0; bottom: 100%; height: 28px; pointer-events: none;
+  background: linear-gradient(to bottom, transparent, var(--c-bg));
+}
 .bottom__column { max-width: var(--column); margin: 0 auto; }
 .status {
   padding-left: var(--sp-1);
@@ -244,9 +249,11 @@
 .composer__box {
   position: relative;
   padding: var(--sp-3);
-  border-radius: var(--r-input);
+  /* Половина высоты в одну строку: «таблетка»; в несколько строк — скруглённый прямоугольник */
+  border-radius: calc(var(--icon-btn) / 2 + var(--sp-3));
   border: 1px solid var(--c-line);
   background: var(--c-surface);
+  box-shadow: 0 2px 12px rgb(0 0 0 / 0.06);
   display: flex;
   align-items: flex-end;
   gap: var(--sp-4);
@@ -254,6 +261,7 @@
 }
 .composer__box:focus-within { border-color: var(--c-text-2); }
 .composer__box--rec { align-items: center; gap: var(--sp-5); }
+.composer__box .icon-btn { border-radius: 50%; }
 
 .icon-btn {
   width: var(--icon-btn);
@@ -475,6 +483,7 @@
 @media (max-width: 760px) {
   .new-dialog { width: 36px; padding: 0; justify-content: center; }
   .header__right, .header__left { gap: var(--sp-2); }
+  .bottom { padding-left: 12px; padding-right: 12px; }
   .new-dialog__text { display: none; }
   .sandbox-badge { height: 28px; padding: 0 var(--sp-2) 0 9px; font-size: var(--fs-small); gap: 2px; }
   .sandbox-badge__chevron { width: 12px; height: 12px; }
