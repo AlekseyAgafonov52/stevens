@@ -53,6 +53,7 @@ STOPWORDS = {
     "сдвинь", "подвинь", "поменяй", "измени", "время", "дату", "позже", "раньше", "выполненной", "готово",
     "убери", "убрать", "сотри", "стереть", "очисти", "удалите", "всех", "дни", "дней", "день", "дел", "время",
     "записей", "ней", "нему", "неё", "него", "этой", "этому", "из", "переименуй", "назови", "сделай",
+    "заметку", "заметка", "заметки", "заметок", "заметках", "идею", "идея", "идеи", "идей", "мысль", "мысли",
 }
 
 
@@ -66,7 +67,7 @@ class Period:
 
 @dataclass
 class Parse:
-    intent: str = "unknown"  # create list search person help thanks off_topic delete complete free move edit unknown
+    intent: str = "unknown"  # create note notes list search person help thanks off_topic delete complete free move edit unknown
     type: str | None = None
     text: str | None = None
     date: date | None = None
@@ -462,6 +463,8 @@ def _filter_type(text: str) -> str | None:
         return "reminder"
     if re.search(r"\bзадач", lower):
         return "task"
+    if NOTE_WORD_RE.search(lower):
+        return "note"
     return None
 
 
@@ -549,6 +552,20 @@ NOTE_WORDS = r"(?:заметку|примечание|комментарий|п�
 NOTE_RE = re.compile(
     rf"^(?:добавь|допиши|припиши|добавить|дописать)\s+(?:(?:к|ко|в|во)\s+(?P<target>.+?)\s+{NOTE_WORDS}[\s:,—-]+(?P<note>.+)"
     rf"|{NOTE_WORDS}\s+(?:(?:к|ко|в|во)\s+(?P<ref>ней|нему|не[её]|нему|этой\s+\w+|этому\s+\w+)[\s:,—-]+|(?:(?:к|ко|в|во)\s+(?P<target2>[^:—]+?))?\s*[:—]\s*)(?P<note2>.+))$",
+    I)
+# Заметка без времени: «запиши идею: …», «заметка: …», «сохрани в заметки …»
+NOTE_WORD_RE = re.compile(r"\b(?:заметк\w*|иде(?:я|ю|и|ей|ям|ями|ях)|мысл(?:ь|и))\b", I)
+NOTE_NEW_RE = re.compile(
+    r"^(?:(?:пожалуйста\s+)?(?:запиши|сохрани|создай|сделай|добавь|заведи|запомни|внеси|оставь|набросай)(?:те)?"
+    r"(?:\s+(?:мне|себе))?\s+)?(?:(?:в\s+заметк(?:и|у))"
+    r"|(?:(?:новую|новая|одну|такую|быструю|быстрая)\s+)?(?:идею|идея|мысль|заметку|заметка))(?!\s+(?:к|ко)\s)"
+    r"(?:(?:\s*[:,—-]\s*|\s+)(?:(?:что|о\s+том,?\s+что|про)\s+)?(?P<body>\S.*))?[\s.!?:]*$",
+    I)
+# «Покажи заметки», «мои идеи», «что у меня в заметках», «заметки про кофе»
+NOTES_LIST_RE = re.compile(
+    r"^(?:(?:покажи|открой|выведи|прочитай|прочти|зачитай|перечисли|какие|список|мои|все)\b.*?\b"
+    r"|что\s+(?:у\s+меня\s+)?(?:есть\s+)?в\s+|)"
+    r"(?:заметки|заметках|заметок|идеи|идей|мысли)\b(?P<rest>.*)$",
     I)
 TYPE_BY_STEM = {"задач": "task", "напомин": "reminder", "встреч": "meeting"}
 SHIFT_RE = re.compile(r"\bна\s+(полчаса|(\d+)?\s*час\w*|(\d+)\s*минут\w*)\s+(позже|раньше)\b", I)
@@ -660,6 +677,12 @@ def parse(raw: str, now: datetime) -> Parse:
     if edit := parse_edit(text, now):
         return edit
 
+    # «Запиши идею: открыть кофейню», «Заметка: купить подарок маме» — без даты и времени
+    if note := NOTE_NEW_RE.match(text):
+        result.intent, result.type, result.date_kind = "note", "note", "none"
+        result.text = capitalize((note["body"] or "").strip(" ,.!?:—-")) or None
+        return result
+
     if DELETE_RE.search(lower) or COMPLETE_RE.search(lower) or DONE_RE.search(lower):
         result.intent = "delete" if DELETE_RE.search(lower) else "complete"
         result.filter_type = _filter_type(lower)
@@ -704,6 +727,12 @@ def parse(raw: str, now: datetime) -> Parse:
         result.keywords, result.required = search_keywords(_cut(text, spans), result.filter_type)
         result.ref = bool(REF_RE.search(lower)) or not result.keywords
         result.date, result.time = info.date, time
+        return result
+
+    # «Покажи заметки», «какие у меня идеи», «заметки про кофе»
+    if notes := NOTES_LIST_RE.match(text):
+        result.intent, result.filter_type = "notes", "note"
+        result.keywords, result.required = search_keywords(notes["rest"], "note")
         return result
 
     # «Когда я свободен в четверг на час?», «Найди время встретиться с Ваней»

@@ -34,7 +34,7 @@ EXAMPLES = [
     "Что у меня на следующей неделе?",
     "Найди задачу про презентацию",
 ]
-HELP_EXAMPLES = EXAMPLES + ["Поставь встречу с Иваном завтра", "Что у меня с Иваном?"]
+HELP_EXAMPLES = EXAMPLES + ["Поставь встречу с Иваном завтра", "Что у меня с Иваном?", "Запиши идею: открыть кофейню"]
 FOUND_LIMIT = 50
 WHICH_LIMIT = 5
 
@@ -43,7 +43,7 @@ WHICH_LIMIT = 5
 
 @dataclass
 class Pending:
-    kind: str                      # draft | confirm | conflict | new_time | confirm_no | multi | multi_ask | move | move_when | move_all | edit | bulk_delete
+    kind: str                      # draft | confirm | conflict | new_time | confirm_no | multi | multi_ask | move | move_when | move_all | edit | bulk_delete | note
     draft: dict = field(default_factory=dict)
 
 
@@ -758,6 +758,41 @@ async def answer_search(ctx: Ctx, p: nlu.Parse) -> dict:
     return reply("found", text, speech, records=records, total=len(found))
 
 
+async def answer_note(ctx: Ctx, p: nlu.Parse) -> dict:
+    """Заметка: сохраняем сразу, без даты, времени и проверок расписания."""
+    if not p.text:
+        ctx.conv.pending = Pending("note")  # «Запиши идею» — саму идею скажут следующей фразой
+        text, speech = ctx.say("note_empty")
+        return reply("clarify", text, speech, awaiting=True, buttons=[CANCEL])
+    ctx.conv.pending = None
+    record = ctx.owner.new_record(type=TaskType.note, text=p.text[:300], date=None, time=None,
+                                  date_kind=DateKind.none, status=None, created_at=datetime.now(timezone.utc))
+    ctx.db.add(record)
+    await ctx.db.commit()
+    await ctx.db.refresh(record)
+    ctx.conv.focus = record.id
+    text, speech = ctx.say("note_saved", {"text": record.text})
+    return reply("created", text, speech, records=[record.to_contract(marks=["new"])],
+                 buttons=[button_text("Мои заметки", "Покажи заметки")] + undo_button(ctx, record))
+
+
+async def answer_notes(ctx: Ctx, p: nlu.Parse) -> dict:
+    """Список заметок, свежие сверху; «заметки про кофе» — только подходящие."""
+    rows = await owner_records(ctx, Record.type == TaskType.note)
+    if p.keywords:
+        rows = by_keywords(rows, p)
+    if not rows:
+        text, speech = ctx.say("notes_none_about" if p.keywords else "notes_none")
+        return reply("found", text, speech, total=0)
+    rows.sort(key=lambda r: (r.created_at or datetime.min.replace(tzinfo=timezone.utc), r.id), reverse=True)
+    if len(rows) == 1:
+        ctx.conv.focus = rows[0].id
+    else:
+        ctx.conv.found = [r.id for r in rows[:FOUND_LIMIT]]
+    text, speech = ctx.say("notes_some", {"count": len(rows)})
+    return reply("found", text, speech, records=[r.to_contract() for r in rows[:FOUND_LIMIT]], total=len(rows))
+
+
 def is_ahead(record: Record, now: datetime) -> bool:
     """Впереди: будущее по дате или открытое дело без даты."""
     return is_future(record, now) or (not record.date and record.status != TaskStatus.done)
@@ -934,7 +969,7 @@ def bulk_scope(ctx: Ctx, p: nlu.Parse) -> str:
         return p.period.label
     if p.date:
         return nlu.describe_period(p.date, p.date, ctx.today).label
-    return "за все дни"
+    return "" if p.filter_type == "note" else "за все дни"
 
 
 async def answer_bulk_delete(ctx: Ctx, p: nlu.Parse) -> dict:
@@ -953,6 +988,9 @@ async def answer_bulk_delete(ctx: Ctx, p: nlu.Parse) -> dict:
             rows = by_keywords(rows, p)
     forms = TYPE_FORMS[p.filter_type] if p.filter_type else None
     scope = bulk_scope(ctx, p)
+    if not rows and not scope:
+        text, speech = ctx.say("notes_none")
+        return reply("found", text, speech, total=0)
     if not rows:
         text, speech = ctx.say("bulk_none", {"scope": scope})
         return reply("found", text, speech, total=0)
@@ -961,6 +999,8 @@ async def answer_bulk_delete(ctx: Ctx, p: nlu.Parse) -> dict:
     ordered = sorted(rows, key=lambda r: (r.date or "9999-99-99", r.time or "99:99", r.id))
     ctx.conv.pending = Pending("bulk_delete", {"ids": [r.id for r in ordered], "forms": forms})
     text, speech = ctx.say("bulk_delete_confirm", {"count": len(rows), "scope": scope}, count_forms=forms)
+    if not scope:  # «удали все заметки»: у заметок нет дней
+        text, speech = (re.sub(r"\s+\?", "?", x) if x else x for x in (text, speech))
     return reply("confirm", text, speech, records=[r.to_contract() for r in ordered[:FOUND_LIMIT]], total=len(rows),
                  awaiting=True, buttons=[button_action("Да, удалить все", "confirm_yes"),
                                          button_action("Нет", "cancel", style="secondary")])
@@ -1563,7 +1603,7 @@ async def handle_action(ctx: Ctx, action_id: str, record_id: int | None) -> dict
 # ── Эндпоинт ──────────────────────────────────────────
 
 def is_new_request(p: nlu.Parse, raw: str) -> bool:
-    if p.intent in ("list", "search", "help", "off_topic", "delete", "complete", "thanks", "move", "edit"):
+    if p.intent in ("list", "search", "help", "off_topic", "delete", "complete", "thanks", "move", "edit", "note", "notes"):
         return True
     if p.intent == "create":
         return bool(nlu.CREATE_VERB_RE.search(raw.strip().lower()) or (p.text and len(nlu.keywords(p.text)) >= 2))
@@ -1614,6 +1654,8 @@ async def respond(ctx: Ctx, payload: ChatRequest) -> dict:
     if pending and pending.kind == "move_all" and not is_new_request(p, raw):
         if answer := await answer_move_all_reply(ctx, pending, raw):
             return answer
+    if pending and pending.kind == "note" and not is_new_request(p, raw) and not nlu.is_cancel_reply(raw):
+        return await answer_note(ctx, nlu.Parse(text=nlu.capitalize(raw.strip(" ,.!?:—-")) or None))
     if pending and pending.kind == "move_when" and not is_new_request(p, raw):
         if answer := await answer_move_when(ctx, pending, raw):
             return answer
@@ -1650,6 +1692,10 @@ async def respond(ctx: Ctx, payload: ChatRequest) -> dict:
         if many and (answer := await answer_many(ctx, many)):
             return answer
         return await process_draft(ctx, draft_from(p, ctx.today))
+    if p.intent == "note":
+        return await answer_note(ctx, p)
+    if p.intent == "notes":
+        return await answer_notes(ctx, p)
     if p.intent == "free":
         return await answer_free(ctx, p)
     if p.intent == "list":
