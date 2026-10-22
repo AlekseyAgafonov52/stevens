@@ -16,7 +16,7 @@ from fastapi import APIRouter, Depends, Header
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app import nlu
+from app import chatlog, nlu
 from app.database import get_db
 from app.models import DateKind, Record, TaskStatus, TaskType
 from app.owner import Owner, get_owner
@@ -122,6 +122,7 @@ class Ctx:
     now: datetime
     features: set[str]
     found: list[int] = field(default_factory=list)  # найденное прошлым ответом
+    trace: dict = field(default_factory=dict)       # для журнала: разбор, шаблон, LLM
 
     @property
     def today(self) -> date:
@@ -129,6 +130,7 @@ class Ctx:
 
     def say(self, template_id: str, values: dict | None = None, speech_values: dict | None = None,
             count_forms=None) -> tuple[str, str | None]:
+        self.trace.setdefault("template", template_id)
         return render(template_id, values, speech_values, count_forms, self.conv.variants)
 
     def record_values(self, record: dict) -> tuple[dict, dict]:
@@ -1717,13 +1719,19 @@ async def chat_endpoint(
     features = {f.strip().lower() for f in (x_stevens_features or "").split(",") if f.strip()}
     ctx = Ctx(owner=owner, db=db, conv=conversation(owner, payload.conversation_id),
               now=client_now(payload.client_time), features=features)
+    started = clock.perf_counter()
+    waiting = ctx.conv.pending.kind if ctx.conv.pending else None
     try:
-        return await respond(ctx, payload)
+        answer = await respond(ctx, payload)
     except Exception as error:  # noqa: BLE001 — сбой: kind error, «Повторить» добавит фронт
         print(f"chat error: {error!r}")
         await db.rollback()
+        ctx.trace["error"] = repr(error)
+        ctx.trace.pop("template", None)
         text, speech = ctx.say("error_backend")
-        return reply("error", text, speech)
+        answer = reply("error", text, speech)
+    await chatlog.write(owner, payload, answer, ctx.trace, waiting, int((clock.perf_counter() - started) * 1000))
+    return answer
 
 
 async def respond(ctx: Ctx, payload: ChatRequest) -> dict:
@@ -1745,6 +1753,7 @@ async def respond(ctx: Ctx, payload: ChatRequest) -> dict:
     if (fix := fix_words(raw, ctx.now)) and (answer := await answer_fix(ctx, *fix)):
         return answer
     p = nlu.parse(raw, ctx.now)
+    ctx.trace["intent"] = p.intent
 
     # Ответ на уточнение (Р-45); не ответ — новый запрос, уточнение забываем (Р-33)
     pending = ctx.conv.pending
@@ -1777,6 +1786,7 @@ async def respond(ctx: Ctx, payload: ChatRequest) -> dict:
 
     if p.intent == "unknown" and llm_enabled():
         p = llm_parse(raw, ctx.now)
+        ctx.trace.update(intent=p.intent, llm=True)
 
     if p.intent == "delete" and "d2" not in ctx.features:
         p.intent = "unknown"

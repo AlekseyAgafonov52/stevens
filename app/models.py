@@ -7,7 +7,7 @@ X-Client-Id, записи с мягким удалением (15.4).
 import enum
 from datetime import datetime as dt
 
-from sqlalchemy import DateTime, Enum, ForeignKey, Index, String, func
+from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Index, Integer, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
@@ -136,3 +136,25 @@ class AppSetting(Base):
 
     key: Mapped[str] = mapped_column(String(64), primary_key=True)
     value: Mapped[str] = mapped_column(String(4000), nullable=False)
+
+
+class ChatLog(Base):
+    """Журнал чата: что спросили и что ответил Stevens — чтобы видеть, где он ошибается."""
+    __tablename__ = "chat_log"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    at: Mapped[dt] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+    who: Mapped[str] = mapped_column(String(16), index=True)          # обезличенный владелец
+    conversation_id: Mapped[str] = mapped_column(String(64), index=True)
+    source: Mapped[str] = mapped_column(String(8))                    # voice | text | button
+    text: Mapped[str] = mapped_column(String(300), default="")
+    action: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    waiting: Mapped[str | None] = mapped_column(String(16), nullable=True)   # чего Stevens ждал до запроса
+    intent: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    llm: Mapped[bool] = mapped_column(Boolean, default=False)
+    kind: Mapped[str] = mapped_column(String(16), index=True)         # kind ответа
+    template: Mapped[str | None] = mapped_column(String(48), nullable=True)
+    reply: Mapped[str] = mapped_column(Text, default="")
+    records: Mapped[int] = mapped_column(Integer, default=0)
+    ms: Mapped[int] = mapped_column(Integer, default=0)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
