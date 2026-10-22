@@ -42,3 +42,21 @@ test('после имени запись становится обычной, и
   voice.setArmed(false);
   vi.useRealTimers();
 });
+
+test('«Стивенс, …, отмена» — ничего не уходит, снова слушаем имя', () => {
+  vi.useFakeTimers();
+  const events: string[] = [];
+  const offFinal = voice.on('final', (t) => events.push(`final:${t}`));
+  const offState = voice.on('state', (s) => events.push(s));
+  voice.setArmed(true);
+  vi.advanceTimersByTime(500);
+  const rec = FakeRec.last!;
+  rec.say('Стивенс, завтра в 10 созвон');
+  rec.onresult?.({ resultIndex: 0, results: [{ isFinal: true, 0: { transcript: 'Стивенс, завтра в 10 созвон отмена' } }] });
+  vi.advanceTimersByTime(3000);
+  expect(events).toEqual(['recording', 'idle']);
+  offFinal();
+  offState();
+  voice.setArmed(false);
+  vi.useRealTimers();
+});

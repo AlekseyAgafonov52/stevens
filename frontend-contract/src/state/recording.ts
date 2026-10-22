@@ -1,6 +1,7 @@
 /** Запись голоса для строки ввода — 03-behavior.md, раздел 6. */
 import { T } from '../content/texts';
 import { voice, type VoiceError } from '../voice';
+import { applyCorrections } from '../voice/edit';
 import { send, setHint } from './chat';
 import { emitActivity } from './events';
 import { createStore, store } from './store';
@@ -82,13 +83,14 @@ voice.on('state', (state) => {
 
 voice.on('interim', (text) => {
   if (text) heard = true;
-  recordingStore.set({ transcript: [prefix, text].filter(Boolean).join(' ') });
+  // Поправку «не „и вам“, а „Иван“» видно сразу, пока говоришь
+  recordingStore.set({ transcript: applyCorrections([prefix, text].filter(Boolean).join(' ')) });
 });
 
 voice.on('level', (level) => recordingStore.set({ level }));
 
 voice.on('final', (text) => {
-  const full = [prefix, text].filter(Boolean).join(' ');
+  const full = applyCorrections([prefix, text].filter(Boolean).join(' '));
   store.set({ input: '' });
   if (!send(full, 'voice')) store.set({ input: full });
 });
