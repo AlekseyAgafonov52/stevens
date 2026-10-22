@@ -6,7 +6,12 @@
  * Вызов по имени: arm() слушает фоном, пока не услышит «Стивенс». Тогда эта же запись
  * становится обычной (событие wake, затем state recording), и всё сказанное после имени
  * уходит в final. Так нет паузы между именем и фразой: «Стивенс, завтра в 10 созвон».
+ *
+ * «стоп» / «отмена» последним словом — отмена: микрофон выключается, в final ничего не уходит.
+ * Сразу — когда браузер закрепил это слово (isFinal), иначе по паузе: «отмена встречи» так не оборвётся.
  */
+import { isCancel } from './edit';
+
 export type VoiceError = 'denied' | 'no-mic' | 'no-speech' | 'failed' | 'service';
 export type VoiceState = 'idle' | 'asking' | 'recording';
 
@@ -43,7 +48,6 @@ type RecognitionCtor = new () => Recognition;
 const MAX_MS = 20000;
 /** Пауза, после которой считаем, что человек договорил: хватает, чтобы подумать посреди фразы */
 const SILENCE_MS = 1800;
-const STOP_WORD = /(?:^|\s)стоп[.!]?$/i;
 /** Как браузер пишет имя: «Стивенс», «Стивенсон», «Стивен», «Стив», «Stevens», «Steve». «Стиль» и «стивидор» — нет */
 const WAKE_WORD = /(?:^|[\s,.!?])(стив[еи]н\S*|стив(?![а-яё])|stevens?\S*|steven\S*|steve(?![a-z]))[\s,.!?—-]*/i;
 /** Сказали только имя и молчат — ждём фразу столько, потом снова слушаем фоном */
@@ -203,9 +207,9 @@ function arm(inGesture = false): void {
     }
     const hit = WAKE_WORD.exec(whole);
     const shown = (hit ? whole.slice(hit.index + hit[0].length) : whole).trim();
-    if (STOP_WORD.test(shown)) {
-      finalText = shown.replace(STOP_WORD, '');
-      interimText = '';
+    if (event.results[event.results.length - 1]?.isFinal && isCancel(shown)) {
+      log('отмена голосом');
+      cancelled = true;
       finish();
       return;
     }
@@ -237,7 +241,7 @@ function arm(inGesture = false): void {
       cleanupAudio();
       emit('state', 'idle');
       // Тишина после имени — без «Не расслышал»: просто снова слушаем фоном
-      if (!cancelled && finalText.trim()) emit('final', finalText.trim());
+      if (!cancelled && finalText.trim() && !isCancel(finalText)) emit('final', finalText.trim());
     }
     clearTimeout(rearmTimer);
     if (!wantArmed) return;
@@ -305,6 +309,7 @@ export const voice = {
       }).catch(() => undefined);
     };
     rec.onresult = (event) => {
+      if (cancelled) return;
       let interim = '';
       for (let i = event.resultIndex; i < event.results.length; i += 1) {
         const result = event.results[i];
@@ -313,10 +318,10 @@ export const voice = {
       }
       interimText = interim;
       const shown = (finalText + interim).trim();
-      if (STOP_WORD.test(shown)) {
-        finalText = shown.replace(STOP_WORD, '');
-        interimText = '';
-        rec.stop();
+      if (!interim && isCancel(shown)) {
+        log('отмена голосом');
+        cancelled = true;
+        rec.abort();
         return;
       }
       emit('interim', shown);
@@ -340,7 +345,8 @@ export const voice = {
       if (wantArmed) rearmTimer = setTimeout(arm, 400);
       if (cancelled) return;
       const text = (finalText + ' ' + interimText).trim();
-      if (text) emit('final', text);
+      if (isCancel(text)) log('отмена голосом');
+      else if (text) emit('final', text);
       else emit('error', 'no-speech');
     };
     maxTimer = setTimeout(() => rec.stop(), MAX_MS);
