@@ -201,6 +201,15 @@ def parse_when(text: str, now: datetime) -> tuple[str | None, bool, list[tuple[i
         info = _parse_date(rest, now, time)
         if rel_time:
             time, ambiguous = rel_time, False
+        # «Во вторник через неделю», «через 2 недели в пятницу» — ближайший вторник плюс недели
+        weeks = re.search(r"недел", text[rel_span[0]:rel_span[1]], I)
+        day_word = re.search(rf"(?:\b(?:в|во|на)\s+)?\b{WEEKDAY_RE}\b", rest, I) if weeks else None
+        if day_word:
+            today = now.date()
+            n = (rel_date - today).days // 7
+            target = _weekday_index(day_word.group(1))
+            info.date = today + timedelta(days=(target - today.weekday()) % 7 + 7 * n)
+            info.spans.append(day_word.span())
         info.date = info.date or rel_date
         time_spans.append(rel_span)
         return time, ambiguous, time_spans, info
