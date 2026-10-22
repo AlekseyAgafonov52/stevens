@@ -72,7 +72,7 @@ export interface ChatResponse {
   buttons: Button[];
 }
 
-export type RecordType = 'task' | 'reminder' | 'meeting' | 'note';
+export type RecordType = 'task' | 'reminder' | 'meeting';
 export type DateKind = 'exact' | 'deadline' | 'none';
 /** deleted — допы Д2/Д10: запись удалена (карточка «Удалено») */
 export type RecordMark = 'new' | 'draft' | 'conflict' | 'deleted';
