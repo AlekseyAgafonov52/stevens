@@ -3,7 +3,6 @@ import { ArrowUp, Mic, Trash2 } from 'lucide-react';
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { T, fill } from '../content/texts';
 import { InputBarOverlay } from '../extensions/points';
-import { Pill } from './Pill';
 import { send } from '../state/chat';
 import { emitActivity } from '../state/events';
 import { cancelRecording, recordingStore, startRecording, stopRecording } from '../state/recording';
@@ -71,7 +70,7 @@ function RecordingRow() {
 
 /**
  * Вызов по имени: точка в углу микрофона. Пустая — выключено, закрашенная — включено
- * (дышит, пока слушает фоном). По нажатию — плашка с объяснением и «Да / Нет».
+ * (дышит, пока слушает фоном). По нажатию — плашка с объяснением и переключателем.
  */
 function WakeDot() {
   const { enabled, armed } = useSyncExternalStore(wakeStore.subscribe, wakeStore.get);
@@ -91,10 +90,10 @@ function WakeDot() {
     };
   }, [open]);
   if (!voice.isSupported()) return null;
-  const choose = (on: boolean) => {
+  // Переключатель, а не разовый вопрос: плашка остаётся открытой, видно, что режим включился или выключился
+  const toggle = () => {
     emitActivity('button-press');
-    setOpen(false);
-    setWakeWord(on);
+    setWakeWord(!enabled);
   };
   return (
     <span className="wake" ref={rootRef}>
@@ -104,12 +103,14 @@ function WakeDot() {
       </button>
       {open && (
         <span className="wake__pop" role="dialog" aria-label={T.wake_label_off}>
-          <span className="wake__title">{enabled ? T.wake_title_on : T.wake_title_off}</span>
-          <span className="wake__text">{T.wake_text}</span>
-          <span className="wake__actions">
-            <Pill variant="primary" onClick={() => choose(true)}>{T.wake_yes}</Pill>
-            <Pill variant="secondary" onClick={() => choose(false)}>{T.wake_no}</Pill>
+          <span className="wake__head">
+            <span className="wake__title" id="wake-title">{T.wake_title}</span>
+            <button type="button" role="switch" aria-checked={enabled} aria-labelledby="wake-title" className="switch" onClick={toggle}>
+              <span className="switch__knob" aria-hidden="true" />
+            </button>
           </span>
+          <span className="wake__state">{enabled ? T.wake_state_on : T.wake_state_off}</span>
+          <span className="wake__text">{T.wake_text}</span>
         </span>
       )}
     </span>

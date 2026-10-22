@@ -294,7 +294,23 @@
 }
 .wake__title { font-weight: 600; color: var(--c-text); }
 .wake__text { font-size: 13px; line-height: 1.4; color: var(--c-text-2); }
-.wake__actions { display: flex; gap: var(--sp-3); }
+.wake__head { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3); }
+.wake__state { margin-top: calc(-1 * var(--sp-2)); font-size: 13px; color: var(--c-text-2); }
+/* Переключатель вкл/выкл */
+.switch {
+  position: relative; flex-shrink: 0; width: 40px; height: 24px; padding: 0; cursor: pointer;
+  border-radius: 12px; border: 0; background: color-mix(in srgb, var(--c-text-2) 40%, transparent);
+  transition: background 160ms var(--ease);
+}
+.switch[aria-checked='true'] { background: var(--c-accent); }
+.switch__knob {
+  position: absolute; top: 3px; left: 3px; width: 18px; height: 18px; border-radius: 50%;
+  background: #fff; box-shadow: 0 1px 2px rgb(0 0 0 / 0.2);
+  transition: transform 160ms var(--ease);
+}
+.switch[aria-checked='true'] .switch__knob { transform: translateX(16px); }
+.switch:focus-visible { outline: 2px solid var(--c-accent); outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) { .switch, .switch__knob { transition: none; } }
 /* Плашки-предложения: «Прислать уведомление?», «Рассказать план на сегодня?» */
 .offer, .notify-offer {
   display: flex; flex-direction: column; gap: var(--sp-3); max-width: 320px;
