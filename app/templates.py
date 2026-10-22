@@ -123,6 +123,12 @@ TEMPLATES: dict[str, tuple[list[str], str | None]] = {
         "Позвольте уточнить: в какое время?",
         "Укажите, пожалуйста, время встречи.",
     ], None),
+    "clarify_many_time": ([
+        "Во сколько {text} {day}?",
+    ], None),
+    "clarify_many_reminder": ([
+        "Во сколько напомнить «{text}» {day}?",
+    ], None),
     "clarify_reminder_time": ([
         "Во сколько напомнить?",
         "В какое время напомнить?",

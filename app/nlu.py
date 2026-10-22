@@ -826,7 +826,7 @@ def _clean_clause(body: str) -> str:
 MULTI_SPLIT_RE = re.compile(
     r"\s*[;]\s*|\s*,\s*(?:а\s+|и\s+)?(?:потом|затем|ещё|еще|также|после\s+этого)\b\s*"
     r"|\s+(?:а\s+потом|и\s+потом|потом|затем|а\s+также|и\s+ещё|и\s+еще|а\s+ещё|а\s+еще)\s+"
-    r"|\s*,?\s+(?:а|и)\s+(?=(?:в|во|к)\s+\d|(?:завтра|послезавтра|сегодня)\b|в\s+" + WEEKDAY_RE.replace("(", "(?:", 1) + r")",
+    r"|\s*,?\s+(?:а|и)\s+(?=(?:в|во|к)\s+\d|(?:завтра|послезавтра|сегодня|через)\b|в\s+" + WEEKDAY_RE.replace("(", "(?:", 1) + r")",
     I,
 )
 
@@ -856,6 +856,33 @@ def parse_many(raw: str, now: datetime) -> list[Parse] | None:
             p.date, p.date_kind = result[-1].date, "exact"
         result.append(p)
     return result
+
+
+CANCEL_REPLY_RE = re.compile(
+    r"^(?:стоп|стой|отмена|отмени(?:ть)?|не\s+надо|забудь|убери\s+вс[её]|ничего\s+не\s+надо)[\s.!,]*$", I)
+REPLY_TIME_RE = re.compile(r"(?<![\d:.])(\d{1,2})(?:[:.](\d{2}))?(?![\d:.])(?!\s*(?:" + "|".join(
+    ["января", "февраля", "марта", "апреля", "мая", "июня", "июля", "августа", "сентября", "октября", "ноября",
+     "декабря", "числа", "минут", "час", "дн", "недел"]) + r"))", I)
+
+
+def is_cancel_reply(raw: str) -> bool:
+    """«Стой», «отмена», «убери всё» — ответ на уточнение, который всё отменяет."""
+    return bool(CANCEL_REPLY_RE.match(" ".join(raw.lower().split())))
+
+
+def reply_time(raw: str) -> tuple[str | None, bool]:
+    """Время из сбивчивого ответа: «есть 10 … стой … поставь 10» → последнее упомянутое, 10:00.
+    Часы 1–7 без минут — вечер (13–19), с пометкой «неоднозначно»."""
+    found = list(REPLY_TIME_RE.finditer(raw))
+    if not found:
+        return None, False
+    hours, mins = int(found[-1].group(1)), int(found[-1].group(2) or 0)
+    if hours > 23 or mins > 59:
+        return None, False
+    ambiguous = 1 <= hours <= 7 and not found[-1].group(2)
+    if ambiguous:
+        hours += 12
+    return f"{hours:02d}:{mins:02d}", ambiguous
 
 
 def parse_reply(raw: str, now: datetime) -> Parse:
