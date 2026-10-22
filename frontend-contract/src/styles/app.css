@@ -226,9 +226,15 @@
 @media (max-width: 760px) { .pill { white-space: normal; text-align: left; } }
 
 /* ── Низ: статус и строка ввода (02, 2.4–2.6) ───────── */
-/* Низ как в мессенджерах: поле-«таблетка» стоит прямо над полоской «домой» iPhone,
-   лента мягко растворяется над ним, а не обрезается ровной линией */
-.bottom { position: relative; flex-shrink: 0; padding: var(--sp-3) var(--gutter) max(var(--sp-8), env(safe-area-inset-bottom)); }
+/* Низ как в мессенджерах: лента мягко растворяется над полем-«таблеткой».
+   На iPhone со скруглённым экраном (радиус углов ≈ 55) поле стоит на 26 от низа и боков:
+   26 + радиус «таблетки» 28 ≈ 55, поэтому её закругления идут параллельно углам экрана.
+   Отступ считаем от высоты полоски «домой» (34), у экранов без неё она 0 — там обычные отступы */
+.bottom {
+  --dock: calc(env(safe-area-inset-bottom, 0px) - 8px);
+  position: relative; flex-shrink: 0;
+  padding: var(--sp-3) var(--gutter) max(var(--sp-8), var(--dock));
+}
 .bottom::before {
   content: ''; position: absolute; left: 0; right: 0; bottom: 100%; height: 28px; pointer-events: none;
   background: linear-gradient(to bottom, transparent, var(--c-bg));
@@ -483,7 +489,7 @@
 @media (max-width: 760px) {
   .new-dialog { width: 36px; padding: 0; justify-content: center; }
   .header__right, .header__left { gap: var(--sp-2); }
-  .bottom { padding-left: 12px; padding-right: 12px; }
+  .bottom { padding-left: max(12px, var(--dock)); padding-right: max(12px, var(--dock)); }
   .new-dialog__text { display: none; }
   .sandbox-badge { height: 28px; padding: 0 var(--sp-2) 0 9px; font-size: var(--fs-small); gap: 2px; }
   .sandbox-badge__chevron { width: 12px; height: 12px; }
