@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { features } from '../config/features';
 import { T } from '../content/texts';
 import { HeaderRightStart, sandboxMenuExtra } from '../extensions/points';
-import { install, installHintKey, isInstalled, useCanInstall } from '../lib/install';
+import { install, installHintKey, isInstalled, useCanInstall, useTitlebarMode } from '../lib/install';
 import { newDialog, resetSandbox, setHint } from '../state/chat';
 import { emitActivity } from '../state/events';
 import { goAuth, logout } from '../state/session';
@@ -19,6 +19,8 @@ export function Header() {
   const busy = useApp((s) => s.waiting || s.recording);
   const [dialog, setDialog] = useState<'new' | 'reset' | null>(null);
   const canInstall = useCanInstall();
+  // В окне приложения справа кнопки окна и значки браузера — свои кнопки ставим слева, «Stevens» остаётся по центру окна
+  const titlebar = useTitlebarMode();
   // Браузер не дал установить кнопкой — пункт всё равно есть и подсказывает, как установить через меню браузера
   const installItem = isInstalled()
     ? []
@@ -30,6 +32,34 @@ export function Header() {
     ...installItem,
     ...(features.auth ? [{ label: T.menu_go_auth, onSelect: goAuth }] : []),
   ];
+
+  const tools = (
+    <>
+      <HeaderRightStart />
+      {mode === 'sandbox' && (
+        <Menu
+          items={sandboxItems}
+          trigger={({ open, toggle }) => (
+            <button type="button" className="sandbox-badge" aria-haspopup="menu" aria-expanded={open} onClick={toggle}>
+              {T.header_sandbox}
+              <ChevronDown className="sandbox-badge__chevron" strokeWidth={1.5} aria-hidden="true" />
+            </button>
+          )}
+        />
+      )}
+      {mode === 'account' && features.auth && (
+        <Menu
+          heading={login ?? ''}
+          items={[...installItem, { label: T.menu_logout, onSelect: logout }]}
+          trigger={({ open, toggle }) => (
+            <button type="button" className="avatar" aria-label={T.profile_label} aria-haspopup="menu" aria-expanded={open} onClick={toggle}>
+              {(login ?? '?').charAt(0).toUpperCase()}
+            </button>
+          )}
+        />
+      )}
+    </>
+  );
 
   return (
     <header className="header">
@@ -46,33 +76,10 @@ export function Header() {
             <span className="new-dialog__text">{T.btn_new_dialog}</span>
           </button>
         )}
+        {titlebar && tools}
       </div>
       <div className="header__name">{T.app_name}</div>
-      <div className="header__right">
-        <HeaderRightStart />
-        {mode === 'sandbox' && (
-          <Menu
-            items={sandboxItems}
-            trigger={({ open, toggle }) => (
-              <button type="button" className="sandbox-badge" aria-haspopup="menu" aria-expanded={open} onClick={toggle}>
-                {T.header_sandbox}
-                <ChevronDown className="sandbox-badge__chevron" strokeWidth={1.5} aria-hidden="true" />
-              </button>
-            )}
-          />
-        )}
-        {mode === 'account' && features.auth && (
-          <Menu
-            heading={login ?? ''}
-            items={[...installItem, { label: T.menu_logout, onSelect: logout }]}
-            trigger={({ open, toggle }) => (
-              <button type="button" className="avatar" aria-label={T.profile_label} aria-haspopup="menu" aria-expanded={open} onClick={toggle}>
-                {(login ?? '?').charAt(0).toUpperCase()}
-              </button>
-            )}
-          />
-        )}
-      </div>
+      <div className="header__right">{!titlebar && tools}</div>
       {dialog === 'new' && (
         <Modal
           title={T.new_dialog_title}

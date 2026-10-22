@@ -25,7 +25,7 @@ export function setWakeWord(on: boolean): void {
   }
   storage.setWakeWord(on);
   wakeStore.set({ enabled: on });
-  update(true); // вызывается из нажатия «Да»: Safari запускает распознавание только в нём
+  update(true); // вызывается из нажатия на переключатель: Safari запускает распознавание только в нём
 }
 
 export function initWakeWord(): void {

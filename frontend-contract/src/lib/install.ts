@@ -53,3 +53,18 @@ export function installHintKey(): 'install_safari' | 'install_manual' {
   const ua = navigator.userAgent;
   return /Safari/.test(ua) && !/Chrome|Chromium|Edg|CriOS|Android/.test(ua) ? 'install_safari' : 'install_manual';
 }
+
+const WCO_QUERY = '(display-mode: window-controls-overlay)';
+
+/** Установленное приложение, где шапка Stevens стоит на месте полосы заголовка окна */
+export function useTitlebarMode(): boolean {
+  return useSyncExternalStore(
+    (l) => {
+      const mq = window.matchMedia?.(WCO_QUERY);
+      mq?.addEventListener('change', l);
+      return () => mq?.removeEventListener('change', l);
+    },
+    () => window.matchMedia?.(WCO_QUERY).matches ?? false,
+    () => false,
+  );
+}
