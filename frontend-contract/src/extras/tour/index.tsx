@@ -21,7 +21,7 @@ export function TourBar() {
   if (t.status === 'offer') {
     return (
       <div className="tour" role="group" aria-label={T.tour_label}>
-        <div className="tour__title">{T.tour_offer_title}</div>
+        <div className="tour__title">{t.again ? T.tour_offer_again_title : T.tour_offer_title}</div>
         <div className="tour__text">{T.tour_offer_text}</div>
         <div className="tour__actions">
           <Pill variant="primary" onClick={press(() => void startTour())}>{T.tour_offer_yes}</Pill>
