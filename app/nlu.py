@@ -86,6 +86,9 @@ class Parse:
     has_subject: bool = True    # у встречи есть участник или тема
     thanks: bool = False        # в сообщении есть благодарность
     duration: int = 60          # free: сколько минут нужно
+    window: int = 30            # free: окна короче этого не показываем
+    free_mode: str = "windows"
+    weekends: bool = False      # free day: выходные тоже сравниваем  # free: windows (все окна) | longest (самые большие) | day | week (самый свободный)
     subject: str | None = None  # free: «Встреча с Ваней» для кнопок со временем
     person: str | None = None   # person: «Иваном» — с кем досье, в творительном падеже
     bulk: bool = False          # delete: «удали все дела на завтра» — много записей, с подтверждением
@@ -627,9 +630,16 @@ def strip_lead(text: str) -> str:
 FREE_RE = re.compile(
     r"(когда\s+(?:я\s+)?свобод|свободн\w*\s+(?:время|окн|час|полчас)|(?:найди|подбери|поищи)\s+(?:мне\s+)?"
     r"(?:время|окно|свободн|час|полчаса)|есть\s+ли\s+(?:у\s+меня\s+)?(?:свободн|окн|время)"
-    r"|когда\s+(?:можно|могу|получится|лучше)\s+(?:встретиться|созвониться|поставить|назначить))",
+    r"|когда\s+(?:можно|могу|получится|лучше)\s+(?:встретиться|созвониться|поставить|назначить)"
+    r"|сам\w+\s+(?:больш\w+\s+|длинн\w+\s+)?(?:свободн|окн)|свободне[ей]\s+всего|(?:больш|длинн)\w+\s+(?:свободн\w+\s+)?окн"
+    r"|(?:меньше|менее)\s+всего\s+(?:дел|занят|загруж)|наименее\s+загруж)",
     I,
 )
+# «самый свободный день», «свободнее всего», «меньше всего дел» — сравниваем дни или недели
+FREE_BEST_RE = re.compile(
+    r"сам\w+\s+свободн|свободне[ей]\s+всего|(?:меньше|менее)\s+всего\s+(?:дел|занят|загруж)|наименее\s+загруж", I)
+# «большое окно», «самое длинное окно», «самые свободные часы» — окна от больших к меньшим
+FREE_LONG_RE = re.compile(r"(?:больш|длинн)\w+\s+(?:свободн\w+\s+)?окн|сам\w+\s+свободн\w+\s+(?:час|врем|окн)", I)
 FREE_SUBJECT_RE = re.compile(
     r"\b(встретиться|встречу|встречи|созвониться|созвона|созвон)\s+(с\s+[^,.!?]+?)"
     r"(?=\s+(?:в|во|на|к|до|завтра|сегодня|послезавтра)\b|\s+\d|[,.!?]|$)",
@@ -638,18 +648,21 @@ FREE_SUBJECT_RE = re.compile(
 NUM_WORDS = {"один": 1, "одну": 1, "два": 2, "две": 2, "три": 3, "четыре": 4}
 
 
-def _free_duration(lower: str) -> int:
+def _free_duration(lower: str) -> int | None:
+    """Сколько нужно времени, если сказано: «на час», «на полчаса». None — не сказано."""
     if re.search(r"\bна\s+полчаса\b|\bполчаса\b", lower):
         return 30
     if re.search(r"\bна\s+полтора\s+часа\b", lower):
         return 90
+    if re.search(r"\bна\s+(?:целый\s+)?час\b", lower):
+        return 60
     m = re.search(r"\bна\s+(\d+|один|одну|два|две|три|четыре)\s+час", lower)
     if m:
         return 60 * (int(m.group(1)) if m.group(1).isdigit() else NUM_WORDS[m.group(1)])
     m = re.search(r"\bна\s+(\d+)\s+минут", lower)
     if m:
         return max(15, int(m.group(1)))
-    return 60
+    return None
 
 
 def parse(raw: str, now: datetime) -> Parse:
@@ -739,11 +752,28 @@ def parse(raw: str, now: datetime) -> Parse:
     if FREE_RE.search(lower):
         result.intent = "free"
         result.date = info.date or (info.period.start if info.period else None)
-        result.duration = _free_duration(lower)
+        result.period = info.period
         subject = FREE_SUBJECT_RE.search(text)
         if subject:
             noun = "Созвон" if subject.group(1).lower().startswith("созвон") else "Встреча"
             result.subject = f"{noun} {subject.group(2).strip()}"
+        need = _free_duration(lower)
+        result.duration = need or 60
+        # Без «на час» показываем все окна от получаса, для встречи — от часа
+        result.window = need or (60 if subject else 30)
+        rest = _cut(lower, info.spans).lower()
+        if FREE_LONG_RE.search(lower):
+            result.free_mode = "longest"
+        if FREE_BEST_RE.search(lower):
+            if re.search(r"\b(?:день|дня|дни|дней)\b", rest):
+                result.free_mode = "day"
+            elif re.search(r"\bнедел", rest):
+                result.free_mode = "week"
+            elif info.period and not info.date:
+                result.free_mode = "day"    # «Когда я свободнее всего на этой неделе?»
+            else:
+                result.free_mode = "longest"  # «Когда я свободнее всего завтра?»
+        result.weekends = bool(re.search(r"выходн|суббот|воскрес", lower))
         return result
 
     # «Что у меня с Иваном?», «Досье на Петра», «Всё про Машу на этой неделе»
