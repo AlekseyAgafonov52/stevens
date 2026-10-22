@@ -24,7 +24,7 @@ from app.schemas import ChatRequest
 from app.templates import render
 from app.textfmt import (
     MONTHS_GEN, TYPE_FORMS, TYPE_GEN_PLURAL, TYPE_WORD, capitalize, client_now, date_speech, date_text, parse_date, plural,
-    when_text,
+    week_bounds, when_text,
 )
 
 router = APIRouter(prefix="/api", tags=["chat"])
@@ -514,35 +514,161 @@ def window_starts(windows: list[tuple[int, int]], need: int) -> list[int]:
     return starts
 
 
-async def answer_free(ctx: Ctx, p: nlu.Parse) -> dict:
-    day = p.date or ctx.today
-    start = DAY_START
-    if day == ctx.today:
-        now = ctx.now.hour * 60 + ctx.now.minute
-        start = max(DAY_START, (now // STEP + 1) * STEP)
-    if day < ctx.today:
-        day = ctx.today
-    rows = await owner_records(ctx, Record.date == day.isoformat(), Record.time.is_not(None))
-    busy = [(minutes(r.time), minutes(r.time) + LENGTH.get(r.type.value, 30))
-            for r in rows if r.status != TaskStatus.done]
-    windows = free_windows(busy, start, p.duration)
-    day_word = date_text(day, ctx.today)
-    day_send = f"{day.day} {MONTHS_GEN[day.month - 1]}"
-    need = {30: "полчаса", 60: "час", 90: "полтора часа"}.get(p.duration)
-    if not need:
-        need = (plural(p.duration // 60, "час", "часа", "часов") if p.duration % 60 == 0
-                else plural(p.duration, "минута", "минуты", "минут"))
-    if not windows:
-        text, speech = ctx.say("free_none", {"day": day_word, "need": need})
-        return reply("found", text, speech, total=0)
-    # В тексте — все окна промежутками, кнопки — каждый час внутри них
+def length_text(total: int) -> str:
+    """Длина окна словами: «полчаса», «час», «3 часа», «2 часа 30 минут»."""
+    if total in (30, 60, 90):
+        return {30: "полчаса", 60: "час", 90: "полтора часа"}[total]
+    hours, mins = divmod(total, 60)
+    parts = [plural(hours, "час", "часа", "часов")] if hours else []
+    if mins:
+        parts.append(plural(mins, "минута", "минуты", "минут"))
+    return " ".join(parts)
+
+
+def spans_text(windows: list[tuple[int, int]]) -> str:
     spans = [f"{hhmm(b)}–{hhmm(e)}" for b, e in windows]
-    listed = spans[0] if len(spans) == 1 else ", ".join(spans[:-1]) + " и " + spans[-1]
-    times = [hhmm(t) for t in window_starts(windows, p.duration)]
-    text, speech = ctx.say("free_slots" if p.subject else "free_slots_plain",
-                           {"day": day_word, "slots": listed, "need": need, "text": p.subject or ""})
+    return spans[0] if len(spans) == 1 else ", ".join(spans[:-1]) + " и " + spans[-1]
+
+
+def day_send(ctx: Ctx, day: date) -> str:
+    """Как назвать день в тексте кнопки: «сегодня», «завтра», «23 октября»."""
+    return {0: "сегодня", 1: "завтра"}.get((day - ctx.today).days) or f"{day.day} {MONTHS_GEN[day.month - 1]}"
+
+
+def first_minute(ctx: Ctx, day: date) -> int:
+    """С какой минуты ищем окна: сегодня — с ближайшего получаса, иначе с 9:00."""
+    if day == ctx.today:
+        return max(DAY_START, (ctx.now.hour * 60 + ctx.now.minute) // STEP * STEP + STEP)
+    return DAY_START
+
+
+def busy_of(rows: list[Record]) -> list[tuple[int, int]]:
+    return [(minutes(r.time), minutes(r.time) + LENGTH.get(r.type.value, 30))
+            for r in rows if r.time and r.status != TaskStatus.done]
+
+
+async def answer_free(ctx: Ctx, p: nlu.Parse) -> dict:
+    if p.free_mode in ("day", "week"):
+        return await answer_free_days(ctx, p)
+    day = max(p.date or ctx.today, ctx.today)
+    rows = await owner_records(ctx, Record.date == day.isoformat(), Record.time.is_not(None))
+    windows = free_windows(busy_of(rows), first_minute(ctx, day), p.window)
+    day_word = date_text(day, ctx.today)
+    send_day = f"{day.day} {MONTHS_GEN[day.month - 1]}"
     what = p.subject or "Встреча"
-    buttons = [button_text(t, f"{what} {day_send} в {t}") for t in times]
+    if not windows:
+        text, speech = ctx.say("free_none", {"day": day_word, "need": length_text(p.window)})
+        return reply("found", text, speech, total=0)
+    if p.free_mode == "longest":
+        # «Самые свободные часы завтра», «найди большое окно»: самое длинное первым, остальные — по порядку
+        best = max(windows, key=lambda w: (w[1] - w[0], -w[0]))
+        others = [w for w in windows if w != best]
+        values = {"day": day_word, "slot": spans_text([best]), "length": length_text(best[1] - best[0]),
+                  "slots": spans_text(others) if others else ""}
+        text, speech = ctx.say("free_longest_more" if others else "free_longest", values)
+        need = min(p.duration, best[1] - best[0])
+        buttons = [button_text(hhmm(t), f"{what} {send_day} в {hhmm(t)}") for t in window_starts([best], need)]
+        return reply("clarify", text, speech, buttons=buttons)
+    # В тексте — все окна промежутками, кнопки — каждый час внутри тех, куда помещается встреча
+    times = [hhmm(t) for t in window_starts([w for w in windows if w[1] - w[0] >= p.duration], p.duration)]
+    text, speech = ctx.say("free_slots" if p.subject else "free_slots_plain",
+                           {"day": day_word, "slots": spans_text(windows), "need": length_text(p.duration),
+                            "text": p.subject or ""})
+    buttons = [button_text(t, f"{what} {send_day} в {t}") for t in times]
+    return reply("clarify", text, speech, buttons=buttons)
+
+
+@dataclass
+class DayLoad:
+    day: date
+    count: int                       # дел на день, кроме выполненных
+    windows: list[tuple[int, int]]   # свободные окна от получаса
+    score: int                       # свободные минуты минус полчаса на каждое дело без времени
+
+
+def free_period(ctx: Ctx, p: nlu.Parse) -> nlu.Period:
+    """Где сравниваем: сказанный период, иначе для дней — эта неделя, для недель — 4 недели вперёд."""
+    if p.period:
+        return p.period
+    if p.date:
+        s, e = week_bounds(p.date)
+        return nlu.describe_period(s, e, ctx.today)
+    if p.free_mode == "week":
+        return nlu.Period(ctx.today, ctx.today + timedelta(days=27), "в ближайшие 4 недели", "в ближайшие 4 недели")
+    s, e = week_bounds(ctx.today)
+    if ctx.today.weekday() >= 5 and not p.weekends:
+        s, e = week_bounds(ctx.today + timedelta(days=7))
+        return nlu.Period(s, e, "на следующей неделе", "на следующей неделе")
+    return nlu.Period(s, e, "на этой неделе", "на этой неделе")
+
+
+async def day_loads(ctx: Ctx, start: date, end: date) -> list[DayLoad]:
+    rows = await owner_records(ctx, Record.date >= start.isoformat(), Record.date <= end.isoformat())
+    by_day: dict[str, list[Record]] = {}
+    for r in rows:
+        if r.status != TaskStatus.done:
+            by_day.setdefault(r.date, []).append(r)
+    loads = []
+    for n in range((end - start).days + 1):
+        day = start + timedelta(days=n)
+        records = by_day.get(day.isoformat(), [])
+        windows = free_windows(busy_of(records), first_minute(ctx, day), STEP)
+        untimed = sum(1 for r in records if not r.time)
+        loads.append(DayLoad(day, len(records), windows, sum(e - b for b, e in windows) - STEP * untimed))
+    return loads
+
+
+def load_text(load: DayLoad) -> str:
+    if not load.count:
+        return "ни одного дела"
+    text = plural(load.count, "дело", "дела", "дел")
+    if load.windows:
+        best = max(load.windows, key=lambda w: (w[1] - w[0], -w[0]))
+        return f"{text}, самое большое окно {spans_text([best])}"
+    return f"{text}, свободного времени почти нет"
+
+
+async def answer_free_days(ctx: Ctx, p: nlu.Parse) -> dict:
+    """«Какой день самый свободный на этой неделе», «самая свободная неделя в октябре»."""
+    period = free_period(ctx, p)
+    start = max(period.start, ctx.today)
+    if start > period.end:
+        text, speech = ctx.say("free_period_past", {"period": period.label})
+        return reply("found", text, speech, total=0)
+    loads = await day_loads(ctx, start, period.end)
+    # Выходные сравниваем, только если о них спросили или будних не осталось
+    workdays = [x for x in loads if x.day.weekday() < 5]
+    only_work = bool(workdays) and not p.weekends and len(workdays) < len(loads)
+
+    def best_days(days: list[DayLoad]) -> list[DayLoad]:
+        pool = [x for x in days if x.day.weekday() < 5] if not p.weekends else days
+        return sorted(pool or days, key=lambda x: (-x.score, x.day))
+
+    if p.free_mode == "week":
+        weeks: dict[date, list[DayLoad]] = {}
+        for x in loads:
+            weeks.setdefault(week_bounds(x.day)[0], []).append(x)
+
+        def week_score(days: list[DayLoad]) -> float:
+            pool = best_days(days)
+            return sum(x.score for x in pool) / len(pool)
+
+        chosen = max(weeks.values(), key=lambda days: (week_score(days), -days[0].day.toordinal()))
+        top = best_days(chosen)
+        first, last = chosen[0].day, chosen[-1].day
+        week = date_text(first, ctx.today) if first == last else nlu._range_label(first, last)[0]
+        week_speech = date_speech(first, ctx.today) if first == last else nlu._range_label(first, last)[1]
+        count = sum(x.count for x in chosen)
+        values = {"period": period.label, "week": week, "day": date_text(top[0].day, ctx.today),
+                  "load": plural(count, "дело", "дела", "дел") if count else "ни одного дела"}
+        text, speech = ctx.say("free_week", values, {"period": period.label_speech, "week": week_speech})
+    else:
+        top = best_days(loads)
+        values = {"period": period.label, "day": date_text(top[0].day, ctx.today), "load": load_text(top[0]),
+                  "note": " Выходные не считал." if only_work else ""}
+        text, speech = ctx.say("free_day", values, {"period": period.label_speech, "day": date_speech(top[0].day, ctx.today)})
+    buttons = [button_text(capitalize(date_text(x.day, ctx.today)), f"Найди свободное окно {day_send(ctx, x.day)}")
+               for x in top[:3]]
     return reply("clarify", text, speech, buttons=buttons)
 
 

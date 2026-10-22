@@ -221,6 +221,25 @@ TEMPLATES: dict[str, tuple[list[str], str | None]] = {
         "{Day} до 21:00 нет свободного окна на {need}.",
         "{Day} всё занято: окна на {need} до 21:00 нет.",
     ], "{Day} свободного окна нет."),
+    "free_longest": ([
+        "{Day} больше всего свободно {slot} — {length}.",
+        "Самое большое окно {day} — {slot}, {length}.",
+    ], "{Day} больше всего свободно {slot}."),
+    "free_longest_more": ([
+        "{Day} больше всего свободно {slot} — {length}. Ещё окна: {slots}.",
+        "Самое большое окно {day} — {slot}, {length}. Поменьше: {slots}.",
+    ], "{Day} больше всего свободно {slot}."),
+    "free_day": ([
+        "{Period} свободнее всего {day}: {load}.{note}",
+        "Самый свободный день {period} — {day}: {load}.{note}",
+    ], "{Period} свободнее всего {day}."),
+    "free_week": ([
+        "{Period} свободнее всего неделя {week}: {load}. Самый свободный день там — {day}.",
+        "Самая свободная неделя {period} — {week}: {load}. Свободнее всего {day}.",
+    ], "{Period} свободнее всего неделя {week}."),
+    "free_period_past": ([
+        "{Period} дни уже прошли. Спросите про эту или следующую неделю.",
+    ], "{Period} дни уже прошли."),
     "briefing_empty": ([
         "{greeting}. На сегодня дел нет.",
         "{greeting}. Сегодня день свободен.",
