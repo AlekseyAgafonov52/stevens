@@ -43,7 +43,7 @@ WHICH_LIMIT = 5
 
 @dataclass
 class Pending:
-    kind: str                      # draft | confirm | conflict | new_time | confirm_no | multi | move | move_when
+    kind: str                      # draft | confirm | conflict | new_time | confirm_no | multi | multi_ask | move | move_when
     draft: dict = field(default_factory=dict)
 
 
@@ -208,15 +208,45 @@ async def find(ctx: Ctx, p: nlu.Parse, types: set[str] | None = None) -> list[Re
 
 def clarify(ctx: Ctx, template_id: str, draft: dict, quick: list[tuple[str, str]] | None = None,
             values: dict | None = None) -> dict:
+    # Вопрос храним в черновике: непонятный ответ — задаём его ещё раз, контекст не теряем
+    draft = {**draft, "ask": {"template": template_id, "values": values, "quick": quick}}
     ctx.conv.pending = Pending("draft", draft)
     text, speech = ctx.say(template_id, values)
     buttons = [button_text(label, send) for label, send in (quick or [])] + [CANCEL]
     return reply("clarify", text, speech, awaiting=True, buttons=buttons)
 
 
+def ask_again(ctx: Ctx, pending: Pending) -> dict | None:
+    """Ответ на уточнение не понят: повторяем тот же вопрос. None — вопроса нет, разбираем как новый запрос."""
+    ask = pending.draft.get("ask")
+    if not ask:
+        return None
+    return clarify(ctx, ask["template"], pending.draft, ask["quick"], ask["values"])
+
+
+async def free_times(ctx: Ctx, day: str | None, kind: str) -> list[tuple[str, str]]:
+    """Кнопки к вопросу «во сколько»: ближайшие свободные часы в этот день."""
+    target = parse_date(day) if day else ctx.today
+    if not target or target < ctx.today:
+        target = ctx.today
+    start = DAY_START
+    if target == ctx.today:
+        now = ctx.now.hour * 60 + ctx.now.minute
+        start = max(DAY_START, (now // 60 + 1) * 60)
+    rows = await owner_records(ctx, Record.date == target.isoformat(), Record.time.is_not(None))
+    busy = [(minutes(r.time), minutes(r.time) + LENGTH.get(r.type.value, 30))
+            for r in rows if r.status != TaskStatus.done]
+    need = LENGTH.get(kind, 30)
+    starts = [t for t in window_starts(free_windows(busy, start, need), need) if t % 60 == 0][:FREE_BUTTONS]
+    return [(hhmm(t), f"в {hhmm(t)}") for t in starts]
+
+
+FREE_BUTTONS = 3
+
+
 async def process_draft(ctx: Ctx, draft: dict) -> dict:
     kind, has_date, has_time = draft["type"], bool(draft.get("date")), bool(draft.get("time"))
-    times = [("10:00", "в 10:00"), ("15:00", "в 15:00")]
+    times = await free_times(ctx, draft.get("date"), kind) if not has_time else []
     days = [("Сегодня", "сегодня"), ("Завтра", "завтра")]
 
     if not draft.get("text"):
@@ -371,10 +401,50 @@ def ready_draft(ctx: Ctx, draft: dict) -> bool:
     return True
 
 
+def needs_only_time(ctx: Ctx, draft: dict) -> bool:
+    """Встреча или напоминание, где есть всё, кроме времени: спросим его в общем списке."""
+    if draft["type"] not in ("meeting", "reminder") or draft.get("time") or not draft.get("date"):
+        return False
+    return ready_draft(ctx, {**draft, "time": "23:59"})
+
+
+async def ask_many(ctx: Ctx, drafts: list[dict]) -> dict:
+    """Спрашиваем время по очереди: «Во сколько встреча с Машей завтра?». Все ответили — записываем."""
+    missing = [i for i, d in enumerate(drafts) if not d.get("time")]
+    if not missing:
+        return await save_many(ctx, drafts)
+    i = missing[0]
+    draft = drafts[i]
+    ctx.conv.pending = Pending("multi_ask", {"drafts": drafts, "i": i})
+    day = parse_date(draft["date"])
+    diff = (day - ctx.today).days
+    when = {0: "сегодня", 1: "завтра", 2: "послезавтра"}.get(diff) or f"{day.day} {MONTHS_GEN[day.month - 1]}"
+    what = draft["text"][:1].lower() + draft["text"][1:]
+    template = "clarify_many_time" if draft["type"] == "meeting" else "clarify_many_reminder"
+    text, speech = ctx.say(template, {"text": what, "day": when})
+    records = [draft_record(d, ["draft"]) for d in drafts]
+    buttons = [button_text(label, send) for label, send in await free_times(ctx, draft["date"], draft["type"])]
+    return reply("clarify", text, speech, records=records, awaiting=True, buttons=buttons + [CANCEL])
+
+
+async def answer_multi_ask(ctx: Ctx, pending: Pending, raw: str) -> dict | None:
+    """Ответ на «Во сколько …?» в списке дел. None — времени в ответе нет."""
+    time, _, _, _ = nlu.parse_when(raw, ctx.now)
+    if not time:
+        time, _ = nlu.reply_time(raw)
+    if not time:
+        return None
+    drafts = [dict(d) for d in pending.draft["drafts"]]
+    drafts[pending.draft["i"]]["time"] = time
+    return await ask_many(ctx, drafts)
+
+
 async def answer_many(ctx: Ctx, parses: list[nlu.Parse]) -> dict | None:
     """Несколько дел: показываем все карточки и спрашиваем «Записать все?». None — не вышло, разбираем как одно."""
     drafts = [draft_from(p, ctx.today) for p in parses]
     if not all(ready_draft(ctx, d) for d in drafts):
+        if all(ready_draft(ctx, d) or needs_only_time(ctx, d) for d in drafts):
+            return await ask_many(ctx, drafts)
         return None
     ctx.conv.pending = Pending("multi", {"drafts": drafts})
     text, speech = ctx.say("multi_confirm", {"count": len(drafts)})
@@ -501,6 +571,9 @@ def merge_reply(pending: Pending, raw: str, now: datetime) -> dict | None:
         draft["date"] = info.date.isoformat()
         draft["date_kind"] = info.kind if draft["type"] == "task" else "exact"
         changed = True
+    if not time and not draft.get("time"):
+        # Сбивчивый ответ «есть 10… стой… поставь 10» — берём последнее время
+        time, ambiguous = nlu.reply_time(raw)
     if time:
         draft["time"] = time
         draft["ambiguous"] = ambiguous and pending.kind != "confirm_no"
@@ -1141,10 +1214,24 @@ async def respond(ctx: Ctx, payload: ChatRequest) -> dict:
     if pending and pending.kind == "move_when" and not is_new_request(p, raw):
         if answer := await answer_move_when(ctx, pending, raw):
             return answer
-    if pending and pending.kind in ("draft", "new_time", "confirm_no") and not is_new_request(p, raw):
-        merged = merge_reply(pending, raw, ctx.now)
-        if merged:
-            return await process_draft(ctx, merged)
+    asking = pending and pending.kind in ("draft", "new_time", "confirm_no", "multi_ask", "multi", "confirm", "conflict")
+    if asking and nlu.is_cancel_reply(raw):
+        # «Стой», «убери всё» в ответ на вопрос — отмена, а не удаление записей
+        ctx.conv.pending = None
+        text, speech = ctx.say("cancelled")
+        return reply("cancelled", text, speech)
+    if pending and pending.kind in ("draft", "new_time", "confirm_no", "multi_ask") and not is_new_request(p, raw):
+        if pending.kind == "multi_ask":
+            answer = await answer_multi_ask(ctx, pending, raw)
+        else:
+            merged = merge_reply(pending, raw, ctx.now)
+            answer = await process_draft(ctx, merged) if merged else None
+        if answer:
+            return answer
+        if pending.kind == "multi_ask":
+            return await ask_many(ctx, pending.draft["drafts"])
+        if answer := ask_again(ctx, pending):
+            return answer
     ctx.conv.pending = None
 
     if p.intent == "unknown" and llm_enabled():

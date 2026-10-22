@@ -27,7 +27,7 @@ CASES = [
  ("М-1", [("Завтра в 10 созвон с Иваном, потом отправить договор Маше, а в пятницу сдать лабу", None, "confirm", "multi_confirm"),
           ("", "confirm_yes", "created", "multi_created")]),
  ("М-2", [("Напомни завтра в 10 позвонить Ивану и в 12 написать Маше", None, "confirm", "multi_confirm")]),
- ("М-3", [("Созвон с Иваном завтра, потом купить молоко", None, "clarify", "clarify_meeting_time")]),
+ ("М-3", [("Созвон с Иваном завтра, потом купить молоко", None, "clarify", "clarify_many_time")]),
  # Свободное время
  ("С-1", [("Встреча с Петей 30 декабря в 10", None, "created", "created_meeting"),
           ("Когда я свободен 30 декабря на час?", None, "clarify", "free_slots_plain")]),
