@@ -34,8 +34,20 @@ CASES = [
  ("С-2", [("Найди время встретиться с Ваней 30 декабря", None, "clarify", "free_slots"),
           ("", "slot", "created", "created_meeting")]),
  ("Б-1", [("", "briefing", "list", "briefing_next")]),
+ # Перенос всех записей дня
+ ("ВП-1", [("Встреча с Иваном сегодня в 12:40", None, "created", "created_meeting"),
+           ("Встреча с Петей завтра в 12:40", None, "created", "created_meeting"),
+           ("Перенеси все встречи на завтра", None, "clarify", "move_all_plan_some"),
+           ("", "move_all_same", "clarify", "move_ask_time"),
+           ("в 16", None, "updated", "moved")]),
+ ("ВП-2", [("Встреча с Иваном сегодня в 12:40", None, "created", "created_meeting"),
+           ("Перенеси все встречи", None, "clarify", "move_all_ask_day"),
+           ("", "slot", "clarify", "move_all_plan_free"),
+           ("в те же часы", None, "updated", "moved_all")]),
 ]
 EXPECT = {
+ "ВП-1": lambda r: (r["records"][0]["text"], r["records"][0]["date"], r["records"][0]["time"]) == ("Встреча с Иваном", "2026-10-22", "16:00"),
+ "ВП-2": lambda r: [(x["date"], x["time"]) for x in r["records"]] == [("2026-10-22", "08:00"), ("2026-10-22", "12:40")],
  "С-2": lambda r: r["records"][0]["text"] == "Встреча с Ваней" and r["records"][0]["time"] == "09:00",
  "С-1": lambda r: "09:00–10:00, 11:00–" in r["text"] and [b["label"] for b in r["buttons"]][:3] == ["09:00", "11:00", "12:00"],
  "М-1": lambda r: len(r["records"]) == 3 and all("new" in x["marks"] for x in r["records"]),

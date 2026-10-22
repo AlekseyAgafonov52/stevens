@@ -43,7 +43,7 @@ WHICH_LIMIT = 5
 
 @dataclass
 class Pending:
-    kind: str                      # draft | confirm | conflict | new_time | confirm_no | multi | multi_ask | move | move_when
+    kind: str                      # draft | confirm | conflict | new_time | confirm_no | multi | multi_ask | move | move_when | move_all
     draft: dict = field(default_factory=dict)
 
 
@@ -899,6 +899,8 @@ def move_changes(p: nlu.Parse) -> dict:
 
 
 async def answer_move(ctx: Ctx, p: nlu.Parse) -> dict:
+    if p.all:
+        return await answer_move_all(ctx, p)
     changes = move_changes(p)
     found = await focused(ctx, p)
     if not found and p.keywords:
@@ -969,9 +971,9 @@ async def ask_move_day(ctx: Ctx, record: Record, time: str | None = None) -> dic
     return reply("clarify", text, speech, records=[record.to_contract()], awaiting=True, buttons=buttons + [CANCEL])
 
 
-async def ask_move_time(ctx: Ctx, record: Record, day: date) -> dict:
-    """«Во сколько?» — свободные окна выбранного дня кнопками."""
-    ctx.conv.pending = Pending("move_when", {"record_id": record.id, "date": day.isoformat()})
+async def ask_move_time(ctx: Ctx, record: Record, day: date, queue: list[int] | None = None) -> dict:
+    """«Во сколько?» — свободные окна выбранного дня кнопками. queue — кого спросить следом (перенос всех)."""
+    ctx.conv.pending = Pending("move_when", {"record_id": record.id, "date": day.isoformat(), "queue": queue or []})
     need = LENGTH.get(record.type.value, 30)
     windows = await day_windows(ctx, day, need, skip=record.id)
     values = {"day": date_text(day, ctx.today), "text": record.text}
@@ -1034,7 +1036,166 @@ async def answer_move_when(ctx: Ctx, pending: Pending, raw: str) -> dict | None:
     changes = move_changes(p)
     changes["time"] = changes["time"] or pending.draft.get("time")
     changes["date"] = changes["date"] or pending.draft.get("date")
-    return await move_one(ctx, record, changes)
+    queue = pending.draft.get("queue") or []
+    answer = await move_one(ctx, record, changes)
+    if answer["kind"] != "updated" or not queue:
+        return answer
+    # Перенос всех: следующая запись очереди на тот же день
+    return await next_in_queue(ctx, queue, parse_date(changes["date"]) or ctx.today, answer)
+
+
+# ── Перенос всех записей дня ──────────────────────────
+
+async def records_by_ids(ctx: Ctx, ids: list[int]) -> list[Record]:
+    rows = {r.id: r for r in await owner_records(ctx, Record.id.in_(ids))} if ids else {}
+    return [rows[i] for i in ids if i in rows]
+
+
+def join_answers(first: dict, second: dict) -> dict:
+    """Один ответ из двух: «Перенёс…» и следом вопрос про следующую запись."""
+    second["text"] = f"{first['text']} {second['text']}"
+    if first.get("speech") and second.get("speech"):
+        second["speech"] = f"{first['speech']} {second['speech']}"
+    second["records"] = first["records"] + second["records"]
+    return second
+
+
+async def next_in_queue(ctx: Ctx, queue: list[int], day: date, done: dict | None) -> dict:
+    rows = await records_by_ids(ctx, queue)
+    if not rows:
+        ctx.conv.pending = None
+        return done or reply("cancelled", *ctx.say("cancelled"))
+    ask = await ask_move_time(ctx, rows[0], day, [r.id for r in rows[1:]])
+    return join_answers(done, ask) if done else ask
+
+
+def same_time_free(record: Record, busy: list[tuple[int, int]]) -> bool:
+    start = minutes(record.time)
+    end = start + LENGTH.get(record.type.value, 30)
+    return all(end <= b or start >= e for b, e in busy)
+
+
+async def busy_except(ctx: Ctx, day: date, ids: set[int]) -> list[tuple[int, int]]:
+    rows = await owner_records(ctx, Record.date == day.isoformat(), Record.time.is_not(None))
+    return [(minutes(r.time), minutes(r.time) + LENGTH.get(r.type.value, 30))
+            for r in rows if r.status != TaskStatus.done and r.id not in ids]
+
+
+def type_forms(rows: list[Record]) -> tuple[str, str, str] | None:
+    kinds = {r.type.value for r in rows}
+    return TYPE_FORMS[kinds.pop()] if len(kinds) == 1 else None
+
+
+async def moved_all(ctx: Ctx, rows: list[Record], day: date) -> dict:
+    values = {"count": len(rows), "day": date_text(day, ctx.today), "day_on": when_text({"date": day.isoformat()}, ctx.today)}
+    text, speech = ctx.say("moved_all", values, {"day": date_speech(day, ctx.today)}, count_forms=type_forms(rows))
+    return reply("updated", text, speech, records=[r.to_contract(marks=["new"]) for r in rows])
+
+
+async def move_rows(ctx: Ctx, rows: list[Record], day: date, keep: list[Record]) -> dict | None:
+    """Переносим keep на day в их же часы; остальным из rows — время по очереди."""
+    for r in keep:
+        r.date = day.isoformat()
+        if r.date_kind == DateKind.none:
+            r.date_kind = DateKind.exact
+    await ctx.db.commit()
+    rest = [r.id for r in rows if r not in keep]
+    done = await moved_all(ctx, keep, day) if keep else None
+    if rest:
+        return await next_in_queue(ctx, rest, day, done)
+    ctx.conv.pending = None
+    return done
+
+
+async def answer_move_all(ctx: Ctx, p: nlu.Parse) -> dict:
+    source = p.source or ctx.today
+    conditions = [Record.date == source.isoformat()]
+    if p.filter_type:
+        conditions.append(Record.type == TaskType(p.filter_type))
+    rows = sorted([r for r in await owner_records(ctx, *conditions) if r.status != TaskStatus.done],
+                  key=lambda r: (r.time or "99:99", r.id))
+    if not rows:
+        values = {"day": date_text(source, ctx.today), "types_gen": TYPE_GEN_PLURAL.get(p.filter_type or "", "дел")}
+        text, speech = ctx.say("move_all_none", values, {"day": date_speech(source, ctx.today)})
+        return reply("found", text, speech, total=0)
+    if len(rows) == 1:
+        return await move_one(ctx, rows[0], move_changes(p))
+    if p.shift:
+        moved = [r for r in rows if r.time]
+        for r in moved:
+            r.time = hhmm(max(0, min(minutes(r.time) + p.shift, 23 * 60 + 59)))
+        return await move_rows(ctx, moved, source, moved) or reply("cancelled", *ctx.say("cancelled"))
+    if not p.date:
+        return ask_move_all_day(ctx, rows, source)
+    return await plan_move_all(ctx, rows, p.date)
+
+
+def ask_move_all_day(ctx: Ctx, rows: list[Record], source: date) -> dict:
+    ctx.conv.pending = Pending("move_all", {"ids": [r.id for r in rows]})
+    days = [d for d in (ctx.today + timedelta(days=i) for i in range(4)) if d != source][:3]
+    if source + timedelta(days=7) not in days:
+        days.append(max(source, ctx.today) + timedelta(days=7))
+    buttons = [button_text(capitalize(date_text(d, ctx.today)), f"{d.day} {MONTHS_GEN[d.month - 1]} {d.year}")
+               for d in days]
+    text, speech = ctx.say("move_all_ask_day", {"count": len(rows)}, count_forms=type_forms(rows))
+    return reply("clarify", text, speech, records=[r.to_contract() for r in rows], awaiting=True,
+                 buttons=buttons + [CANCEL])
+
+
+async def plan_move_all(ctx: Ctx, rows: list[Record], day: date) -> dict:
+    """День назван: те же часы свободны — предлагаем перенести как есть, иначе время по очереди."""
+    if day < ctx.today:
+        return ask_move_all_day(ctx, rows, parse_date(rows[0].date) or ctx.today)
+    timed = [r for r in rows if r.time]
+    if not timed:
+        return await move_rows(ctx, rows, day, rows)
+    busy = await busy_except(ctx, day, {r.id for r in rows})
+    free = [r for r in timed if same_time_free(r, busy)]
+    ctx.conv.pending = Pending("move_all", {"ids": [r.id for r in rows], "date": day.isoformat()})
+    values = {"count": len(rows), "day": date_text(day, ctx.today), "free": len(free), "timed": len(timed)}
+    speech_values = {"day": date_speech(day, ctx.today)}
+    template = "move_all_plan_free" if len(free) == len(timed) else "move_all_plan_some" if free else "move_all_plan_busy"
+    text, speech = ctx.say(template, values, speech_values, count_forms=type_forms(rows))
+    buttons = []
+    if free:
+        buttons.append(button_action("В те же часы", "move_all_same"))
+    buttons.append(button_action("Выбрать время каждой", "move_all_each", style="secondary" if free else None))
+    return reply("clarify", text, speech, records=[r.to_contract() for r in rows], awaiting=True,
+                 buttons=buttons + [CANCEL])
+
+
+async def answer_move_all_choice(ctx: Ctx, pending: Pending, how: str) -> dict:
+    rows = [r for r in await records_by_ids(ctx, pending.draft.get("ids", [])) if r.deleted_at is None]
+    day = parse_date(pending.draft.get("date"))
+    if not rows or not day:
+        ctx.conv.pending = None
+        return reply("cancelled", *ctx.say("cancelled"))
+    untimed = [r for r in rows if not r.time]
+    if how == "same":
+        busy = await busy_except(ctx, day, {r.id for r in rows})
+        keep = untimed + [r for r in rows if r.time and same_time_free(r, busy)]
+    else:
+        keep = untimed
+    keep.sort(key=lambda r: (r.time or "99:99", r.id))
+    return await move_rows(ctx, rows, day, keep) or reply("cancelled", *ctx.say("cancelled"))
+
+
+SAME_RE = re.compile(r"(те\s+же|так\s+же|тоже\s+время|то\s+же\s+время|как\s+есть|оставь)", re.I)
+EACH_RE = re.compile(r"(кажд|по\s+очереди|выбер|подбер)", re.I)
+
+
+async def answer_move_all_reply(ctx: Ctx, pending: Pending, raw: str) -> dict | None:
+    """Ответ голосом или текстом на вопросы переноса всех: день, «в те же часы», «по очереди»."""
+    if pending.draft.get("date"):
+        if SAME_RE.search(raw):
+            return await answer_move_all_choice(ctx, pending, "same")
+        if EACH_RE.search(raw):
+            return await answer_move_all_choice(ctx, pending, "each")
+    q = nlu.parse("перенеси " + raw, ctx.now)
+    if q.intent != "move" or q.keywords or not q.date:
+        return None
+    rows = await records_by_ids(ctx, pending.draft.get("ids", []))
+    return await plan_move_all(ctx, rows, q.date) if rows else None
 
 
 # ── Поправка ослышки: «исправь и вам на Иван», «не и вам, а Иван» ──
@@ -1160,6 +1321,8 @@ async def handle_action(ctx: Ctx, action_id: str, record_id: int | None) -> dict
         values, speech_values = ctx.record_values(data)
         text, speech = ctx.say("restored", values, speech_values)
         return reply("created", text, speech, records=[data], buttons=undo_button(ctx, record))
+    if action_id in ("move_all_same", "move_all_each") and pending and pending.kind == "move_all":
+        return await answer_move_all_choice(ctx, pending, action_id.removeprefix("move_all_"))
     if action_id == "move" and pending and pending.kind == "move":
         record = await owned_record(ctx, record_id)
         if record:
@@ -1211,6 +1374,9 @@ async def respond(ctx: Ctx, payload: ChatRequest) -> dict:
 
     # Ответ на уточнение (Р-45); не ответ — новый запрос, уточнение забываем (Р-33)
     pending = ctx.conv.pending
+    if pending and pending.kind == "move_all" and not is_new_request(p, raw):
+        if answer := await answer_move_all_reply(ctx, pending, raw):
+            return answer
     if pending and pending.kind == "move_when" and not is_new_request(p, raw):
         if answer := await answer_move_when(ctx, pending, raw):
             return answer

@@ -85,6 +85,8 @@ class Parse:
     duration: int = 60          # free: сколько минут нужно
     subject: str | None = None  # free: «Встреча с Ваней» для кнопок со временем
     person: str | None = None   # person: «Иваном» — с кем досье, в творительном падеже
+    all: bool = False           # move: «перенеси все встречи» — все записи дня source
+    source: date | None = None  # move all: с какого дня переносим (по умолчанию сегодня)
 
 
 # ── Время ─────────────────────────────────────────────
@@ -530,6 +532,12 @@ DONE_RE = re.compile(r"^(?:готово|сделано|выполнено|сде
 REF_RE = re.compile(rf"\b(её|ее|его|это|эту|этот|эта|последн\w*|предыдущ\w*)\b", I)
 MOVE_RE = re.compile(r"^(?:перенеси(?:те)?|перенести|передвинь|сдвинь|подвинь|поменяй|измени)\b", I)
 SHIFT_RE = re.compile(r"\bна\s+(полчаса|(\d+)?\s*час\w*|(\d+)\s*минут\w*)\s+(позже|раньше)\b", I)
+ALL_RE = re.compile(r"\b(?:вс[её]|всех)\b", I)
+SOURCE_RE = re.compile(
+    r"\b(?:с|со)\s+(сегодня|завтра|послезавтра|понедельника|вторника|среды|четверга|пятницы|субботы|воскресенья)\b"
+    r"|\b(сегодняшн\w*|завтрашн\w*)\b",
+    I,
+)
 TIME_ON_RE = re.compile(r"\bна\s+(\d{1,2})\b(?![:.]\d|\s*(?:час|минут|числ|январ|феврал|март|апрел|ма[яй]|июн|июл|август|сентябр|октябр|ноябр|декабр))", I)
 REMIND_RE = re.compile(r"(^напомни|\bнапомн(?:и|ите|ить|ил|ила|им)\b|\bнапоминани)", I)
 
@@ -639,6 +647,8 @@ def parse(raw: str, now: datetime) -> Parse:
         return result
 
     # «Перенеси её на завтра», «Сдвинь встречу с Иваном на час позже»
+    if MOVE_RE.search(lower) and ALL_RE.search(lower):
+        return _parse_move_all(text, now, result)
     if MOVE_RE.search(lower):
         result.intent = "move"
         result.filter_type = _filter_type(lower)
@@ -762,6 +772,33 @@ def parse(raw: str, now: datetime) -> Parse:
         result.has_subject = bool(keywords(body))
     body = body.strip(" ,.:;!—-")
     result.text = capitalize(body) if body else None
+    return result
+
+
+def _parse_move_all(text: str, now: datetime, result: Parse) -> Parse:
+    """«Перенеси все встречи на завтра», «Перенеси всё с пятницы на понедельник», «Сдвинь все дела на час позже»."""
+    today = now.date()
+    result.intent, result.all = "move", True
+    result.filter_type = _filter_type(text.lower())
+    result.source = today
+    src = SOURCE_RE.search(text)
+    if src:
+        word = (src.group(1) or src.group(2)).lower()
+        shifts = {"сегодня": 0, "сегодняшн": 0, "завтра": 1, "завтрашн": 1, "послезавтра": 2}
+        key = next((k for k in shifts if word.startswith(k)), None)
+        if key is not None:
+            result.source = today + timedelta(days=shifts[key])
+        else:
+            result.source = today + timedelta(days=(_weekday_index(word) - today.weekday()) % 7)
+        text = _cut(text, [src.span()])
+    shift = SHIFT_RE.search(text)
+    if shift:
+        amount = shift.group(1).lower()
+        result.shift = 30 if amount == "полчаса" else 60 * int(shift.group(2) or 1) if "час" in amount else int(shift.group(3))
+        result.shift *= -1 if shift.group(4).lower() == "раньше" else 1
+        return result
+    time, ambiguous, _, info = parse_when(text, now)
+    result.date = info.date
     return result
 
 
