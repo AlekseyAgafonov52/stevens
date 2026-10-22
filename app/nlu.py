@@ -64,7 +64,7 @@ class Period:
 
 @dataclass
 class Parse:
-    intent: str = "unknown"  # create list search help thanks off_topic delete complete free move unknown
+    intent: str = "unknown"  # create list search person help thanks off_topic delete complete free move unknown
     type: str | None = None
     text: str | None = None
     date: date | None = None
@@ -84,6 +84,7 @@ class Parse:
     thanks: bool = False        # в сообщении есть благодарность
     duration: int = 60          # free: сколько минут нужно
     subject: str | None = None  # free: «Встреча с Ваней» для кнопок со временем
+    person: str | None = None   # person: «Иваном» — с кем досье, в творительном падеже
 
 
 # ── Время ─────────────────────────────────────────────
@@ -453,6 +454,59 @@ def _cut(text: str, spans: list[tuple[int, int]]) -> str:
     return text
 
 
+# ── Досье на человека: «что у меня с Иваном?» ────────
+
+PERSON_RE = re.compile(
+    r"(?:^|\b)(?:"
+    r"что\s+(?:у\s+(?:меня|нас)\s+)?(?:было\s+|будет\s+|есть\s+|связано\s+)?(?:с|со|про|по)"
+    r"|досье\s+(?:на|по|про)"
+    r"|(?:вс[её]|все)\s+(?:что\s+(?:есть|связано)\s+)?(?:про|о|об|по|с|со)"
+    r"|какие\s+(?:у\s+меня\s+)?(?:дела|планы|встречи|задачи)\s+(?:с|со)"
+    r"|(?:мои\s+)?дела\s+(?:с|со)"
+    r"|расскажи\s+(?:про|о|об)"
+    r")\s+",
+    I,
+)
+
+
+def _person_word(word: str, first: bool) -> bool:
+    """Имя («Иваном», «Машей») или название с большой буквы («Пульсом»)."""
+    low = word.lower().replace("ё", "е")
+    if low in STOPWORDS or len(word) < 3 or re.fullmatch(WEEKDAY_RE + r"|" + MONTH_RE, low):
+        return False
+    return word_key(word).startswith("@") or (word[:1].isupper() and not first)
+
+
+def _instrumental(word: str) -> str:
+    """«Ивана» → «Иваном», «Маша» → «Машей»; не имя — как сказали."""
+    if _MORPH is not None:
+        for form in _MORPH.parse(word)[:3]:
+            if "Name" in form.tag:
+                found = form.inflect({"ablt", "sing"})
+                if found:
+                    return capitalize(found.word)
+    return capitalize(word)
+
+
+def person_request(text: str) -> tuple[list[str], str] | None:
+    """«Что у меня с Иваном и Машей?» → (ключи имён, «Иваном и Машей»)."""
+    m = PERSON_RE.search(text)
+    if not m:
+        return None
+    words = re.findall(r"[A-Za-zА-Яа-яЁё-]+", text[m.end():])
+    keys, names = [], []
+    for w in words:
+        if names and w.lower() in ("и", "или"):
+            continue
+        if not _person_word(w, first=m.end() == 0):
+            break
+        keys.append(word_key(w))
+        names.append(_instrumental(w))
+    if not keys:
+        return None
+    return keys, " и ".join(names)
+
+
 # ── Главная функция ───────────────────────────────────
 
 THANKS_RE = re.compile(r"\b(спасибо|благодарю|благодарствую|спс)\b[,!.\s]*(стивенс|stevens)?[,!.]*", I)
@@ -606,6 +660,18 @@ def parse(raw: str, now: datetime) -> Parse:
         if subject:
             noun = "Созвон" if subject.group(1).lower().startswith("созвон") else "Встреча"
             result.subject = f"{noun} {subject.group(2).strip()}"
+        return result
+
+    # «Что у меня с Иваном?», «Досье на Петра», «Всё про Машу на этой неделе»
+    person = None if CREATE_VERB_RE.search(lower) else person_request(_cut(text, info.spans + time_spans))
+    if person:
+        result.intent = "person"
+        result.keywords, result.person = person
+        result.filter_type = _filter_type(lower)
+        if info.period:
+            result.period = info.period
+        elif info.date:
+            result.period = _day_period(info.date, now.date())
         return result
 
     if SEARCH_RE.search(lower) and not CREATE_VERB_RE.search(lower):
