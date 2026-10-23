@@ -241,7 +241,7 @@ _TENS = {"двадцать": 20, "тридцать": 30, "сорок": 40, "пя
 _NUM = rf"(?:\d+(?:[.,]5)?|(?:{'|'.join(_TENS)})(?:\s+(?:{'|'.join(_UNITS)}))?|{'|'.join(_UNITS)})"
 _UNIT = r"(?:полчаса|полтора\s+часа|полминуты|минут[уы]?|мин\.?|час(?:а|ов)?|д(?:ень|ня|ней)|сутки|суток|недел[юи]|недель|месяц(?:а|ев)?)"
 REL_RE = re.compile(
-    rf"\bчерез\s+(?:({_NUM})\s+)?({_UNIT})(?:\s+(?:и\s+)?({_NUM})\s+(минут[уы]?|мин\.?))?(?=\s|$|[,.!?])",
+    rf"\bчерез\s+(?:({_NUM})\s+)?({_UNIT})(?:\s+(?:и\s+)?({_NUM})(?:\s+(минут[уы]?|мин\.?))?)?(?=\s|$|[,.!?])",
     I,
 )
 
@@ -262,7 +262,12 @@ def _relative(text: str, now: datetime) -> tuple[date | None, str | None, tuple[
     if not m:
         return None, None, None
     n, unit = _number(m.group(1)), m.group(2).lower()
-    extra = timedelta(minutes=_number(m.group(3))) if m.group(3) else timedelta()
+    span = m.span()
+    if m.group(3) and not m.group(4) and not unit.startswith(("час", "полтора")):
+        # «Через 2 дня 3 задачи» — число без «минут» здесь не минуты; «через час двадцать» — минуты
+        span, extra = (m.start(), m.end(2)), timedelta()
+    else:
+        extra = timedelta(minutes=_number(m.group(3))) if m.group(3) else timedelta()
     if unit == "полчаса":
         delta = timedelta(minutes=30)
     elif unit.startswith("полтора"):
@@ -274,16 +279,16 @@ def _relative(text: str, now: datetime) -> tuple[date | None, str | None, tuple[
     elif unit.startswith("час"):
         delta = timedelta(minutes=round(n * 60))
     elif unit.startswith("д") or unit.startswith("сут"):
-        return (now + timedelta(days=int(n))).date(), None, m.span()
+        return (now + timedelta(days=int(n))).date(), None, span
     elif unit.startswith("недел"):
-        return (now + timedelta(weeks=int(n))).date(), None, m.span()
+        return (now + timedelta(weeks=int(n))).date(), None, span
     else:
         month = now.month - 1 + int(n)
         year, month = now.year + month // 12, month % 12 + 1
         day = min(now.day, [31, 29 if year % 4 == 0 else 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][month - 1])
-        return date(year, month, day), None, m.span()
+        return date(year, month, day), None, span
     moment = now + delta + extra
-    return moment.date(), moment.strftime("%H:%M"), m.span()
+    return moment.date(), moment.strftime("%H:%M"), span
 
 
 def parse_when(text: str, now: datetime) -> tuple[str | None, bool, list[tuple[int, int]], "_DateInfo"]:
@@ -469,6 +474,17 @@ def _parse_date(text: str, now: datetime, time: str | None) -> _DateInfo:
             try:
                 day = date(int(m.group(3)) if m.group(3) else today.year, _month_index(m.group(2)) + 1, int(m.group(1)))
                 found(m, day if m.group(3) else _near_year(day, today))
+            except ValueError:
+                pass
+    if not info.date:
+        # «25 числа», «на 3-е число» — ближайшее такое число: в этом месяце, а если прошло — в следующем
+        m = re.search(r"\b(?:на\s+)?(\d{1,2})(?:-?(?:го|е|ое))?\s+числ[оа]\b", text, I)
+        if m and 1 <= int(m.group(1)) <= 31:
+            year, month = today.year, today.month
+            if int(m.group(1)) < today.day:
+                year, month = year + (month == 12), month % 12 + 1
+            try:
+                found(m, date(year, month, int(m.group(1))))
             except ValueError:
                 pass
     if not info.date:
@@ -1065,6 +1081,7 @@ def parse(raw: str, now: datetime) -> Parse:
             result.subject = f"{noun} {subject.group(2).strip()}"
         need = _free_duration(lower)
         result.duration = need or 60
+        result.time = time  # «Я свободен в пятницу в 15?» — да или нет на это время
         # Без «на час» показываем все окна от получаса, для встречи — от часа
         result.window = need or (60 if subject else 30)
         rest = _cut(lower, info.spans).lower()

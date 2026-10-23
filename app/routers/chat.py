@@ -611,6 +611,8 @@ async def answer_free(ctx: Ctx, p: nlu.Parse) -> dict:
     day_word = date_text(day, ctx.today)
     send_day = f"{day.day} {MONTHS_GEN[day.month - 1]}"
     what = p.subject or "Встреча"
+    if p.time and p.free_mode == "windows" and day >= ctx.today:
+        return free_at(ctx, p, day, rows, windows, what, send_day)
     if not windows:
         text, speech = ctx.say("free_none", {"day": day_word, "need": length_text(p.window)})
         return reply("found", text, speech, total=0)
@@ -631,6 +633,29 @@ async def answer_free(ctx: Ctx, p: nlu.Parse) -> dict:
                             "text": p.subject or ""})
     buttons = [button_text(t, f"{what} {send_day} в {t}") for t in times]
     return reply("clarify", text, speech, buttons=buttons)
+
+
+def free_at(ctx: Ctx, p: nlu.Parse, day: date, rows: list[Record], windows: list[tuple[int, int]], what: str,
+            send_day: str) -> dict:
+    """«Я свободен в пятницу в 15?» — да или нет, а если занято, то с чем и где окна."""
+    start = minutes(p.time)
+    end = start + p.duration
+    clash = [r for r in rows if r.time and r.status != TaskStatus.done
+             and minutes(r.time) < end and start < minutes(r.time) + LENGTH.get(r.type.value, 30)]
+    values = {"day": date_text(day, ctx.today), "time": p.time}
+    if not clash:
+        text, speech = ctx.say("free_at_yes", values)
+        return reply("clarify", text, speech, buttons=[button_text(f"Поставить на {p.time}", f"{what} {send_day} в {p.time}")])
+    first = sorted(clash, key=moment)[0]
+    values["text"] = first.text
+    if not windows:
+        text, speech = ctx.say("free_at_full", values)
+        return reply("found", text, speech, records=[first.to_contract()])
+    values["slots"] = spans_text(windows)
+    text, speech = ctx.say("free_at_no", values)
+    times = [hhmm(t) for t in window_starts([w for w in windows if w[1] - w[0] >= p.duration], p.duration)]
+    return reply("clarify", text, speech, records=[first.to_contract()],
+                 buttons=[button_text(t, f"{what} {send_day} в {t}") for t in times])
 
 
 @dataclass
