@@ -185,6 +185,11 @@ TEMPLATES: dict[str, tuple[list[str], str | None]] = {
         "{Type} «{text}», {when} — верно?",
         "Проверим: {type} «{text}», {when}. Всё так?",
     ], "{Type}, {when} — верно?"),
+    "confirm_doubt": ([
+        "{hint} Верно понял: {type} «{text}», {when}?",
+        "{hint} {Type} «{text}», {when} — верно?",
+        "{hint} Проверим: {type} «{text}», {when}. Всё так?",
+    ], "{hint} {Type}, {when} — верно понял?"),
     "confirm_no": ([
         "Хорошо. Что поправить?",
         "Понял. Что изменить: дату, время или текст?",
