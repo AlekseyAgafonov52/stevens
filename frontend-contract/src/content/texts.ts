@@ -146,6 +146,7 @@ export const T = {
   type_reminder: 'Напоминание',
   type_meeting: 'Встреча',
   type_note: 'Заметка',
+  type_busy: 'Занятость',
   date_none: 'без срока',
   date_deadline: 'до {date}',
   date_today: 'сегодня',
@@ -170,11 +171,14 @@ export const T = {
   edit_date: 'Дата',
   edit_date_deadline: 'Срок до',
   edit_time: 'Время',
+  edit_time_from: 'С',
+  edit_time_to: 'До',
   edit_save: 'Сохранить',
   edit_cancel: 'Отмена',
   edit_delete: 'Удалить',
   edit_err_text: 'Напишите, что записать.',
   edit_err_datetime: 'Укажите дату и время.',
+  edit_err_interval: 'Укажите дату и время: с какого и до какого.',
 
   // ── Допы: удаление (Д2) ─────────────────────────────
   label_deleted: 'Удалено',
