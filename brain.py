@@ -206,6 +206,9 @@ def parse_user_input(text: str) -> Optional[IntentSchema]:
 
         return intent_obj   
 
+    except (openai.APIConnectionError, openai.AuthenticationError, openai.PermissionDeniedError,
+            openai.RateLimitError, openai.InternalServerError):
+        raise  # Яндекс недоступен — пусть сервер на время перестанет его ждать (chat.llm_parse)
     except Exception as e:
         print(f"❌ Ошибка Yandex API: {e}")
         return IntentSchema(intent="unknown")

@@ -796,14 +796,22 @@ def llm_time(value: str | None) -> str | None:
     return f"{int(m.group(1)):02d}:{m.group(2)}" if m else None
 
 
+LLM_PAUSE = 60          # Яндекс не ответил — минуту не спрашиваем, сразу «не понял»
+_llm_down_until = 0.0
+
+
 async def llm_parse(text: str, now: datetime) -> nlu.Parse:
     """Если правила не поняли — спрашиваем LLM (brain.py) и переводим её ответ в Parse.
     Запрос к Яндексу синхронный — в отдельном потоке, чтобы остальные запросы не ждали."""
+    global _llm_down_until
+    if clock.time() < _llm_down_until:
+        return nlu.Parse()
     try:
         from brain import parse_user_input
         intent = await asyncio.to_thread(parse_user_input, text)
     except Exception as error:  # noqa: BLE001 — LLM недоступна: «не понял»
-        print(f"LLM недоступна: {error}")
+        print(f"LLM недоступна: {error!r}")
+        _llm_down_until = clock.time() + LLM_PAUSE
         return nlu.Parse()
     if not intent or intent.intent == "unknown":
         return nlu.Parse()

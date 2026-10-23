@@ -6,7 +6,7 @@ os.environ.setdefault("DATABASE_URL", "postgresql+asyncpg://postgres@localhost:5
 import httpx
 from sqlalchemy import text
 import brain
-from app import push
+from app import owner, push
 from app.database import AsyncSessionLocal
 from app.main import app
 from app.models import Record, TaskType, DateKind
@@ -109,6 +109,17 @@ async def main():
                 return time.perf_counter() - started
             _, wait = await asyncio.gather(say("бубубу"), health_during_llm())
             check("LLM не стопорит сервер", wait < 0.3, round(wait, 3))
+            # Яндекс лёг: после первого сбоя минуту его не ждём
+            calls = []
+            def down(text_):
+                calls.append(text_)
+                raise brain.openai.APIConnectionError(request=httpx.Request("POST", "https://llm"))
+            brain.parse_user_input = down
+            chat._llm_down_until = 0.0
+            r1, r2 = (await say("бубубу раз")).json(), (await say("бубубу два")).json()
+            check("Яндекс лёг — не ждём его повторно", r1["kind"] == r2["kind"] == "not_understood" and len(calls) == 1,
+                  (r1["kind"], r2["kind"], len(calls)))
+            chat._llm_down_until = 0.0
             brain.parse_user_input = original
             del os.environ["YANDEX_API_KEY"], os.environ["YANDEX_FOLDER_ID"]
             check("у Яндекса есть таймаут", 0 < brain.client.timeout <= 15 and brain.client.max_retries <= 1,
@@ -118,6 +129,33 @@ async def main():
             bad = Record(sandbox_id=cid, type=TaskType.reminder, text="Кривая", date="2026-10-21", time="25:99",
                          date_kind=DateKind.exact, created_at=datetime.now(timezone.utc))
             check("кривое время пропущено", push.fire_at(bad, timezone.utc) is None)
+
+            # Заброшенные песочницы: удаляются целиком, общая и свежие остаются
+            old_id = "old-" + uuid.uuid4().hex[:12]
+            await c.get(MONTH, headers={"X-Client-Id": old_id})
+            await c.post("/api/chat", headers={"X-Client-Id": old_id}, json={
+                "conversation_id": "o", "text": "каждый вторник в 10 планёрка", "client_time": CLOCK})
+            await c.get(MONTH)  # общая
+            async with AsyncSessionLocal() as db:
+                await db.execute(text("update sandboxes set seen_at = now() - interval '40 days' "
+                                      "where client_id in (:o, 'shared-demo')"), {"o": old_id})
+                await db.commit()
+                removed = await owner.clean_sandboxes(db, 30)
+                left = (await db.execute(text("select count(*) from records where sandbox_id=:o"), {"o": old_id})).scalar()
+                boxes = set((await db.execute(text("select client_id from sandboxes where client_id in (:o, :c, 'shared-demo')"),
+                                              {"o": old_id, "c": cid})).scalars())
+            check("заброшенная песочница удалена", removed >= 1 and left == 0 and boxes == {cid, "shared-demo"},
+                  (removed, left, boxes))
+            r = await c.get(MONTH, headers={"X-Client-Id": old_id})
+            check("вернулся — песочница заново", r.status_code == 200 and len(r.json()["records"]) > 0)
+            async with AsyncSessionLocal() as db:
+                await db.execute(text("update sandboxes set seen_at = now() - interval '2 hours' where client_id=:c"), {"c": cid})
+                await db.commit()
+            await c.get(MONTH, headers=h)
+            async with AsyncSessionLocal() as db:
+                fresh = (await db.execute(text("select seen_at > now() - interval '1 minute' from sandboxes where client_id=:c"),
+                                          {"c": cid})).scalar()
+            check("заход обновляет seen_at", fresh)
 
     print("fails:", fails)
     sys.exit(1 if fails else 0)
