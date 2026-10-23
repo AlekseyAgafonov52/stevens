@@ -4,7 +4,7 @@ import { clashes, movePatch, shiftedTime, STEP_PX } from './drag';
 
 const rec = (over: Partial<RecordItem>): RecordItem => ({
   id: 1, type: 'meeting', text: 'Планёрка', date: '2026-10-22', time: '10:00', date_kind: 'exact',
-  status: null, created_at: null, marks: [], highlight: null, ...over,
+  status: null, created_at: null, repeat: null, demo: false, marks: [], highlight: null, ...over,
 });
 
 describe('shiftedTime', () => {

@@ -16,7 +16,7 @@ from fastapi import APIRouter, Depends, Header
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app import chatlog, nlu
+from app import chatlog, nlu, series
 from app.database import get_db
 from app.models import DateKind, Record, TaskStatus, TaskType
 from app.owner import Owner, get_owner
@@ -34,7 +34,7 @@ EXAMPLES = [
     "Что у меня на следующей неделе?",
     "Найди задачу про презентацию",
 ]
-HELP_EXAMPLES = EXAMPLES + ["Поставь встречу с Иваном завтра", "Что у меня с Иваном?"]
+HELP_EXAMPLES = EXAMPLES + ["Поставь встречу с Иваном завтра", "Что у меня с Иваном?", "Запиши идею: открыть кофейню"]
 FOUND_LIMIT = 50
 WHICH_LIMIT = 5
 
@@ -43,7 +43,7 @@ WHICH_LIMIT = 5
 
 @dataclass
 class Pending:
-    kind: str                      # draft | confirm | conflict | new_time | confirm_no | multi | multi_ask | move | move_when | move_all | edit | bulk_delete
+    kind: str                      # draft | confirm | conflict | new_time | confirm_no | multi | multi_ask | move | move_when | move_all | edit | bulk_delete | note | series_delete | undated
     draft: dict = field(default_factory=dict)
 
 
@@ -189,6 +189,18 @@ def nearest_first(records: list[Record], now: datetime) -> list[Record]:
     return future + past
 
 
+def one_per_series(records: list[Record], now: datetime) -> list[Record]:
+    """Из каждого повтора — только ближайший день: поиск не должен выдавать 50 планёрок."""
+    keep, seen = set(), set()
+    for record in nearest_first(records, now):
+        if record.series_id:
+            if record.series_id in seen:
+                continue
+            seen.add(record.series_id)
+        keep.add(record.id)
+    return [r for r in records if r.id in keep]
+
+
 async def find(ctx: Ctx, p: nlu.Parse, types: set[str] | None = None) -> list[Record]:
     conditions = []
     if p.filter_type:
@@ -254,6 +266,11 @@ FREE_BUTTONS = 3
 
 
 async def process_draft(ctx: Ctx, draft: dict) -> dict:
+    if draft.get("repeat"):
+        # Повтор: первый день — ближайший подходящий, сегодняшний только если время ещё впереди
+        start = max(parse_date(draft.get("date")) or ctx.today, ctx.today)
+        draft = {**draft, "date": nlu.first_day(draft["repeat"]["days"], start, ctx.now, draft.get("time")).isoformat(),
+                 "date_kind": "exact"}
     kind, has_date, has_time = draft["type"], bool(draft.get("date")), bool(draft.get("time"))
     times = await free_times(ctx, draft.get("date"), kind) if not has_time else []
     days = [("Сегодня", "сегодня"), ("Завтра", "завтра")]
@@ -356,6 +373,8 @@ async def dense_neighbours(ctx: Ctx, draft: dict) -> list[Record]:
 
 async def save(ctx: Ctx, draft: dict) -> dict:
     ctx.conv.pending = None
+    if draft.get("repeat"):
+        return await save_series(ctx, draft)
     kind = draft["type"]
     near = await dense_neighbours(ctx, draft)
     record = ctx.owner.new_record(
@@ -386,6 +405,28 @@ async def save(ctx: Ctx, draft: dict) -> dict:
         others = sorted([data] + [r.to_contract() for r in near], key=lambda r: r["time"])
         return reply("created", text, speech, records=others, buttons=undo_button(ctx, record))
     return reply("created", text, speech, records=[data], buttons=undo_button(ctx, record))
+
+
+async def save_series(ctx: Ctx, draft: dict) -> dict:
+    """«Каждый вторник в 10 планёрка»: все дни сразу, в ответе — ближайший."""
+    days = draft["repeat"]["days"]
+    rule = series.rule_text(days, draft.get("time"))
+    until = parse_date(draft["repeat"].get("until"))
+    created, records = await series.create(ctx.db, ctx.owner, draft, ctx.today)
+    if not records:
+        text, speech = ctx.say("series_none", {"until": series.until_text(until, ctx.today) if until else "",
+                                               "rule": rule})
+        return reply("clarify", text, speech)
+    first = records[0]
+    ctx.conv.focus = first.id
+    day = parse_date(first.date)
+    values = {"text": first.text, "rule": rule, "first": date_text(day, ctx.today), "count": len(records)}
+    speech_values = {"first": date_speech(day, ctx.today)}
+    if until:
+        values["until"] = series.until_text(until, ctx.today)
+    text, speech = ctx.say("created_series_until" if until else "created_series", values, speech_values)
+    return reply("created", text, speech, records=[first.to_contract(marks=["new"])], total=len(records),
+                 buttons=undo_button(ctx, first))
 
 
 # ── Несколько дел одной фразой ────────────────────────
@@ -451,6 +492,8 @@ async def answer_multi_ask(ctx: Ctx, pending: Pending, raw: str) -> dict | None:
 async def answer_many(ctx: Ctx, parses: list[nlu.Parse]) -> dict | None:
     """Несколько дел: показываем все карточки и спрашиваем «Записать все?». None — не вышло, разбираем как одно."""
     drafts = [draft_from(p, ctx.today) for p in parses]
+    if any(d.get("repeat") for d in drafts):
+        return None  # повтор записываем по одному
     if not all(ready_draft(ctx, d) for d in drafts):
         if all(ready_draft(ctx, d) or needs_only_time(ctx, d) for d in drafts):
             return await ask_many(ctx, drafts)
@@ -689,6 +732,8 @@ def draft_from(p: nlu.Parse, today: date) -> dict:
         "ambiguous": p.time_ambiguous,
         "has_subject": p.has_subject,
     }
+    if p.repeat_days:
+        draft["repeat"] = {"days": p.repeat_days, "until": p.until.isoformat() if p.until else None}
     if p.date:
         draft["date_kind"] = p.date_kind
     elif draft["type"] == "task" and p.vague_period and p.period is None:
@@ -808,7 +853,8 @@ async def answer_list(ctx: Ctx, p: nlu.Parse) -> dict:
             # Про один тип — его формы вместо «дело|дела|дел» (раздел 9)
             forms = TYPE_FORMS[p.filter_type] if p.filter_type else None
             text, speech = ctx.say("list_some", values, speech_values, count_forms=forms)
-        return reply("list", text, speech, records=[r.to_contract() for r in rows], total=len(rows))
+        return await offer_undated(ctx, p, period,
+                                   reply("list", text, speech, records=[r.to_contract() for r in rows], total=len(rows)))
 
     # Пусто — ближайшая будущая запись (того же типа, если спрашивали про тип) (Р-17)
     after = max(period.end + timedelta(days=1), ctx.today).isoformat()
@@ -825,7 +871,60 @@ async def answer_list(ctx: Ctx, p: nlu.Parse) -> dict:
         text, speech = ctx.say("list_type_empty" if nearest else "list_type_empty_alone", values, speech_values)
     else:
         text, speech = ctx.say("list_empty_nearest" if nearest else "list_empty_none", values, speech_values)
-    return reply("list", text, speech, nearest=nearest.to_contract() if nearest else None, total=0)
+    return await offer_undated(ctx, p, period,
+                               reply("list", text, speech, nearest=nearest.to_contract() if nearest else None, total=0))
+
+
+UNDATED_AHEAD = 14  # о задачах без срока напоминаем к спискам на сегодня, завтра, эту и следующую неделю
+
+
+async def undated_tasks(ctx: Ctx) -> list[Record]:
+    """Открытые задачи без срока, свежие сверху. Заметки сюда не входят."""
+    rows = await owner_records(ctx, Record.type == TaskType.task, Record.date.is_(None),
+                               Record.status == TaskStatus.open)
+    return sorted(rows, key=lambda r: (r.created_at or datetime.min.replace(tzinfo=timezone.utc), r.id), reverse=True)
+
+
+async def offer_undated(ctx: Ctx, p: nlu.Parse, period: nlu.Period, answer: dict) -> dict:
+    """«…Кроме того, у вас 5 задач без срока. Показать?» — к спискам на ближайшие дни, ждём ответа голосом."""
+    if p.filter_type not in (None, "task") or period.end < ctx.today:
+        return answer
+    if period.start > ctx.today + timedelta(days=UNDATED_AHEAD) or (period.end - period.start).days > 7:
+        return answer
+    count = len(await undated_tasks(ctx))
+    if not count:
+        return answer
+    tail, tail_speech = ctx.say("undated_offer", {"count": count})
+    spoken = answer["speech"] or answer["text"]
+    # «Завтра 3 дела:» — двоеточие вело к карточкам, а теперь после него ещё фраза
+    head = re.sub(r":\s*$", ".", answer["text"])
+    answer["text"] = f"{head} {tail}"
+    answer["speech"] = f"{spoken} {tail_speech}"
+    answer["awaiting_reply"] = True
+    answer["buttons"] = answer["buttons"] + [button_action("Показать", "show_undated"),
+                                             button_action("Не сейчас", "skip_undated", style="secondary")]
+    ctx.conv.pending = Pending("undated")
+    return answer
+
+
+async def answer_undated(ctx: Ctx) -> dict:
+    ctx.conv.pending = None
+    rows = await undated_tasks(ctx)
+    if not rows:
+        text, speech = ctx.say("undated_none")
+        return reply("found", text, speech, total=0)
+    if len(rows) == 1:
+        ctx.conv.focus = rows[0].id
+    else:
+        ctx.conv.found = [r.id for r in rows[:FOUND_LIMIT]]
+    text, speech = ctx.say("undated_some", {"count": len(rows)})
+    return reply("found", text, speech, records=[r.to_contract() for r in rows[:FOUND_LIMIT]], total=len(rows))
+
+
+def skip_undated(ctx: Ctx) -> dict:
+    ctx.conv.pending = None
+    text, speech = ctx.say("undated_skip")
+    return reply("cancelled", text, speech)
 
 
 async def answer_briefing(ctx: Ctx) -> dict:
@@ -857,7 +956,7 @@ async def answer_briefing(ctx: Ctx) -> dict:
 
 
 async def answer_search(ctx: Ctx, p: nlu.Parse) -> dict:
-    found = await find(ctx, p)
+    found = one_per_series(await find(ctx, p), ctx.now)
     if not found:
         text, speech = ctx.say("found_none")
         return reply("found", text, speech, total=0)
@@ -886,6 +985,41 @@ async def answer_search(ctx: Ctx, p: nlu.Parse) -> dict:
     return reply("found", text, speech, records=records, total=len(found))
 
 
+async def answer_note(ctx: Ctx, p: nlu.Parse) -> dict:
+    """Заметка: сохраняем сразу, без даты, времени и проверок расписания."""
+    if not p.text:
+        ctx.conv.pending = Pending("note")  # «Запиши идею» — саму идею скажут следующей фразой
+        text, speech = ctx.say("note_empty")
+        return reply("clarify", text, speech, awaiting=True, buttons=[CANCEL])
+    ctx.conv.pending = None
+    record = ctx.owner.new_record(type=TaskType.note, text=p.text[:300], date=None, time=None,
+                                  date_kind=DateKind.none, status=None, created_at=datetime.now(timezone.utc))
+    ctx.db.add(record)
+    await ctx.db.commit()
+    await ctx.db.refresh(record)
+    ctx.conv.focus = record.id
+    text, speech = ctx.say("note_saved", {"text": record.text})
+    return reply("created", text, speech, records=[record.to_contract(marks=["new"])],
+                 buttons=[button_text("Мои заметки", "Покажи заметки")] + undo_button(ctx, record))
+
+
+async def answer_notes(ctx: Ctx, p: nlu.Parse) -> dict:
+    """Список заметок, свежие сверху; «заметки про кофе» — только подходящие."""
+    rows = await owner_records(ctx, Record.type == TaskType.note)
+    if p.keywords:
+        rows = by_keywords(rows, p)
+    if not rows:
+        text, speech = ctx.say("notes_none_about" if p.keywords else "notes_none")
+        return reply("found", text, speech, total=0)
+    rows.sort(key=lambda r: (r.created_at or datetime.min.replace(tzinfo=timezone.utc), r.id), reverse=True)
+    if len(rows) == 1:
+        ctx.conv.focus = rows[0].id
+    else:
+        ctx.conv.found = [r.id for r in rows[:FOUND_LIMIT]]
+    text, speech = ctx.say("notes_some", {"count": len(rows)})
+    return reply("found", text, speech, records=[r.to_contract() for r in rows[:FOUND_LIMIT]], total=len(rows))
+
+
 def is_ahead(record: Record, now: datetime) -> bool:
     """Впереди: будущее по дате или открытое дело без даты."""
     return is_future(record, now) or (not record.date and record.status != TaskStatus.done)
@@ -898,6 +1032,8 @@ async def answer_person(ctx: Ctx, p: nlu.Parse) -> dict:
         conditions += [Record.date >= p.period.start.isoformat(), Record.date <= p.period.end.isoformat()]
     rows = [r for r in await owner_records(ctx, *conditions)
             if any(nlu.record_has(record_words(r), key) for key in p.keywords)]
+    if not p.period:
+        rows = one_per_series(rows, ctx.now)
     ahead = sorted([r for r in rows if is_ahead(r, ctx.now)], key=moment)
     past = sorted([r for r in rows if not is_ahead(r, ctx.now)], key=moment, reverse=True)
     values = {"name": p.person, "count": len(rows)}
@@ -930,7 +1066,7 @@ async def answer_person(ctx: Ctx, p: nlu.Parse) -> dict:
 
 def which_one(ctx: Ctx, candidates: list[Record], action_id: str) -> dict:
     ctx.conv.pending = None
-    chosen = nearest_first(candidates, ctx.now)[:WHICH_LIMIT]
+    chosen = nearest_first(one_per_series(candidates, ctx.now), ctx.now)[:WHICH_LIMIT]
     text, speech = ctx.say("which_one")
     buttons = []
     for record in chosen:
@@ -942,6 +1078,7 @@ def which_one(ctx: Ctx, candidates: list[Record], action_id: str) -> dict:
 
 
 async def delete_one(ctx: Ctx, record: Record, template: str = "deleted") -> dict:
+    ctx.conv.pending = None
     record.deleted_at = datetime.now(timezone.utc)
     await ctx.db.commit()
     data = record.to_contract(marks=["deleted"])
@@ -1008,10 +1145,16 @@ async def focused(ctx: Ctx, p: nlu.Parse, types: set[str] | None = None) -> list
 
 
 async def answer_delete(ctx: Ctx, p: nlu.Parse) -> dict:
+    if p.bulk and p.keywords and not (p.date or p.period):
+        # «Убери все планёрки» — если это один повтор, убираем его предстоящие дни
+        if one := only_series(ctx, await find(ctx, p)):
+            return await delete_series(ctx, one)
     if p.bulk:
         return await answer_bulk_delete(ctx, p)
     if near := await focused(ctx, p):
-        return await delete_one(ctx, near[0]) if len(near) == 1 else which_one(ctx, near, "delete")
+        if len(near) == 1 or only_series(ctx, near):
+            return await delete_record(ctx, only_series(ctx, near) or near[0], p)
+        return which_one(ctx, near, "delete")
     if not (p.keywords or p.date or p.filter_type):
         text, speech = ctx.say("clarify_generic")
         return reply("clarify", text, speech, awaiting=True, buttons=[CANCEL])
@@ -1021,9 +1164,79 @@ async def answer_delete(ctx: Ctx, p: nlu.Parse) -> dict:
     if not found:
         text, speech = ctx.say("found_none")
         return reply("found", text, speech, total=0)
+    if one := only_series(ctx, exact(found, p) or found):
+        return await delete_record(ctx, one, p)
     if one := single(ctx, exact(found, p) or found):
-        return await delete_one(ctx, one)
+        return await delete_record(ctx, one, p)
     return which_one(ctx, found, "delete")
+
+
+def only_series(ctx: Ctx, rows: list[Record]) -> Record | None:
+    """Все записи — дни одного повтора: его ближайший день (или тот, о котором шла речь)."""
+    ids = {r.series_id for r in rows}
+    if len(ids) != 1 or None in ids:
+        return None
+    if ctx.conv.focus is not None and (focus := [r for r in rows if r.id == ctx.conv.focus]):
+        return focus[0]
+    return nearest_first(rows, ctx.now)[0]
+
+
+async def delete_record(ctx: Ctx, record: Record, p: nlu.Parse) -> dict:
+    """Один день повтора, если назван день; «вообще» — весь повтор; без дня — спрашиваем."""
+    if not record.series_id:
+        return await delete_one(ctx, record)
+    if p.series_all:
+        return await delete_series(ctx, record)
+    if p.date:
+        return await delete_one(ctx, record, "deleted_occurrence")
+    return ask_series_delete(ctx, record)
+
+
+def ask_series_delete(ctx: Ctx, record: Record) -> dict:
+    ctx.conv.pending = Pending("series_delete", {"record_id": record.id})
+    ctx.conv.focus = record.id
+    day = parse_date(record.date)
+    repeat = record.repeat_contract() or {"weekdays": [day.weekday()]}
+    values = {"text": record.text, "rule": series.rule_text(repeat["weekdays"]), "date": date_text(day, ctx.today)}
+    text, speech = ctx.say("series_which_delete", values, {"date": date_speech(day, ctx.today)})
+    return reply("clarify", text, speech, records=[record.to_contract()], awaiting=True, buttons=[
+        button_action(f"Только {date_text(day, ctx.today)}", "delete_occurrence", record.id),
+        button_action("Все предстоящие", "delete_series", record.id),
+        CANCEL,
+    ])
+
+
+async def delete_series(ctx: Ctx, record: Record) -> dict:
+    """Все предстоящие дни повтора; прошедшие остаются в истории. «Вернуть все» — как у массового удаления."""
+    ctx.conv.pending = None
+    rows = await series.upcoming(ctx.db, ctx.owner, record.series_id, ctx.today)
+    stamp = datetime.now(timezone.utc)
+    for row in rows:
+        row.deleted_at = stamp
+    await series.set_ended(ctx.db, ctx.owner, {record.series_id}, True)
+    await ctx.db.commit()
+    ctx.conv.bulk_deleted = [r.id for r in rows]
+    ctx.conv.focus = None
+    text, speech = ctx.say("deleted_series", {"text": record.text, "count": len(rows)})
+    shown = rows[:1] or [record]
+    return reply("deleted", text, speech, records=[r.to_contract(marks=["deleted"]) for r in shown], total=len(rows),
+                 buttons=[button_action("Вернуть все", "restore_all", style="secondary")])
+
+
+SERIES_ALL_REPLY_RE = re.compile(r"\b(?:вс[её]|все\s+дни|вообще|совсем|целиком|серию|предстоящ\w*|навсегда)\b", re.I)
+SERIES_ONE_REPLY_RE = re.compile(r"\b(?:только|одн[уа]|один|эту|этот|ближайш\w*|сегодня|завтра)\b", re.I)
+
+
+async def answer_series_delete(ctx: Ctx, pending: Pending, raw: str) -> dict | None:
+    """Ответ на «только ближайший или все?»: «все», «только завтра». Не ответ — None."""
+    record = await owned_record(ctx, pending.draft.get("record_id"))
+    if not record or record.deleted_at:
+        return None
+    if SERIES_ONE_REPLY_RE.search(raw):
+        return await delete_one(ctx, record, "deleted_occurrence")
+    if SERIES_ALL_REPLY_RE.search(raw):
+        return await delete_series(ctx, record)
+    return None
 
 
 async def answer_complete(ctx: Ctx, p: nlu.Parse) -> dict:
@@ -1062,7 +1275,7 @@ def bulk_scope(ctx: Ctx, p: nlu.Parse) -> str:
         return p.period.label
     if p.date:
         return nlu.describe_period(p.date, p.date, ctx.today).label
-    return "за все дни"
+    return "" if p.filter_type == "note" else "за все дни"
 
 
 async def answer_bulk_delete(ctx: Ctx, p: nlu.Parse) -> dict:
@@ -1081,6 +1294,9 @@ async def answer_bulk_delete(ctx: Ctx, p: nlu.Parse) -> dict:
             rows = by_keywords(rows, p)
     forms = TYPE_FORMS[p.filter_type] if p.filter_type else None
     scope = bulk_scope(ctx, p)
+    if not rows and not scope:
+        text, speech = ctx.say("notes_none")
+        return reply("found", text, speech, total=0)
     if not rows:
         text, speech = ctx.say("bulk_none", {"scope": scope})
         return reply("found", text, speech, total=0)
@@ -1089,6 +1305,8 @@ async def answer_bulk_delete(ctx: Ctx, p: nlu.Parse) -> dict:
     ordered = sorted(rows, key=lambda r: (r.date or "9999-99-99", r.time or "99:99", r.id))
     ctx.conv.pending = Pending("bulk_delete", {"ids": [r.id for r in ordered], "forms": forms})
     text, speech = ctx.say("bulk_delete_confirm", {"count": len(rows), "scope": scope}, count_forms=forms)
+    if not scope:  # «удали все заметки»: у заметок нет дней
+        text, speech = (re.sub(r"\s+\?", "?", x) if x else x for x in (text, speech))
     return reply("confirm", text, speech, records=[r.to_contract() for r in ordered[:FOUND_LIMIT]], total=len(rows),
                  awaiting=True, buttons=[button_action("Да, удалить все", "confirm_yes"),
                                          button_action("Нет", "cancel", style="secondary")])
@@ -1117,6 +1335,7 @@ async def restore_all(ctx: Ctx) -> dict:
     rows = list(rows.scalars().all())
     for record in rows:
         record.deleted_at = None
+    await series.set_ended(ctx.db, ctx.owner, {r.series_id for r in rows if r.series_id}, False)
     await ctx.db.commit()
     ctx.conv.bulk_deleted = []
     if not rows:
@@ -1634,6 +1853,16 @@ async def handle_action(ctx: Ctx, action_id: str, record_id: int | None) -> dict
         return reply("cancelled", text, speech)
     if action_id == "briefing":
         return await answer_briefing(ctx)
+    if action_id == "show_undated":
+        return await answer_undated(ctx)
+    if action_id == "skip_undated":
+        return skip_undated(ctx)
+    if action_id in ("delete_occurrence", "delete_series") and "d2" in ctx.features:
+        record = await owned_record(ctx, record_id)
+        if record and record.deleted_at is None:
+            if action_id == "delete_series" and record.series_id:
+                return await delete_series(ctx, record)
+            return await delete_one(ctx, record, "deleted_occurrence" if record.series_id else "deleted")
     if action_id == "confirm_yes" and pending and pending.kind == "bulk_delete" and "d2" in ctx.features:
         return await bulk_delete(ctx, pending)
     if action_id == "restore_all" and "d2" in ctx.features:
@@ -1664,6 +1893,8 @@ async def handle_action(ctx: Ctx, action_id: str, record_id: int | None) -> dict
             text, speech = ctx.say("found_none")
             return reply("found", text, speech, total=0)
         ctx.conv.pending = None
+        if action_id == "undo" and record.series_id:
+            return await undo_series(ctx, record)
         if action_id == "undo":
             return await delete_one(ctx, record, "undo_done")
         if action_id == "delete":
@@ -1688,6 +1919,18 @@ async def handle_action(ctx: Ctx, action_id: str, record_id: int | None) -> dict
     return None
 
 
+async def undo_series(ctx: Ctx, record: Record) -> dict:
+    """«Отменить» под только что записанным повтором — убираем его целиком."""
+    rows = await series.upcoming(ctx.db, ctx.owner, record.series_id, ctx.today)
+    stamp = datetime.now(timezone.utc)
+    for row in rows:
+        row.deleted_at = stamp
+    await series.set_ended(ctx.db, ctx.owner, {record.series_id}, True)
+    await ctx.db.commit()
+    text, speech = ctx.say("undo_done", {"text": record.text})
+    return reply("deleted", text, speech, records=[record.to_contract(marks=["deleted"])])
+
+
 # ── Эндпоинт ──────────────────────────────────────────
 
 def answers_time(pending: Pending, raw: str, now: datetime) -> bool:
@@ -1701,11 +1944,20 @@ def answers_time(pending: Pending, raw: str, now: datetime) -> bool:
     return bool(nlu.parse_when(raw, now)[0] or nlu.reply_time(raw)[0])
 
 
+# «Нет», «не хочу», «не надо» в ответ на «Показать задачи без срока?»
+REFUSE_RE = re.compile(r"^(?:(?:стив\w*|stevens?)[\s,]+)?(?:нет|не\s+хочу|не\s+надо|не\s+сейчас|не\s+нужно|потом|позже"
+                       r"|не\s+стоит|обойдусь|хватит)\b", re.I)
+SHOW_RE = re.compile(r"^(?:(?:стив\w*|stevens?)[\s,]+)?(?:покажи(?:\s+(?:их|все|всё))?|показывай|хочу|давай|можно|ну\s+давай"
+                     r"|посмотрю|посмотрим)[\s.!]*$", re.I)
+
+
 def is_new_request(p: nlu.Parse, raw: str) -> bool:
-    if p.intent in ("list", "search", "help", "off_topic", "delete", "complete", "thanks", "move", "edit"):
+    if p.intent in ("list", "search", "help", "off_topic", "delete", "complete", "thanks", "move", "edit", "note", "notes",
+                    "undated"):
         return True
     if p.intent == "create":
-        return bool(nlu.CREATE_VERB_RE.search(raw.strip().lower()) or (p.text and len(nlu.keywords(p.text)) >= 2))
+        return bool(nlu.CREATE_VERB_RE.search(raw.strip().lower()) or (p.text and len(nlu.keywords(p.text)) >= 2)
+                    or p.repeat_days)
     return False
 
 
@@ -1736,6 +1988,7 @@ async def chat_endpoint(
 
 async def respond(ctx: Ctx, payload: ChatRequest) -> dict:
     ctx.found, ctx.conv.found = ctx.conv.found, []
+    await series.extend(ctx.db, ctx.owner, ctx.today)
     if payload.action:
         answer = await handle_action(ctx, payload.action.id, payload.action.record_id)
         if answer:
@@ -1750,6 +2003,16 @@ async def respond(ctx: Ctx, payload: ChatRequest) -> dict:
             return reply("cancelled", text, speech)
         if YES_RE.match(raw):
             return await bulk_delete(ctx, pending)
+    if pending and pending.kind == "undated":
+        if NO_RE.match(raw) or REFUSE_RE.match(raw):
+            return skip_undated(ctx)
+        if YES_RE.match(raw) or SHOW_RE.match(raw):
+            return await answer_undated(ctx)
+    if pending and pending.kind == "series_delete" and nlu.is_cancel_reply(raw):
+        ctx.conv.pending = None
+        return reply("cancelled", *ctx.say("cancelled"))
+    if pending and pending.kind == "series_delete" and (answer := await answer_series_delete(ctx, pending, raw)):
+        return answer
     if (fix := fix_words(raw, ctx.now)) and (answer := await answer_fix(ctx, *fix)):
         return answer
     p = nlu.parse(raw, ctx.now)
@@ -1760,6 +2023,8 @@ async def respond(ctx: Ctx, payload: ChatRequest) -> dict:
     if pending and pending.kind == "move_all" and not is_new_request(p, raw):
         if answer := await answer_move_all_reply(ctx, pending, raw):
             return answer
+    if pending and pending.kind == "note" and not is_new_request(p, raw) and not nlu.is_cancel_reply(raw):
+        return await answer_note(ctx, nlu.Parse(text=nlu.capitalize(raw.strip(" ,.!?:—-")) or None))
     if pending and pending.kind == "move_when" and not is_new_request(p, raw):
         if answer := await answer_move_when(ctx, pending, raw):
             return answer
@@ -1798,6 +2063,12 @@ async def respond(ctx: Ctx, payload: ChatRequest) -> dict:
         if many and (answer := await answer_many(ctx, many)):
             return answer
         return await process_draft(ctx, draft_from(p, ctx.today))
+    if p.intent == "undated":
+        return await answer_undated(ctx)
+    if p.intent == "note":
+        return await answer_note(ctx, p)
+    if p.intent == "notes":
+        return await answer_notes(ctx, p)
     if p.intent == "free":
         return await answer_free(ctx, p)
     if p.intent == "list":

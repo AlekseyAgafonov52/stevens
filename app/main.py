@@ -20,9 +20,18 @@ from app.routers import push as push_router
 async def lifespan(app: FastAPI):
     async with engine.begin() as conn:  # type: ignore
         await conn.run_sync(Base.metadata.create_all)
-        # Отдельных заметок больше нет: сохранённые заметки становятся задачами без срока
+    # Тип «заметка» появился позже таблицы: в старой базе его нет в перечислении
+    async with engine.connect() as conn:  # type: ignore
+        conn = await conn.execution_options(isolation_level="AUTOCOMMIT")
+        await conn.exec_driver_sql("ALTER TYPE record_type ADD VALUE IF NOT EXISTS 'note'")
+        # Колонки, которых не было в старой таблице: повторы и пометка демо-записей
+        await conn.exec_driver_sql("ALTER TABLE records ADD COLUMN IF NOT EXISTS series_id INTEGER REFERENCES series(id)")
+        await conn.exec_driver_sql("ALTER TABLE records ADD COLUMN IF NOT EXISTS repeat VARCHAR(24)")
+        await conn.exec_driver_sql("ALTER TABLE records ADD COLUMN IF NOT EXISTS demo BOOLEAN NOT NULL DEFAULT false")
+        await conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_records_series_id ON records (series_id)")
+        # Время создания у всех записей: старым демо-записям песочницы без него ставим «сейчас»
         await conn.exec_driver_sql(
-            "UPDATE records SET type = 'task', status = 'open', date_kind = 'none' WHERE type::text = 'note'")
+            "UPDATE records SET demo = true, created_at = now() WHERE sandbox_id IS NOT NULL AND created_at IS NULL")
     print("✅ База данных готова.")
     pusher = asyncio.create_task(push.loop())
     yield

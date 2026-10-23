@@ -3,7 +3,7 @@
 Раз в 30 секунд смотрим записи тех, кто подписался: напоминание звонит в своё время,
 встреча — за 10 минут. У пуша кнопки «Посмотреть» и «Через 10 минут» (public/sw.js);
 отложенное лежит в push_snoozes и уходит ещё раз в свой срок. Время записи местное, поэтому пояс берём из подписки браузера.
-Демо-записи песочницы (без created_at) не звонят — только то, что человек завёл сам.
+Демо-записи песочницы (demo) не звонят — только то, что человек завёл сам.
 """
 import asyncio
 import base64
@@ -62,7 +62,7 @@ def zone(name: str):
 
 
 def fire_at(record: Record, tz) -> datetime | None:
-    if not record.date or not record.time or record.created_at is None:
+    if not record.date or not record.time or record.demo:
         return None
     if record.type not in (TaskType.reminder, TaskType.meeting) or record.status == TaskStatus.done:
         return None

@@ -2,7 +2,7 @@
 import { useState } from 'react';
 import type { RecordItem } from '../api/types';
 import { T, fill } from '../content/texts';
-import { dayTitle, groupByDay, groupByTense } from '../lib/dates';
+import { dayTitle, groupByDay, groupByTense, splitPast } from '../lib/dates';
 import { pressButton } from '../state/chat';
 import { useApp, type AnswerMessage } from '../state/store';
 import { AnswerExtraButtons, RecordCardOverride, cardEditHandler } from '../extensions/points';
@@ -23,7 +23,11 @@ export function Answer({ message, isLast }: Props) {
   const [shown, setShown] = useState<number>(paging ? paging.first : Infinity);
   const fresh = !message.restored;
 
-  const records = response.records.map((r) => (r.id !== null && message.edited[r.id]) || r);
+  const given = response.records.map((r) => (r.id !== null && message.edited[r.id]) || r);
+  // В списке на период уже прошедшее — отдельно, после того, что впереди
+  const split = response.kind === 'list' ? splitPast(given) : null;
+  const records = split ? [...split.ahead, ...split.past] : given;
+  const pastIds = new Set(split?.past.map((r) => r));
   const visible = records.slice(0, shown);
   const rest = records.length - visible.length;
 
@@ -57,12 +61,18 @@ export function Answer({ message, isLast }: Props) {
       {visible.length > 0 && (
         <div className="answer__cards">
           {response.kind === 'list'
-            ? groupByDay(visible).map((group, gi) => (
-                <div className="day-group" key={gi}>
-                  <div className="day-title">{group.date ? dayTitle(group.date) : T.group_no_date}</div>
-                  {group.records.map((r, i) => card(r, false, gi * 1000 + i))}
-                </div>
-              ))
+            ? [visible.filter((r) => !pastIds.has(r)), visible.filter((r) => pastIds.has(r))].map((part, pi) =>
+                part.length > 0 && (
+                  <div className={pi ? 'list-past' : 'list-ahead'} key={pi}>
+                    {pi > 0 && split && split.ahead.length > 0 && <div className="list-past__title">{T.group_past_list}</div>}
+                    {groupByDay(part).map((group, gi) => (
+                      <div className="day-group" key={gi}>
+                        <div className="day-title">{group.date ? dayTitle(group.date) : T.group_no_date}</div>
+                        {group.records.map((r, i) => card(r, false, pi * 100000 + gi * 1000 + i))}
+                      </div>
+                    ))}
+                  </div>
+                ))
             : response.kind === 'person'
               ? groupByTense(visible).map((group, gi) => (
                   <div className="day-group" key={gi}>

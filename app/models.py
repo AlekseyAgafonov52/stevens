@@ -17,6 +17,7 @@ class TaskType(str, enum.Enum):
     task = "task"
     meeting = "meeting"
     reminder = "reminder"
+    note = "note"          # заметка: без даты и времени, вне расписания
 
 
 class TaskStatus(str, enum.Enum):
@@ -59,6 +60,28 @@ class Sandbox(Base):
     created_at: Mapped[dt] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class Series(Base):
+    """Повтор по дням недели: «каждый вторник в 10 планёрка», «по средам до конца года».
+    Дни разворачиваются в обычные записи (series_id), бессрочный повтор — на год вперёд с продлением."""
+    __tablename__ = "series"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    account_id: Mapped[int | None] = mapped_column(ForeignKey("accounts.id"), nullable=True, index=True)
+    sandbox_id: Mapped[str | None] = mapped_column(ForeignKey("sandboxes.client_id"), nullable=True, index=True)
+    type: Mapped[TaskType] = mapped_column(Enum(TaskType, name="record_type"), nullable=False)
+    text: Mapped[str] = mapped_column(String(300), nullable=False)
+    time: Mapped[str | None] = mapped_column(String(5), nullable=True)
+    weekdays: Mapped[str] = mapped_column(String(13), nullable=False)    # «1,3» — пн = 0
+    until: Mapped[str | None] = mapped_column(String(10), nullable=True)  # последний день, None — без конца
+    filled_until: Mapped[str] = mapped_column(String(10), nullable=False)  # до какого дня записи уже созданы
+    ended: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)  # «убери вообще»: не продлевать
+    created_at: Mapped[dt] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    def repeat(self) -> str:
+        """Что пишем в записи: «1,3» или «1,3;2026-12-31»."""
+        return f"{self.weekdays};{self.until}" if self.until else self.weekdays
+
+
 class Record(Base):
     __tablename__ = "records"
     __table_args__ = (
@@ -79,6 +102,17 @@ class Record(Base):
     status: Mapped[TaskStatus | None] = mapped_column(Enum(TaskStatus, name="record_status"), nullable=True)
     created_at: Mapped[dt | None] = mapped_column(DateTime(timezone=True), nullable=True)
     deleted_at: Mapped[dt | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Повтор: из какой серии и её правило (копия, чтобы карточка показывала «каждый вт» без лишнего запроса)
+    series_id: Mapped[int | None] = mapped_column(ForeignKey("series.id"), nullable=True, index=True)
+    repeat: Mapped[str | None] = mapped_column(String(24), nullable=True)
+    # Демо-данные песочницы из CSV: время создания у них есть, но уведомления по ним не звонят
+    demo: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false", nullable=False)
+
+    def repeat_contract(self) -> dict | None:
+        if not self.repeat:
+            return None
+        days, _, until = self.repeat.partition(";")
+        return {"weekdays": [int(d) for d in days.split(",")], "until": until or None}
 
     def to_contract(self, marks: list[str] | None = None, highlight: str | None = None) -> dict:
         """Record из раздела 6 контракта."""
@@ -91,6 +125,8 @@ class Record(Base):
             "date_kind": self.date_kind.value,
             "status": self.status.value if self.status else None,
             "created_at": self.created_at.isoformat() if self.created_at else None,
+            "repeat": self.repeat_contract(),
+            "demo": bool(self.demo),
             "marks": marks if marks is not None else (["deleted"] if self.deleted_at else []),
             "highlight": highlight,
         }

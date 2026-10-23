@@ -4,7 +4,7 @@ import type { RecordItem } from '../../api/types';
 
 const meeting = (id: number, time: string): RecordItem => ({
   id, type: 'meeting', text: 'm', date: '2026-10-24', time, date_kind: 'exact', status: null,
-  created_at: null, marks: [], highlight: null,
+  created_at: null, repeat: null, demo: false, marks: [], highlight: null,
 });
 
 describe('calendar month', () => {

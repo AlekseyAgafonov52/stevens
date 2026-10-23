@@ -39,6 +39,8 @@ export const T = {
   menu_logout: 'Выйти',
   menu_install: 'Установить как приложение',
   menu_tour: 'Пройти обучение',
+  menu_notes: 'Мои заметки',
+  notes_command: 'Покажи мои заметки',
   profile_label: 'Профиль', // aria-label кружка аккаунта
 
   // ── Окно «Новый диалог» ─────────────────────────────
@@ -145,6 +147,7 @@ export const T = {
   type_task: 'Задача',
   type_reminder: 'Напоминание',
   type_meeting: 'Встреча',
+  type_note: 'Заметка',
   date_none: 'без срока',
   date_deadline: 'до {date}',
   date_today: 'сегодня',
@@ -154,6 +157,15 @@ export const T = {
   months_short: ['янв', 'фев', 'мар', 'апр', 'мая', 'июн', 'июл', 'авг', 'сен', 'окт', 'ноя', 'дек'],
   /** День недели двумя буквами — там же */
   weekdays_short: ['пн', 'вт', 'ср', 'чт', 'пт', 'сб', 'вс'],
+  // Повтор в мете карточки: «по вт, чт до 31 дек»
+  repeat_daily: 'каждый день',
+  repeat_workdays: 'по будням',
+  repeat_weekend: 'по выходным',
+  repeat_days: 'по {days}',
+  repeat_until: '{rule} до {date}',
+  repeat_label: 'Повторяется',
+  created_label: 'Создано {date} в {time}',
+  group_past_list: 'Уже прошло',
   // ── Допы: правка записи (Д10, Д6) ───────────────────
   btn_edit: 'Исправить',
   edit_text: 'Текст',

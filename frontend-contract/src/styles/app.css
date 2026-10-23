@@ -157,6 +157,13 @@
   letter-spacing: 0.04em;
   color: var(--c-text-2);
 }
+/* Список на период: прошедшее — отдельным блоком под тем, что впереди */
+.list-ahead, .list-past { display: flex; flex-direction: column; gap: var(--sp-4); }
+.list-past__title {
+  display: flex; align-items: center; gap: var(--sp-3); margin-top: var(--sp-3);
+  font-size: var(--fs-small); color: var(--c-text-2);
+}
+.list-past__title::after { content: ''; flex: 1; height: 1px; background: var(--c-line); }
 .answer__caption { font-size: var(--fs-small); color: var(--c-text-2); }
 .answer__buttons { display: flex; flex-wrap: wrap; gap: var(--sp-3); }
 .answer__buttons:empty { display: none; }
@@ -190,6 +197,7 @@
 .card__text { font-size: var(--fs-body); line-height: 1.4; color: var(--c-text); overflow-wrap: anywhere; }
 .card__state { font-size: var(--fs-small); color: var(--c-text-2); display: inline-flex; align-items: center; gap: var(--sp-1); white-space: nowrap; }
 .card__state--alarm { color: var(--c-alarm); }
+.card__repeat { font-size: var(--fs-small); color: var(--c-text-2); display: inline-flex; align-items: center; gap: var(--sp-1); white-space: nowrap; }
 .card__mark { background: var(--c-mark); color: var(--c-text); padding: 0 3px; border-radius: var(--r-mark); }
 
 .card--draft { border-style: dashed; border-color: var(--c-draft-line); background: transparent; }

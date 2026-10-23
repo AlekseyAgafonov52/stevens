@@ -6,7 +6,7 @@
  * открыта в фоне — ещё и отсюда, с тем же tag, браузер склеит), на вкладке — пуша нет,
  * только сообщение Стивенса в ленте и тихий звук двумя нотами.
  * Вернулся на вкладку или открыл по пушу — в ленте сообщение Стивенса о том, что подошло без него.
- * Звонят только записи, заведённые человеком: у демо-записей песочницы нет created_at.
+ * Звонят только записи, заведённые человеком: демо-записи песочницы помечены demo.
  * У пуша кнопки «Посмотреть» (Стивенс присылает запись в чат) и «Через 10 минут» — см. public/sw.js.
  */
 import { api } from '../api';
@@ -37,7 +37,7 @@ function isoDay(d: Date): string {
 }
 
 function fireAt(record: RecordItem): number | null {
-  if (!record.date || !record.time || !record.created_at || record.status === 'done' || record.type === 'task') return null;
+  if (!record.date || !record.time || record.demo || record.status === 'done' || record.type === 'task') return null;
   if (record.marks.includes('deleted')) return null;
   const [h, m] = record.time.split(':').map(Number);
   const [y, mo, d] = record.date.split('-').map(Number);

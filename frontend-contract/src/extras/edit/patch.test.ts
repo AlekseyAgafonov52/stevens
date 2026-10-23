@@ -4,7 +4,7 @@ import { buildPatch, validate } from './patch';
 
 const task: RecordItem = {
   id: 1, type: 'task', text: 'Отчёт', date: '2026-10-22', time: '10:00', date_kind: 'exact',
-  status: 'open', created_at: null, marks: [], highlight: null,
+  status: 'open', created_at: null, repeat: null, demo: false, marks: [], highlight: null,
 };
 
 describe('edit form', () => {
