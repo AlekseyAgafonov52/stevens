@@ -63,6 +63,15 @@ export type MetaPart = { field: 'date' | 'time' | null; text: string };
 /** Части меты после слова типа: [дата] · [время] — 02-screens.md, 3.1 */
 export function metaParts(record: RecordItem, withDate: boolean, today: Date = now()): MetaPart[] {
   const parts: MetaPart[] = [];
+  if (record.type === 'note') {
+    // У заметки нет срока — в мете день и время, когда её записали
+    if (record.created_at) {
+      const created = new Date(record.created_at);
+      parts.push({ field: 'date', text: metaDate(isoDate(created), today) });
+      parts.push({ field: null, text: clockTime(created) });
+    }
+    return parts;
+  }
   if (record.date_kind === 'none' || !record.date) {
     parts.push({ field: 'date', text: T.date_none });
   } else if (record.date_kind === 'deadline') {
@@ -72,6 +81,42 @@ export function metaParts(record: RecordItem, withDate: boolean, today: Date = n
   }
   if (record.time && record.date_kind !== 'none') parts.push({ field: 'time', text: record.time });
   return parts;
+}
+
+const clockTime = (d: Date) => `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+
+/** «Создано вчера в 14:05» — у каждой записи, в форме правки */
+export function createdText(record: RecordItem, today: Date = now()): string | null {
+  if (!record.created_at) return null;
+  const created = new Date(record.created_at);
+  return fill(T.created_label, { date: metaDate(isoDate(created), today), time: clockTime(created) });
+}
+
+/** Повтор в мете: «по вт», «по пн, чт до 31 дек», «по будням», «каждый день» */
+export function repeatText(record: RecordItem, today: Date = now()): string | null {
+  if (!record.repeat) return null;
+  const days = [...record.repeat.weekdays].sort((a, b) => a - b).join(',');
+  const rule = days === '0,1,2,3,4,5,6' ? T.repeat_daily
+    : days === '0,1,2,3,4' ? T.repeat_workdays
+      : days === '5,6' ? T.repeat_weekend
+        : fill(T.repeat_days, { days: record.repeat.weekdays.map((d) => T.weekdays_short[d]).join(', ') });
+  if (!record.repeat.until) return rule;
+  return fill(T.repeat_until, { rule, date: shortDay(record.repeat.until, today) });
+}
+
+/** «31 дек», с годом — если не текущий */
+function shortDay(value: string, today: Date): string {
+  const date = parseIso(value);
+  const base = `${date.getDate()} ${T.months_short[date.getMonth()]}`;
+  return date.getFullYear() === today.getFullYear() ? base : `${base} ${date.getFullYear()}`;
+}
+
+/** Список дел: сначала то, что впереди, ниже — то, что уже прошло (порядок внутри — как прислал бэк) */
+export function splitPast(records: RecordItem[], at: Date = now()): { ahead: RecordItem[]; past: RecordItem[] } {
+  const ahead: RecordItem[] = [];
+  const past: RecordItem[] = [];
+  for (const record of records) (isPast(record, at) ? past : ahead).push(record);
+  return { ahead, past };
 }
 
 /** Прошедшая — считает фронт (02-screens.md, 3.4) */

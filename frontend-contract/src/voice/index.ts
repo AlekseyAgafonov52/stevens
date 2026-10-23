@@ -50,6 +50,8 @@ interface Recognition {
 type RecognitionCtor = new () => Recognition;
 
 const MAX_MS = 20000;
+/** Столько ждём onend после stop/abort/ошибки. Отказ в доступе к микрофону браузер иногда так и не завершает */
+const END_WAIT_MS = 1500;
 /** Пауза, после которой считаем, что человек договорил: хватает, чтобы подумать посреди фразы */
 const SILENCE_MS = 1800;
 /** Как браузер пишет имя: «Стивенс», «Стивенсон», «Стивен», «Стив», «Stevens», «Steve». «Стиль» и «стивидор» — нет */
@@ -90,6 +92,7 @@ let audio: AudioContext | null = null;
 let levelTimer: ReturnType<typeof setInterval> | undefined;
 let maxTimer: ReturnType<typeof setTimeout> | undefined;
 let silenceTimer: ReturnType<typeof setTimeout> | undefined;
+let endWatch: ReturnType<typeof setTimeout> | undefined;
 let finalText = '';
 let interimText = '';
 let cancelled = false;
@@ -119,6 +122,32 @@ function cleanupAudio(): void {
   stream = null;
   void audio?.close().catch(() => undefined);
   audio = null;
+}
+
+/**
+ * Запись закончилась: отпускаем микрофон и кнопку. true — впервые; false — уже отпустили
+ * (по ошибке или по сторожу), второй onend ничего не делает.
+ */
+function release(rec: Recognition): boolean {
+  clearTimeout(endWatch);
+  if (recognition !== rec) return false;
+  recognition = null;
+  cleanupAudio();
+  emit('state', 'idle');
+  clearTimeout(rearmTimer);
+  if (wantArmed) rearmTimer = setTimeout(arm, 400);
+  return true;
+}
+
+/** Попросили остановить, а браузер молчит — сами доводим запись до конца, чтобы кнопка не залипала */
+function watchEnd(rec: Recognition): void {
+  clearTimeout(endWatch);
+  endWatch = setTimeout(() => {
+    if (recognition !== rec) return;
+    log('браузер не закончил запись — отпускаю сам');
+    rec.onend?.();
+    try { rec.abort(); } catch { /* уже остановлена */ }
+  }, END_WAIT_MS);
 }
 
 function startLevel(media: MediaStream): void {
@@ -249,11 +278,16 @@ function arm(inGesture = false): void {
       armedEnded = null;
       emit('armed', false);
     } else {
-      recognition = null;
-      cleanupAudio();
-      emit('state', 'idle');
-      // Тишина после имени — без «Не расслышал»: просто снова слушаем фоном
-      if (!cancelled && finalText.trim() && !isCancel(finalText)) emit('final', finalText.trim());
+      if (recognition === rec) {
+        clearTimeout(endWatch);
+        recognition = null;
+        cleanupAudio();
+        emit('state', 'idle');
+        // Тишина после имени — без «Не расслышал»: просто снова слушаем фоном
+        if (!cancelled && finalText.trim() && !isCancel(finalText)) emit('final', finalText.trim());
+      } else if (recognition !== null) {
+        return; // уже отпустили сторожем, а следом началась новая запись — её не трогаем
+      }
     }
     clearTimeout(rearmTimer);
     if (!wantArmed) return;
@@ -321,7 +355,7 @@ export const voice = {
       }).catch(() => undefined);
     };
     rec.onresult = (event) => {
-      if (cancelled) return;
+      if (cancelled || recognition !== rec) return;
       let interim = '';
       for (let i = event.resultIndex; i < event.results.length; i += 1) {
         const result = event.results[i];
@@ -347,14 +381,14 @@ export const voice = {
       if (event.error === 'aborted') return;
       cancelled = true;
       emit('error', ERRORS[event.error] ?? 'failed');
+      // Не разрешили микрофон: запись не начнётся, а onend может и не прийти — отпускаем сразу,
+      // иначе кнопка остаётся в записи и не выключается до перезагрузки страницы
+      release(rec);
+      try { rec.abort(); } catch { /* уже остановлена */ }
     };
     rec.onend = () => {
+      if (!release(rec)) return;
       log('закончил, текст:', JSON.stringify((finalText + ' ' + interimText).trim()));
-      recognition = null;
-      cleanupAudio();
-      emit('state', 'idle');
-      clearTimeout(rearmTimer);
-      if (wantArmed) rearmTimer = setTimeout(arm, 400);
       if (cancelled) return;
       const text = (finalText + ' ' + interimText).trim();
       if (isCancel(text)) log('отмена голосом');
@@ -377,14 +411,22 @@ export const voice = {
 
   /** Остановить и отдать распознанное */
   stop(): void {
-    recognition?.stop();
+    const rec = recognition;
+    if (!rec) return;
+    rec.stop();
+    watchEnd(rec);
   },
 
   /** Отменить: ничего не отдавать */
   cancel(): void {
     cancelled = true;
-    if (recognition) recognition.abort();
-    else cleanupAudio();
+    const rec = recognition;
+    if (!rec) {
+      cleanupAudio();
+      return;
+    }
+    rec.abort();
+    watchEnd(rec);
   },
 
   /** Перебивать по имени, пока Стивенс говорит: Safari при включённом микрофоне глушит и уводит звук в разговорный динамик */

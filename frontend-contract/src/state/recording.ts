@@ -89,9 +89,27 @@ voice.on('interim', (text) => {
 
 voice.on('level', (level) => recordingStore.set({ level }));
 
+/** «Нет», «не хочу» в ответ на «Показать задачи без срока?» */
+const REFUSE_RE = /^(?:нет|неа|не\s+хочу|не\s+надо|не\s+нужно|не\s+сейчас|не\s+стоит|потом|позже|обойдусь|хватит)(?:[\s,.!]+(?:спасибо|не\s+надо|потом))*[\s.!]*$/i;
+
+/**
+ * Стивенс предложил показать задачи без срока и сам включил микрофон. Услышал отказ — просто выключаемся:
+ * в ленту ничего не уходит, предложение гаснет, как будто нажали «Не сейчас».
+ */
+function refusedOffer(text: string): boolean {
+  const { messages } = store.get();
+  const last = messages[messages.length - 1];
+  if (!last || last.kind !== 'answer' || last.pressed !== null || !REFUSE_RE.test(text.trim())) return false;
+  const index = last.response.buttons.findIndex((b) => 'action' in b.send && b.send.action.id === 'skip_undated');
+  if (index < 0) return false;
+  store.set((s) => ({ messages: s.messages.map((m) => (m.id === last.id ? { ...m, pressed: index } : m)) }));
+  return true;
+}
+
 voice.on('final', (text) => {
   const full = applyCorrections([prefix, text].filter(Boolean).join(' '));
   store.set({ input: '' });
+  if (!prefix && refusedOffer(full)) return;
   if (!send(full, 'voice')) store.set({ input: full });
 });
 

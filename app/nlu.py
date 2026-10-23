@@ -53,6 +53,7 @@ STOPWORDS = {
     "сдвинь", "подвинь", "поменяй", "измени", "время", "дату", "позже", "раньше", "выполненной", "готово",
     "убери", "убрать", "сотри", "стереть", "очисти", "удалите", "всех", "дни", "дней", "день", "дел", "время",
     "записей", "ней", "нему", "неё", "него", "этой", "этому", "из", "переименуй", "назови", "сделай",
+    "заметку", "заметка", "заметки", "заметок", "заметках", "идею", "идея", "идеи", "идей", "мысль", "мысли",
 }
 
 
@@ -66,7 +67,7 @@ class Period:
 
 @dataclass
 class Parse:
-    intent: str = "unknown"  # create list search person help thanks off_topic delete complete free move edit unknown
+    intent: str = "unknown"  # create note notes list search person help thanks off_topic delete complete free move edit unknown
     type: str | None = None
     text: str | None = None
     date: date | None = None
@@ -96,6 +97,9 @@ class Parse:
     note: str | None = None      # edit: «добавь к встрече с Машей заметку взять ноутбук»
     all: bool = False           # move: «перенеси все встречи» — все записи дня source
     source: date | None = None  # move all: с какого дня переносим (по умолчанию сегодня)
+    repeat_days: list[int] | None = None  # create: «каждый вторник» → [1]; пн = 0
+    until: date | None = None   # create: повтор «до конца года» — последний день; None — без конца
+    series_all: bool = False    # delete: «убери планёрку вообще» — все предстоящие дни повтора
 
 
 # ── Время ─────────────────────────────────────────────
@@ -465,6 +469,8 @@ def _filter_type(text: str) -> str | None:
         return "reminder"
     if re.search(r"\bзадач", lower):
         return "task"
+    if NOTE_WORD_RE.search(lower):
+        return "note"
     return None
 
 
@@ -553,6 +559,21 @@ NOTE_RE = re.compile(
     rf"^(?:добавь|допиши|припиши|добавить|дописать)\s+(?:(?:к|ко|в|во)\s+(?P<target>.+?)\s+{NOTE_WORDS}[\s:,—-]+(?P<note>.+)"
     rf"|{NOTE_WORDS}\s+(?:(?:к|ко|в|во)\s+(?P<ref>ней|нему|не[её]|нему|этой\s+\w+|этому\s+\w+)[\s:,—-]+|(?:(?:к|ко|в|во)\s+(?P<target2>[^:—]+?))?\s*[:—]\s*)(?P<note2>.+))$",
     I)
+# Заметка без времени: «запиши идею: …», «заметка: …», «сохрани в заметки …»
+NOTE_WORD_RE = re.compile(r"\b(?:заметк\w*|иде(?:я|ю|и|ей|ям|ями|ях)|мысл(?:ь|и))\b", I)
+NOTE_NEW_RE = re.compile(
+    r"^(?:(?:пожалуйста\s+)?(?:запиши|сохрани|создай|сделай|добавь|заведи|запомни|внеси|оставь|набросай)(?:те)?"
+    r"(?:\s+(?:мне|себе))?\s+)?(?:(?:в\s+заметк(?:и|у))"
+    r"|(?:(?:новую|новая|одну|такую|быструю|быстрая)\s+)?(?:идею|идея|мысль|заметку|заметка))(?!\s+(?:к|ко)\s)"
+    r"(?:(?:\s*[:,—-]\s*|\s+)(?:(?:что|о\s+том,?\s+что|про)\s+)?(?P<body>\S.*))?[\s.!?:]*$",
+    I)
+# «Покажи заметки», «мои идеи», «что у меня в заметках», «заметки про кофе»
+NOTES_LIST_RE = re.compile(
+    r"^(?:(?:покажи|открой|выведи|прочитай|прочти|зачитай|перечисли|какие|список|мои|все)\b.*?\b"
+    r"|что\s+(?:у\s+меня\s+)?(?:есть\s+)?в\s+|)"
+    r"(?:заметки|заметках|заметок|идеи|идей|мысли)\b(?P<rest>.*)$",
+    I)
+UNDATED_RE = re.compile(r"\bбез\s+(?:срока|сроков|даты|дат|дедлайна)\b", I)
 TYPE_BY_STEM = {"задач": "task", "напомин": "reminder", "встреч": "meeting"}
 SHIFT_RE = re.compile(r"\bна\s+(полчаса|(\d+)?\s*час\w*|(\d+)\s*минут\w*)\s+(позже|раньше)\b", I)
 ALL_RE = re.compile(r"\b(?:вс[её]|всех)\b", I)
@@ -648,8 +669,162 @@ def _free_duration(lower: str) -> int | None:
     return None
 
 
+# ── Повторы: «каждый вторник», «по средам и пятницам», «до конца года» ──
+
+_DAY_STEMS = (("понедельник", 0), ("вторник", 1), ("сред", 2), ("четверг", 3), ("пятниц", 4), ("суббот", 5),
+              ("воскресень", 6))
+_DAY_ONE = r"(?:понедельник[уа]?|вторник[уа]?|сред[уае]|четверг[уа]?|пятниц[уае]|суббот[уае]|воскресень[еяю])"
+_DAY_MANY = r"(?:понедельникам|вторникам|средам|четвергам|пятницам|субботам|воскресеньям)"
+_JOIN = r"\s*(?:,|\bи\b)\s*(?:(?:в|во|по)\s+)?"
+REPEAT_RES = (
+    # «каждый вторник», «каждую среду и пятницу», «каждую неделю во вторник», «еженедельно по средам»
+    re.compile(rf"\b(?:(?:каждую\s+неделю|еженедельно|раз\s+в\s+неделю)\s+(?:в|во|по)\s+|кажд(?:ый|ую|ое)\s+)"
+               rf"(?P<days>(?:{_DAY_ONE}|{_DAY_MANY})(?:{_JOIN}(?:{_DAY_ONE}|{_DAY_MANY}))*)\b", I),
+    # «по вторникам», «по понедельникам и четвергам». «С понедельника по среду» — не повтор: там «по» + один день
+    re.compile(rf"(?:^|(?<=\s))(?:(?:каждую\s+неделю|еженедельно)\s+)?по\s+(?P<days>{_DAY_MANY}(?:{_JOIN}{_DAY_MANY})*)\b", I),
+)
+REPEAT_WEEKDAYS_RE = re.compile(r"\b(?:по\s+будн(?:ям|им\s+дням|им)|кажд(?:ый|ые)\s+будни(?:й\s+день|е\s+дни)?|в\s+будни)\b", I)
+REPEAT_WEEKEND_RE = re.compile(r"\b(?:по\s+выходным(?:\s+дням)?|кажд(?:ые|ый)\s+выходн(?:ые|ой))\b", I)
+REPEAT_DAILY_RE = re.compile(r"\b(?:каждый\s+день|ежедневно)\b", I)
+
+_SEASONS = {"весны": 3, "лета": 6, "осени": 9, "зимы": 12}
+_COUNT = {"один": 1, "одну": 1, "два": 2, "две": 2, "три": 3, "четыре": 4, "пять": 5, "шесть": 6}
+UNTIL_RES = (
+    ("year", re.compile(r"\bдо\s+(?:конца\s+(?:этого\s+|текущего\s+)?года|нового\s+года)\b", I)),
+    ("week", re.compile(r"\bдо\s+конца\s+(?:этой\s+)?недели\b", I)),
+    ("month_end", re.compile(r"\bдо\s+конца\s+(?:этого\s+|текущего\s+)?месяца\b", I)),
+    ("end_of", re.compile(rf"\bдо\s+конца\s+{MONTH_RE}\b", I)),
+    ("day", re.compile(rf"\bдо\s+(\d{{1,2}})\s+{MONTH_RE}(?:\s+(\d{{4}}))?(?:\s+года)?\b", I)),
+    ("month", re.compile(rf"\bдо\s+{MONTH_RE}\b", I)),
+    ("season", re.compile(r"\bдо\s+(весны|лета|осени|зимы)\b", I)),
+    ("span", re.compile(r"\b(?:на|в\s+течение)\s+(?:(\d+|один|одну|два|две|три|четыре|пять|шесть)\s+)?"
+                        r"(недел[юиь]\w*|месяц\w*|полгода|год\w*)\b", I)),
+)
+
+
+@dataclass
+class Repeat:
+    days: list[int]
+    until: date | None
+    spans: list[tuple[int, int]]
+
+
+def _day_of(word: str) -> int:
+    word = word.lower()
+    return next(i for stem, i in _DAY_STEMS if word.startswith(stem))
+
+
+def _month_start(index: int, today: date, year: int | None = None) -> date:
+    """1-е число месяца index (0 — январь): ближайшее впереди."""
+    if year:
+        return date(year, index + 1, 1)
+    start = date(today.year, index + 1, 1)
+    return start if start > today else date(today.year + 1, index + 1, 1)
+
+
+def _until(text: str, today: date) -> tuple[date | None, tuple[int, int] | None]:
+    for kind, regex in UNTIL_RES:
+        m = regex.search(text)
+        if not m:
+            continue
+        if kind == "year":
+            return date(today.year, 12, 31), m.span()
+        if kind == "month_end":
+            return _month_start(today.month % 12, today) - timedelta(days=1), m.span()
+        if kind == "end_of":
+            index = _month_index(m.group(1))
+            year = today.year if index + 1 >= today.month else today.year + 1
+            return date(year + (index == 11), (index + 1) % 12 + 1, 1) - timedelta(days=1), m.span()
+        if kind == "week":
+            return week_bounds(today)[1], m.span()
+        if kind == "day":
+            try:
+                day = date(int(m.group(3)) if m.group(3) else today.year, _month_index(m.group(2)) + 1, int(m.group(1)))
+            except ValueError:
+                continue
+            if day < today and not m.group(3):
+                day = day.replace(year=today.year + 1)
+            return day, m.span()
+        if kind == "month":
+            return _month_start(_month_index(m.group(1)), today) - timedelta(days=1), m.span()
+        if kind == "season":
+            return _month_start(_SEASONS[m.group(1).lower()] - 1, today) - timedelta(days=1), m.span()
+        n = int(m.group(1)) if m.group(1) and m.group(1).isdigit() else _COUNT.get((m.group(1) or "").lower(), 1)
+        unit = m.group(2).lower()
+        if unit.startswith("недел"):
+            return today + timedelta(weeks=n) - timedelta(days=1), m.span()
+        months = 6 if unit == "полгода" else 12 * n if unit.startswith("год") else n
+        month = today.month - 1 + months
+        year, month = today.year + month // 12, month % 12 + 1
+        return date(year, month, min(today.day, 28)) - timedelta(days=1), m.span()
+    return None, None
+
+
+def parse_repeat(text: str, now: datetime) -> Repeat | None:
+    """«Каждый вторник до конца года» → дни недели, последний день и куски фразы. Не повтор — None."""
+    days: list[int] = []
+    spans: list[tuple[int, int]] = []
+    for regex in REPEAT_RES:
+        for m in regex.finditer(text):
+            days += [_day_of(w) for w in re.findall(rf"{_DAY_ONE}|{_DAY_MANY}", m["days"], I)]
+            spans.append(m.span())
+    for regex, group in ((REPEAT_WEEKDAYS_RE, [0, 1, 2, 3, 4]), (REPEAT_WEEKEND_RE, [5, 6]),
+                         (REPEAT_DAILY_RE, [0, 1, 2, 3, 4, 5, 6])):
+        if m := regex.search(text):
+            days += group
+            spans.append(m.span())
+    if not days:
+        return None
+    until, until_span = _until(text, now.date())
+    if until_span:
+        spans.append(until_span)
+    return Repeat(sorted(set(days)), until, spans)
+
+
+def first_day(days: list[int], start: date, now: datetime, time: str | None) -> date:
+    """Первый день повтора с start: сегодняшний — только если время ещё не прошло."""
+    for shift in range(8):
+        day = start + timedelta(days=shift)
+        if day.weekday() not in days:
+            continue
+        if day == now.date() and time and time <= now.strftime("%H:%M"):
+            continue
+        return day
+    return start
+
+
+SERIES_ALL_RE = re.compile(
+    r"\b(?:вообще|совсем|насовсем|целиком|полностью|навсегда|(?:вс[её]\s+)?(?:повтор\w*|серию)|за\s+все\s+(?:дни|недели)"
+    r"|все\s+предстоящ\w+(?:\s+дни)?)\b", I)
+
+
+def _with_repeat(text: str, now: datetime) -> Parse | None:
+    """Фраза с повтором: разбираем без слов повтора и добавляем дни. None — повтор тут ни при чём."""
+    rep = parse_repeat(text, now)
+    if not rep:
+        return None
+    rest = " ".join(_cut(text, rep.spans).split()).strip(" ,.")
+    if not rest:
+        return None
+    inner = parse(rest, now)
+    if inner.intent == "unknown" and keywords(rest):
+        inner = parse("запиши " + rest, now)  # «каждый понедельник бассейн»
+    if inner.intent == "delete":
+        inner.series_all = True                 # «удали планёрку по вторникам» — все дни повтора
+        return inner
+    if inner.intent != "create":
+        return None
+    start = max(inner.date or now.date(), now.date())
+    inner.repeat_days, inner.until = rep.days, rep.until
+    inner.date, inner.date_kind = first_day(rep.days, start, now, inner.time), "exact"
+    inner.vague_period = False
+    return inner
+
+
 def parse(raw: str, now: datetime) -> Parse:
     text = strip_lead(" ".join(raw.strip().split()))
+    if repeated := _with_repeat(text, now):
+        return repeated
     result = Parse()
 
     # Благодарность: одна — thanks; с просьбой — выполняем просьбу (Р-124)
@@ -673,6 +848,12 @@ def parse(raw: str, now: datetime) -> Parse:
     if edit := parse_edit(text, now):
         return edit
 
+    # «Запиши идею: открыть кофейню», «Заметка: купить подарок маме» — без даты и времени
+    if note := NOTE_NEW_RE.match(text):
+        result.intent, result.type, result.date_kind = "note", "note", "none"
+        result.text = capitalize((note["body"] or "").strip(" ,.!?:—-")) or None
+        return result
+
     if DELETE_RE.search(lower) or COMPLETE_RE.search(lower) or DONE_RE.search(lower):
         result.intent = "delete" if DELETE_RE.search(lower) else "complete"
         result.filter_type = _filter_type(lower)
@@ -684,6 +865,10 @@ def parse(raw: str, now: datetime) -> Parse:
         all_days = ALL_DAYS_RE.search(text)
         if all_days:
             spans.append(all_days.span())
+        # «Убери планёрку вообще» — все предстоящие дни повтора
+        if whole := SERIES_ALL_RE.search(text):
+            result.series_all = True
+            spans.append(whole.span())
         rest = _cut(text, spans)
         result.keywords, result.required = search_keywords(rest, result.filter_type)
         result.ref = bool(REF_RE.search(rest)) or bool(DONE_RE.search(lower))
@@ -717,6 +902,18 @@ def parse(raw: str, now: datetime) -> Parse:
         result.keywords, result.required = search_keywords(_cut(text, spans), result.filter_type)
         result.ref = bool(REF_RE.search(lower)) or not result.keywords
         result.date, result.time = info.date, time
+        return result
+
+    # «Покажи задачи без срока», «что у меня без даты»
+    if UNDATED_RE.search(lower) and not CREATE_VERB_RE.search(lower) and (LIST_RE.search(lower) or SEARCH_RE.search(lower)
+                                                                         or re.match(r"^(?:какие|список|мои|все)\b", lower)):
+        result.intent = "undated"
+        return result
+
+    # «Покажи заметки», «какие у меня идеи», «заметки про кофе»
+    if notes := NOTES_LIST_RE.match(text):
+        result.intent, result.filter_type = "notes", "note"
+        result.keywords, result.required = search_keywords(notes["rest"], "note")
         return result
 
     # «Когда я свободен в четверг на час?», «Найди время встретиться с Ваней»
@@ -800,7 +997,7 @@ def parse(raw: str, now: datetime) -> Parse:
     is_meeting = bool(re.search(MEETING_WORD_RE, lower))
     has_verb = bool(CREATE_VERB_RE.search(lower))
     has_need = bool(re.search(r"\b(нужно|надо|необходимо|не\s+забыть|должен|должна|должны|пора)\b", lower))
-    is_task_word = bool(re.search(r"^(?:поставь|запиши|добавь|создай)\s+задач|^(?:идея|заметка|мысль)\s*[:—-]", lower))
+    is_task_word = bool(re.search(r"^(?:поставь|запиши|добавь|создай)\s+задач", lower))
     if not (has_verb or is_meeting or has_need or is_task_word or ((info.date or time) and len(keywords(_cut(text, info.spans + time_spans))) >= 1)):
         return result  # unknown
 
@@ -814,8 +1011,7 @@ def parse(raw: str, now: datetime) -> Parse:
 
     body = _cut(text, info.spans + time_spans)
     body = re.sub(r"^\s*(?:пожалуйста\s+)?(?:напомни(?:те)?|поставь|запиши|добавь|создай|запланируй|назначь|внеси|заведи)(?:\s+мне)?\b", " ", body, flags=I)
-    body = re.sub(r"^\s*(?:новую\s+|новое\s+|новая\s+)?(?:задачу|задача|напоминание|идею|идея|мысль|заметку|заметка|в\s+заметки)\b"
-                  r"(?:\s*[:—-]|\s+(?:что|о\s+том,?\s+что)\b)?", " ", body, flags=I)
+    body = re.sub(r"^\s*(?:новую\s+|новое\s+)?(?:задачу|задача|напоминание)\b", " ", body, flags=I)
     body = re.sub(r"\b(?:у\s+меня|мне|нужно|надо|необходимо|не\s+забыть|пожалуйста)\b", " ", body, flags=I)
     body = strip_fillers(body)
     body = re.sub(r"\b(?:утром|вечером|днём|днем)\b", " ", body, flags=I)
@@ -833,7 +1029,8 @@ def parse(raw: str, now: datetime) -> Parse:
     if first and first[0].lower() in MEETING_NOUNS:
         noun = MEETING_NOUNS[first[0].lower()]
         rest = first[1] if len(first) > 1 else ""
-        result.has_subject = bool(keywords(rest))
+        # «Планёрка», «совещание», «демо» понятны и без участника; «встреча» и «созвон» — нет
+        result.has_subject = bool(keywords(rest)) or noun in ("Планёрка", "Совещание", "Демо")
         body = f"{noun} {rest}".strip()
     elif result.type == "meeting":
         result.has_subject = bool(keywords(body))

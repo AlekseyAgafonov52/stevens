@@ -99,3 +99,38 @@ test('пока Стивенс говорит фразу без имени, «С�
   voice.setArmed(false);
   vi.useRealTimers();
 });
+
+test('микрофон не разрешили: запись сразу выключается и включается снова, даже если браузер не прислал onend', async () => {
+  vi.useFakeTimers();
+  const events: string[] = [];
+  const offState = voice.on('state', (s) => events.push(s));
+  const offError = voice.on('error', (e) => events.push(`error:${e}`));
+  await voice.start();
+  const denied = FakeRec.last!;
+  denied.abort = () => {}; // как в браузере: после отказа onend не приходит
+  denied.onerror?.({ error: 'not-allowed' });
+  expect(events).toEqual(['recording', 'error:denied', 'idle']);
+  await voice.start();
+  expect(FakeRec.last).not.toBe(denied);
+  expect(events).toEqual(['recording', 'error:denied', 'idle', 'recording']);
+  FakeRec.last!.stop();
+  offState();
+  offError();
+  vi.useRealTimers();
+});
+
+test('браузер завис и не заканчивает запись — «стоп» всё равно её выключает', async () => {
+  vi.useFakeTimers();
+  const events: string[] = [];
+  const offState = voice.on('state', (s) => events.push(s));
+  await voice.start();
+  const stuck = FakeRec.last!;
+  stuck.stop = () => {};
+  stuck.abort = () => {};
+  voice.stop();
+  expect(events).toEqual(['recording']);
+  vi.advanceTimersByTime(1600);
+  expect(events).toEqual(['recording', 'idle']);
+  offState();
+  vi.useRealTimers();
+});

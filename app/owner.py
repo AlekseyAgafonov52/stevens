@@ -51,6 +51,8 @@ class Owner:
 def demo_rows() -> list[dict]:
     """1000 записей CSV организаторов. Тип угадываем по первому слову (О-01)."""
     rows = []
+    # Время создания есть у каждой записи: у демо — момент, когда песочницу заполнили
+    created = datetime.now(timezone.utc)
     with CSV_PATH.open(encoding="utf-8-sig") as file:
         for row in csv.DictReader(file):
             first = row["text"].split(" ", 1)[0].lower()
@@ -62,6 +64,8 @@ def demo_rows() -> list[dict]:
                 "time": row["time"] or None,
                 "date_kind": DateKind.exact if row["date"] else DateKind.none,
                 "status": None if meeting else TaskStatus.open,
+                "created_at": created,
+                "demo": True,
             })
     return rows
 

@@ -5,6 +5,7 @@ import { api, ApiFailure, errorKey } from '../../api';
 import type { RecordItem } from '../../api/types';
 import { Dots } from '../../components/Dots';
 import { T } from '../../content/texts';
+import { createdText } from '../../lib/dates';
 import { sessionExpired } from '../../state/session';
 import { buildPatch, validate, type EditErrors } from './patch';
 import './edit.css';
@@ -84,7 +85,7 @@ export function EditForm({ record, onSaved, onCancel, onDelete }: Props) {
         />
         {errors.text && <span className="edit-form__error">{T[errors.text]}</span>}
       </label>
-      <div className="edit-form__row">
+      {record.type !== 'note' && <div className="edit-form__row">
         <label className="edit-form__field edit-form__field--date">
           <span className="edit-form__label">{record.date_kind === 'deadline' ? T.edit_date_deadline : T.edit_date}</span>
           <input className="edit-form__input" type="date" value={date} disabled={busy}
@@ -95,8 +96,9 @@ export function EditForm({ record, onSaved, onCancel, onDelete }: Props) {
           <input className="edit-form__input" type="time" value={time} disabled={busy}
             onChange={(e) => { setTime(e.target.value); setErrors((v) => ({ ...v, datetime: undefined })); }} />
         </label>
-      </div>
+      </div>}
       {errors.datetime && <span className="edit-form__error">{T[errors.datetime]}</span>}
+      {createdText(record) && <span className="edit-form__created">{createdText(record)}</span>}
       {failure && (
         <div className="edit-form__failure" role="alert">
           <CircleAlert size={14} strokeWidth={1.5} aria-hidden="true" />

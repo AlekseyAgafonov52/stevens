@@ -5,7 +5,7 @@ import type { RecordItem } from '../api/types';
 const today = new Date(2026, 9, 21, 10, 0);
 const rec = (over: Partial<RecordItem>): RecordItem => ({
   id: 1, type: 'task', text: 'x', date: '2026-10-22', time: null, date_kind: 'exact',
-  status: 'open', created_at: null, marks: [], highlight: null, ...over,
+  status: 'open', created_at: null, repeat: null, demo: false, marks: [], highlight: null, ...over,
 });
 
 describe('dates', () => {

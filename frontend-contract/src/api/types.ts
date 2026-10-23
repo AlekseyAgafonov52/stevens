@@ -72,7 +72,7 @@ export interface ChatResponse {
   buttons: Button[];
 }
 
-export type RecordType = 'task' | 'reminder' | 'meeting';
+export type RecordType = 'task' | 'reminder' | 'meeting' | 'note';
 export type DateKind = 'exact' | 'deadline' | 'none';
 /** deleted — допы Д2/Д10: запись удалена (карточка «Удалено») */
 export type RecordMark = 'new' | 'draft' | 'conflict' | 'deleted';
@@ -89,10 +89,19 @@ export interface RecordItem {
   date_kind: DateKind;
   status: 'open' | 'done' | null;
   created_at: IsoMoment | null;
+  /** Повтор по дням недели (пн = 0) и последний день; null — запись не повторяется */
+  repeat: Repeat | null;
+  /** Демо-запись песочницы из CSV: уведомления по ней не звонят */
+  demo: boolean;
   marks: RecordMark[];
   highlight: HighlightField | null;
   /** резерв, Д7 */
   remind_at?: IsoMoment | null;
+}
+
+export interface Repeat {
+  weekdays: number[];
+  until: LocalDate | null;
 }
 
 export interface Button {

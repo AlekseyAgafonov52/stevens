@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.models import DateKind, Record, TaskStatus, TaskType
+from app import series
 from app.owner import Owner, get_owner
 
 router = APIRouter(prefix="/api/records", tags=["records"])
@@ -53,6 +54,7 @@ async def list_records(
 ):
     if not valid_date(from_) or not valid_date(to) or from_ > to:
         return invalid("invalid_period")
+    await series.extend(db, owner, date.today())
     rows = (await db.execute(
         select(Record).where(owner.filter(), Record.deleted_at.is_(None), Record.date.is_not(None),
                              Record.date >= from_, Record.date <= to)
@@ -76,9 +78,11 @@ def apply_patch(record: Record, body: dict) -> str | None:
         return "invalid_time"
     status = body.get("status")
     if "status" in body:
-        if status not in ("open", "done") or record.type == TaskType.meeting:
+        if status not in ("open", "done") or record.type in (TaskType.meeting, TaskType.note):
             return "invalid_status"
 
+    if record.type == TaskType.note and (new_date is not None or new_time is not None):
+        return "invalid_date"  # у заметки нет даты и времени
     kind = record.date_kind
     if record.type in (TaskType.meeting, TaskType.reminder):
         # У встречи и напоминания дата и время обязательны

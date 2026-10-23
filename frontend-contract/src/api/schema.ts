@@ -4,13 +4,15 @@ import type { ChatResponse, RecordItem } from './types';
 
 const recordSchema = z.object({
   id: z.number().nullable(),
-  type: z.enum(['task', 'reminder', 'meeting']).nullable(),
+  type: z.enum(['task', 'reminder', 'meeting', 'note']).nullable(),
   text: z.string(),
   date: z.string().nullable(),
   time: z.string().nullable(),
   date_kind: z.enum(['exact', 'deadline', 'none']),
   status: z.enum(['open', 'done']).nullable(),
   created_at: z.string().nullable(),
+  repeat: z.object({ weekdays: z.array(z.number()), until: z.string().nullable() }).nullable().optional().default(null),
+  demo: z.boolean().optional().default(false),
   marks: z.array(z.string()).default([]),
   highlight: z.enum(['date', 'time', 'text']).nullable().default(null),
 });
