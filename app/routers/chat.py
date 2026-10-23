@@ -922,6 +922,7 @@ async def answer_list(ctx: Ctx, p: nlu.Parse) -> dict:
             # Про один тип — его формы вместо «дело|дела|дел» (раздел 9)
             forms = TYPE_FORMS[p.filter_type] if p.filter_type else None
             text, speech = ctx.say("list_some", values, speech_values, count_forms=forms)
+        remember_shown(ctx, rows)
         return await offer_undated(ctx, p, period,
                                    reply("list", text, speech, records=[r.to_contract() for r in rows], total=len(rows)))
 
@@ -932,6 +933,7 @@ async def answer_list(ctx: Ctx, p: nlu.Parse) -> dict:
              if is_future(r, ctx.now)]
     nearest = min(later, key=moment) if later else None
     if nearest:
+        remember_shown(ctx, [nearest])  # «удали эту задачу» — про показанную ближайшую
         rec_values, rec_speech = ctx.record_values(nearest.to_contract())
         values.update(rec_values)
         speech_values.update({"when": rec_speech["when"]})
@@ -942,6 +944,15 @@ async def answer_list(ctx: Ctx, p: nlu.Parse) -> dict:
         text, speech = ctx.say("list_empty_nearest" if nearest else "list_empty_none", values, speech_values)
     return await offer_undated(ctx, p, period,
                                reply("list", text, speech, nearest=nearest.to_contract() if nearest else None, total=0))
+
+
+def remember_shown(ctx: Ctx, rows: list[Record]) -> None:
+    """Показали записи — «удали её», «удали эти две» дальше про них, а не про последнюю созданную."""
+    if len(rows) == 1:
+        ctx.conv.focus = rows[0].id
+    else:
+        ctx.conv.focus = None
+        ctx.conv.found = [r.id for r in rows[:FOUND_LIMIT]]
 
 
 UNDATED_AHEAD = 14  # о задачах без срока напоминаем к спискам на сегодня, завтра, эту и следующую неделю
@@ -1268,6 +1279,8 @@ async def answer_delete(ctx: Ctx, p: nlu.Parse) -> dict:
             return await delete_series(ctx, one)
     if p.bulk:
         return await answer_bulk_delete(ctx, p)
+    if p.group:
+        return await answer_group(ctx, p, "delete")
     if near := await focused(ctx, p):
         if len(near) == 1 or only_series(ctx, near):
             return await delete_record(ctx, only_series(ctx, near) or near[0], p)
@@ -1360,7 +1373,37 @@ async def answer_series_delete(ctx: Ctx, pending: Pending, raw: str) -> dict | N
     return None
 
 
+async def answer_group(ctx: Ctx, p: nlu.Parse, action: str) -> dict:
+    """«Удали эти две», «отметь их выполненными» — все записи, показанные в прошлом ответе."""
+    rows = await focused(ctx, p) if ctx.found or ctx.conv.focus is not None else []
+    if not rows:
+        text, speech = ctx.say("group_none")
+        return reply("clarify", text, speech, awaiting=True, buttons=[CANCEL])
+    if action == "delete":
+        if len(rows) == 1:
+            return await delete_record(ctx, rows[0], p)
+        forms = TYPE_FORMS[p.filter_type] if p.filter_type else None
+        return await bulk_delete(ctx, Pending("bulk_delete", {"ids": [r.id for r in rows], "forms": forms}))
+    open_rows = [r for r in rows if r.type != TaskType.meeting and r.status != TaskStatus.done]
+    if not open_rows:
+        meetings = [r for r in rows if r.type == TaskType.meeting]
+        if meetings:
+            return meeting_not_done(ctx, meetings)
+        text, speech = ctx.say("completed_many_none", {"period": "среди них"})
+        return reply("found", text, speech, total=0)
+    if len(open_rows) == 1:
+        return await complete_one(ctx, open_rows[0])
+    for row in open_rows:
+        row.status = TaskStatus.done
+    await ctx.db.commit()
+    text, speech = ctx.say("completed_group", {"count": len(open_rows)})
+    return reply("completed", text, speech, records=[r.to_contract() for r in sorted(open_rows, key=moment)],
+                 total=len(open_rows))
+
+
 async def answer_complete(ctx: Ctx, p: nlu.Parse) -> dict:
+    if p.group:
+        return await answer_group(ctx, p, "complete")
     if p.bulk and not p.keywords:
         return await complete_all(ctx, p)
     if p.filter_type == "meeting":
