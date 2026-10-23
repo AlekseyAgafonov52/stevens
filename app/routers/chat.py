@@ -279,6 +279,8 @@ async def process_draft(ctx: Ctx, draft: dict) -> dict:
     kind, has_date, has_time = draft["type"], bool(draft.get("date")), bool(draft.get("time"))
     times = await free_times(ctx, draft.get("date"), kind) if not has_time else []
     days = [("Сегодня", "сегодня"), ("Завтра", "завтра")]
+    if has_time and draft["time"] <= ctx.now.strftime("%H:%M"):
+        days = days[1:]  # «в 9 утра» в полдень — сегодняшнее 9:00 уже прошло
 
     if not draft.get("text"):
         ctx.conv.pending = None
@@ -315,7 +317,10 @@ async def process_draft(ctx: Ctx, draft: dict) -> dict:
         if draft["date"] < today:
             past["date"] = None
         past["time"] = None if kind != "task" else past.get("time")
-        return clarify(ctx, "clarify_date_past", past, values={"when": values["when"]})
+        # «Сегодня в 8 утра», а уже 10 — предлагаем завтра в то же время
+        quick = [(f"Завтра в {draft['time']}", f"завтра в {draft['time']}")] \
+            if draft["date"] == today and has_time else None
+        return clarify(ctx, "clarify_date_past", past, quick, values={"when": values["when"]})
 
     # Высокий риск ошибки — «правильно понял?» (Р-19)
     if draft.get("ambiguous") and not draft.get("confirmed"):
@@ -765,7 +770,7 @@ def merge_reply(pending: Pending, raw: str, now: datetime) -> dict | None:
         if draft.get("date_kind") == "none":
             draft["date_kind"] = "exact"
         changed = True
-    if draft["type"] == "meeting" and not draft.get("has_subject", True) and rest:
+    if draft["type"] == "meeting" and not draft.get("has_subject", True) and rest and not ACK_RE.match(rest):
         noun = draft.get("text") or "Встреча"
         joined = rest if rest.lower().split()[0] in ("с", "со", "по", "о", "об", "про") else f"с {rest}"
         draft["text"] = f"{noun} {joined}"
@@ -942,6 +947,25 @@ async def answer_undated(ctx: Ctx) -> dict:
     else:
         ctx.conv.found = [r.id for r in rows[:FOUND_LIMIT]]
     text, speech = ctx.say("undated_some", {"count": len(rows)})
+    return reply("found", text, speech, records=[r.to_contract() for r in rows[:FOUND_LIMIT]], total=len(rows))
+
+
+async def answer_repeats(ctx: Ctx) -> dict:
+    """«Покажи повторы» — по одной карточке на повтор, ближайший его день."""
+    rows = [r for r in await owner_records(ctx, Record.series_id.is_not(None)) if is_future(r, ctx.now)]
+    rows = nearest_first(one_per_series(rows, ctx.now), ctx.now)
+    if not rows:
+        text, speech = ctx.say("repeats_none")
+        return reply("found", text, speech, total=0)
+    if len(rows) == 1:
+        ctx.conv.focus = rows[0].id
+    else:
+        ctx.conv.found = [r.id for r in rows[:FOUND_LIMIT]]
+    items = []
+    for r in rows[:FOUND_LIMIT]:
+        rule = r.repeat_contract() or {"weekdays": [parse_date(r.date).weekday()]}
+        items.append(f"{r.text} — {series.rule_text(rule['weekdays'], r.time)}")
+    text, speech = ctx.say("repeats_some", {"count": len(rows)}, {"count": len(rows), "items": "; ".join(items)})
     return reply("found", text, speech, records=[r.to_contract() for r in rows[:FOUND_LIMIT]], total=len(rows))
 
 
@@ -1224,7 +1248,7 @@ async def delete_record(ctx: Ctx, record: Record, p: nlu.Parse) -> dict:
         return await delete_one(ctx, record)
     if p.series_all:
         return await delete_series(ctx, record)
-    if p.date:
+    if p.date or p.series_one:
         return await delete_one(ctx, record, "deleted_occurrence")
     return ask_series_delete(ctx, record)
 
@@ -1994,6 +2018,9 @@ def answers_time(pending: Pending, raw: str, now: datetime, p: nlu.Parse | None 
         return False
     if p and p.intent == "create" and p.text and INFINITIVE_RE.search(p.text) and (p.date or p.time):
         return False
+    # «Завтра в 7 вечера кино с Петей» посреди вопроса — новое дело со своим днём, временем и смыслом
+    if p and p.intent == "create" and p.text and p.date and p.time and len(nlu.keywords(p.text)) >= 2:
+        return False
     return bool(nlu.parse_when(raw, now)[0] or nlu.reply_time(raw)[0])
 
 
@@ -2008,7 +2035,7 @@ def is_new_request(p: nlu.Parse, raw: str) -> bool:
     if p.only_when:
         return False
     if p.intent in ("list", "search", "help", "off_topic", "delete", "complete", "thanks", "move", "edit", "note", "notes",
-                    "undated"):
+                    "undated", "repeats"):
         return True
     if p.intent == "create":
         return bool(nlu.CREATE_VERB_RE.search(raw.strip().lower()) or (p.text and len(nlu.keywords(p.text)) >= 2)
@@ -2228,6 +2255,8 @@ async def respond(ctx: Ctx, payload: ChatRequest) -> dict:
         return await process_draft(ctx, draft_from(p, ctx.today))
     if p.intent == "undated":
         return await answer_undated(ctx)
+    if p.intent == "repeats":
+        return await answer_repeats(ctx)
     if p.intent == "note":
         return await answer_note(ctx, p)
     if p.intent == "notes":
@@ -2255,4 +2284,33 @@ async def respond(ctx: Ctx, payload: ChatRequest) -> dict:
         return reply("thanks", text, speech)
     if p.intent == "off_topic":
         return examples("off_topic", "off_topic", ctx, EXAMPLES)
+    if "d3" in ctx.features and (answer := await answer_did(ctx, raw)):
+        return answer
     return examples("not_understood", "not_understood", ctx, EXAMPLES)
+
+
+PAST_VERB_RE = re.compile(r"\b([а-яё]{3,}?)(?:л|ла|ли)\b", re.I)
+
+
+async def answer_did(ctx: Ctx, raw: str) -> dict | None:
+    """«Хлеб купил», «позвонила маме» — отмечаем дело «Купить хлеб», «Позвонить маме». Нет такого — None."""
+    lower = raw.lower().strip(" .!")
+    if raw.strip().endswith("?") or re.search(r"\bне\s+[а-яё]+л[аи]?\b", lower):
+        return None
+    for verb in PAST_VERB_RE.finditer(lower):
+        stem = verb.group(1).replace("ё", "е")
+        rest = (lower[:verb.start()] + " " + lower[verb.end():]).strip()
+        keys, required = nlu.search_keywords(rest)
+        keys = [k for k in keys if k not in ("я", "уже")]
+        if not keys:
+            continue
+        rows = [r for r in await owner_records(ctx, Record.type.in_([TaskType.task, TaskType.reminder]))
+                if r.status != TaskStatus.done and r.text.lower().replace("ё", "е").startswith(stem)]
+        rows = by_keywords(rows, nlu.Parse(keywords=keys, required=required))
+        if not rows:
+            continue
+        ctx.trace["intent"] = "complete"
+        if one := single(ctx, rows):
+            return await complete_one(ctx, one)
+        return which_one(ctx, nearest_first(rows, ctx.now), "complete")
+    return None

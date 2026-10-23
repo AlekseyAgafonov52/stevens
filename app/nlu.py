@@ -100,6 +100,7 @@ class Parse:
     repeat_days: list[int] | None = None  # create: «каждый вторник» → [1]; пн = 0
     until: date | None = None   # create: повтор «до конца года» — последний день; None — без конца
     series_all: bool = False    # delete: «убери планёрку вообще» — все предстоящие дни повтора
+    series_one: bool = False    # delete: «удали только ближайшую планёрку» — один день повтора
     day_part: str | None = None  # list: «сегодня вечером» — утром | днём | вечером
     next: bool = False          # search: «какое следующее дело», «ближайшая встреча» — ближайшая запись впереди
     only_when: bool = False     # во фразе только день: «а на завтра?» — список, а в уточнении это ответ
@@ -108,14 +109,89 @@ class Parse:
 # ── Время ─────────────────────────────────────────────
 
 TIME_HM = re.compile(r"(?:\bв\s+|\bна\s+|^|\s)(\d{1,2})[:.](\d{2})\b", I)
-TIME_H = re.compile(r"\bв\s+(\d{1,2})(?:\s*(?:час(?:а|ов)?|ч\.?))?(?:\s+(утра|дня|вечера|ночи))?(?=\s|$|[,.!?])", I)
+TIME_H = re.compile(r"\bв\s+(\d{1,2})(?:\s*(?:час(?:а|ов)?|ч\.?))?(?:\s+(утра|дня|вечера|ночи))?(?=\s|$|[,.!?])"
+                    r"|\bна\s+(\d{1,2})(?:\s*(?:час(?:а|ов)?|ч\.?))?\s+(утра|дня|вечера|ночи)(?=\s|$|[,.!?])", I)
 TIME_WORDS = re.compile(r"\b(утром|вечером|днём|днем)\b", I)
+
+
+# Время словами: «в полдень», «в полночь», «в пол восьмого», «в половине девятого», «в четверть третьего»,
+# «без пятнадцати три», «без четверти девять»
+_HOUR_GEN = ("первого", "второго", "третьего", "четв[её]ртого", "пятого", "шестого", "седьмого", "восьмого",
+             "девятого", "десятого", "одиннадцатого", "двенадцатого")
+_HOUR_NOM = {"час": 1, "один": 1, "два": 2, "три": 3, "четыре": 4, "пять": 5, "шесть": 6, "семь": 7, "восемь": 8,
+             "девять": 9, "десять": 10, "одиннадцать": 11, "двенадцать": 12}
+_HOUR_GEN_ALT = "|".join(_HOUR_GEN) + r"|\d{1,2}-?го"
+_MIN_WORDS = {"двадцати пяти": 25, "пяти": 5, "десяти": 10, "пятнадцати": 15, "четверти": 15, "двадцати": 20}
+_MIN_ALT = "|".join(w.replace(" ", r"\s+") for w in _MIN_WORDS)
+SPOKEN_TIME_RE = re.compile(
+    r"(?:\b(?:в|на|к)\s+)?\b(?:"
+    r"(?P<noon>полдень|полудня)|(?P<midnight>полночь|полуночи)"
+    rf"|(?:пол\s*-?\s*|половин[уеы]\s+)(?P<half>{_HOUR_GEN_ALT})(?:\s+часа)?(?!\s+числ)"
+    rf"|четверть\s+(?P<quarter>{_HOUR_GEN_ALT})(?:\s+часа)?(?!\s+числ)"
+    rf"|без\s+(?P<before>\d{{1,2}}|{_MIN_ALT})(?:\s+минут)?\s+(?P<hour>\d{{1,2}}|{'|'.join(_HOUR_NOM)})"
+    r")(?:\s+(?P<part>утра|дня|вечера|ночи))?(?=\s|$|[,.!?])", I)
+
+
+def _hour_gen(word: str) -> int:
+    """«восьмого» → 8, «9-го» → 9: час, к которому идёт «пол», «четверть»."""
+    if m := re.match(r"\d+", word):
+        return int(m.group(0))
+    return next(i + 1 for i, g in enumerate(_HOUR_GEN) if re.match(g, word.lower()))
+
+
+def _spoken_time(text: str) -> tuple[int, int, str, tuple[int, int], bool] | None:
+    """Час, минуты, «утра/вечера», кусок фразы и признак «полночь» или None."""
+    m = SPOKEN_TIME_RE.search(text)
+    if not m:
+        return None
+    part = (m.group("part") or "").lower()
+    if m.group("noon"):
+        return 12, 0, "дня", m.span(), False
+    if m.group("midnight"):
+        return 0, 0, "ночи", m.span(), True
+    if m.group("half") or m.group("quarter"):
+        hour = _hour_gen(m.group("half") or m.group("quarter"))
+        if not 1 <= hour <= 24:
+            return None
+        return (hour - 1) % 24, 30 if m.group("half") else 15, part, m.span(), False
+    raw = m.group("before").lower()
+    minutes = int(raw) if raw.isdigit() else _MIN_WORDS[re.sub(r"\s+", " ", raw)]
+    word = m.group("hour").lower()
+    hour = int(word) if word.isdigit() else _HOUR_NOM[word]
+    if not 0 < minutes < 60 or not 1 <= hour <= 24:
+        return None
+    return (hour - 1) % 24, 60 - minutes, part, m.span(), False
 
 
 def _parse_time(text: str) -> tuple[str | None, bool, list[tuple[int, int]]]:
     """Время HH:MM, признак «утро или вечер — неясно» и куски фразы, где оно было."""
     spans: list[tuple[int, int]] = []
-    m = TIME_HM.search(text)
+    spoken = _spoken_time(text)
+    if spoken:
+        h, mm, part, span, _ = spoken
+        spans.append(span)
+        ambiguous = False
+        word = TIME_WORDS.search(text)
+        if part in ("вечера", "дня") and h < 12:
+            h += 12
+        elif part == "ночи" and h == 12:
+            h = 0
+        elif not part and word and word.group(1).lower() == "вечером" and h < 12:
+            h += 12
+        elif not part and word and word.group(1).lower() in ("днём", "днем") and h < 8:
+            h += 12
+        elif not part and not word and 1 <= h <= 7:
+            h += 12
+            ambiguous = True
+        elif not part and h == 0 and "полноч" not in text[span[0]:span[1]].lower() and "полуноч" not in text[span[0]:span[1]].lower():
+            h, ambiguous = 12, False  # «без пяти час» днём
+        return f"{h:02d}:{mm:02d}", ambiguous, spans
+    # «05.01 в 10» — это дата и время, а не 05:01
+    valid = [x for x in TIME_HM.finditer(text) if int(x.group(1)) < 24 and int(x.group(2)) < 60]
+    bare_dot = [x for x in valid if "." in x.group(0) and not re.match(r"\s*(?:в|на)\s", x.group(0), I)]
+    if bare_dot and (len(valid) > len(bare_dot) or TIME_H.search(text)):
+        valid = [x for x in valid if x not in bare_dot]
+    m = valid[0] if valid else None
     if m:
         h, mm = int(m.group(1)), int(m.group(2))
         if h < 24 and mm < 60:
@@ -132,8 +208,8 @@ def _parse_time(text: str) -> tuple[str | None, bool, list[tuple[int, int]]]:
             return f"{h:02d}:{mm:02d}", ambiguous, spans
     m = TIME_H.search(text)
     if m:
-        h = int(m.group(1))
-        part = (m.group(2) or "").lower()
+        h = int(m.group(1) or m.group(3))
+        part = (m.group(2) or m.group(4) or "").lower()
         if h > 23:
             return None, False, spans
         spans.append(m.span())
@@ -232,7 +308,12 @@ def parse_when(text: str, now: datetime) -> tuple[str | None, bool, list[tuple[i
         time_spans.append(rel_span)
         return time, ambiguous, time_spans, info
     time, ambiguous, time_spans = _parse_time(text)
-    return time, ambiguous, time_spans, _parse_date(text, now, time)
+    info = _parse_date(text, now, time)
+    # «В полночь», «сегодня в 12 ночи» — это начало завтрашнего дня
+    if time == "00:00" and re.search(r"\b(?:полноч|полуноч|12\s+ночи)", text, I) and info.date in (None, now.date()) \
+            and not info.period:
+        info.date, info.kind = now.date() + timedelta(days=1), "exact"
+    return time, ambiguous, time_spans, info
 
 
 # ── Дата ──────────────────────────────────────────────
@@ -281,6 +362,16 @@ def _range_label(start: date, end: date) -> tuple[str, str]:
                 f"с {start.day} по {end.day} {MONTHS_GEN[end.month - 1]}")
     return (f"с {start.day} {MONTHS_SHORT[start.month - 1]} по {end.day} {MONTHS_SHORT[end.month - 1]}",
             f"с {start.day} {MONTHS_GEN[start.month - 1]} по {end.day} {MONTHS_GEN[end.month - 1]}")
+
+
+def _near_year(day: date, today: date) -> date:
+    """«1 января» 31 декабря — это следующий год, а не прошедший январь. Полгода назад и раньше — уже следующий."""
+    if (today - day).days > 183:
+        try:
+            return day.replace(year=day.year + 1)
+        except ValueError:
+            return day
+    return day
 
 
 def _parse_date(text: str, now: datetime, time: str | None) -> _DateInfo:
@@ -352,7 +443,7 @@ def _parse_date(text: str, now: datetime, time: str | None) -> _DateInfo:
 
     # Конкретный день
     if not info.date:
-        m = re.search(r"\b(?:на\s+)?(позавчера|вчера|сегодня|послезавтра|завтра)\b", text, I)
+        m = re.search(r"\b(?:на\s+)?(позавчера|вчера|сегодня|послезавтра|завтра)(?:шн(?:ий|юю|ее|яя|его|ей|ие|их|ему|ем))?\b", text, I)
         if m:
             shift = {"позавчера": -2, "вчера": -1, "сегодня": 0, "завтра": 1, "послезавтра": 2}[m.group(1).lower()]
             found(m, today + timedelta(days=shift))
@@ -376,18 +467,20 @@ def _parse_date(text: str, now: datetime, time: str | None) -> _DateInfo:
         m = re.search(rf"\b(?:на\s+)?(\d{{1,2}})\s+{MONTH_RE}(?:\s+(\d{{4}}))?\b", text, I)
         if m:
             try:
-                year = int(m.group(3)) if m.group(3) else today.year
-                found(m, date(year, _month_index(m.group(2)) + 1, int(m.group(1))))
+                day = date(int(m.group(3)) if m.group(3) else today.year, _month_index(m.group(2)) + 1, int(m.group(1)))
+                found(m, day if m.group(3) else _near_year(day, today))
             except ValueError:
                 pass
     if not info.date:
         m = re.search(r"\b(\d{4})-(\d{2})-(\d{2})\b|\b(\d{1,2})\.(\d{1,2})(?:\.(\d{4}))?\b(?!:)", text)
-        if m and not re.search(r"\d[:.]\d{2}\b", m.group(0)):
+        if m and not (re.search(r"\d[:.]\d{2}\b", m.group(0)) and m.group(4)
+                      and time == f"{int(m.group(4)):02d}:{int(m.group(5)):02d}"):
             try:
                 if m.group(1):
                     found(m, date(int(m.group(1)), int(m.group(2)), int(m.group(3))))
                 else:
-                    found(m, date(int(m.group(6) or today.year), int(m.group(5)), int(m.group(4))))
+                    day = date(int(m.group(6) or today.year), int(m.group(5)), int(m.group(4)))
+                    found(m, day if m.group(6) else _near_year(day, today))
             except ValueError:
                 pass
     return info
@@ -563,7 +656,7 @@ BULK_RE = re.compile(r"(\bвс[её]\b|\bвсех\b|^(?:пожалуйста\s+)
 ALL_DAYS_RE = re.compile(r"\b(?:за\s+)?(?:все\s+дни|вс[её]\s+время|всю\s+историю)\b", I)
 COMPLETE_RE = re.compile(rf"(\bотметь\b.*\bвыполнен|\bя\s+(?:уже\s+)?(?:сделал|сделала|выполнил|выполнила|закончил|закончила)\b|^(?:сделал|сделала|выполнил|выполнила)\b|\bотметь\b.*\bсделан|\s(?:—\s*|-\s*)?(?:сделал|сделала|выполнил|выполнила|сделано|выполнено|готово)[\s.!]*$)", I)
 SEARCH_RE = re.compile(rf"(\bнайди\b|\bнайти\b|\bпоищи\b|\bищи\b|^когда\b(?!-)|\bкогда\s+(?:у\s+меня\s+)?(?:был|была|было|будет)\b|\bставил)", I)
-LIST_RE = re.compile(rf"(что\s+у\s+меня|какие\s+(?:у\s+меня\s+)?(?:планы|дела|задачи|встречи|напоминания)|^покажи|что\s+(?:я\s+)?запланировано|есть\s+ли\s+у\s+меня|^что\s+(?:в|во|на)\s|^сколько\s+(?:у\s+меня\s+)?(?:дел|задач|встреч|напоминаний|записей)|^что\s+я\s+(?:делал|делала|делаю|буду\s+делать)|^что\s+(?:сегодня|завтра|послезавтра)\b|что\s+(?:было|будет)|мо[её]\s+расписание|\bпланы\s+на\b|чем\s+я\s+занят)", I)
+LIST_RE = re.compile(rf"(что\s+у\s+меня|какие\s+(?:у\s+меня\s+)?(?:планы|дела|задачи|встречи|напоминания)|^покажи|что\s+(?:я\s+)?запланировано|есть\s+ли\s+у\s+меня|^что\s+(?:в|во|на)\s|^сколько\s+(?:у\s+меня\s+)?(?:дел|задач|встреч|напоминаний|записей)|^что\s+я\s+(?:делал|делала|делаю|буду\s+делать)|^что\s+(?:(?:мне|ещё|еще|у\s+меня)\s+)*осталось|^что\s+(?:сегодня|завтра|послезавтра)\b|что\s+(?:было|будет)|мо[её]\s+расписание|\bпланы\s+на\b|чем\s+я\s+занят)", I)
 OFFTOPIC_RE = re.compile(r"(погод|анекдот|шутк|курс\s+(?:доллар|евро|валют)|новост|рецепт|кто\s+так|переведи|столиц|сколько\s+будет|расскажи\s+(?:о|про)\s+себе|как\s+дела|фильм|музык|игр[ау]|стих)", I)
 CREATE_VERB_RE = re.compile(r"^(?:пожалуйста\s+)?(напомни(?:те)?(?:\s+мне)?|поставь|запиши|добавь|создай|запланируй|назначь|внеси|заведи)\b", I)
 DONE_RE = re.compile(r"^(?:готово|сделано|выполнено|сделал|сделала)[\s.!]*$", I)
@@ -595,6 +688,8 @@ NOTES_LIST_RE = re.compile(
     I)
 NEXT_RE = re.compile(r"\b(?:ближайш|следующ)\w*\s+(?:\w+\s+)?(?:встреч|дел[оа]?\b|задач|напоминани|созвон|запис)"
                      r"|^что\s+(?:у\s+меня\s+)?(?:дальше|следующее|на\s+очереди)\b|^(?:а\s+)?дальше\s+что\b", I)
+REPEATS_LIST_RE = re.compile(r"^(?:покажи|какие|список|мои|все|что\s+за)\b(?:\s+(?:у\s+меня|мои|все))*\s+(?:повтор\w*|регулярн\w*)"
+                             r"|^что\s+(?:у\s+меня\s+)?(?:повторя\w*|регулярно)", I)
 UNDATED_RE = re.compile(r"\bбез\s+(?:срока|сроков|даты|дат|дедлайна)\b", I)
 TYPE_BY_STEM = {"задач": "task", "напомин": "reminder", "встреч": "meeting"}
 SHIFT_RE = re.compile(r"\bна\s+(полчаса|(\d+)?\s*час\w*|(\d+)\s*минут\w*)\s+(позже|раньше)\b", I)
@@ -891,6 +986,9 @@ def parse(raw: str, now: datetime) -> Parse:
         if whole := SERIES_ALL_RE.search(text):
             result.series_all = True
             spans.append(whole.span())
+        elif one := re.search(r"\bтолько\s+(?:(?:одн[уа]|один|эт[уоа]|этот|ближайш\w*|следующ\w*)\b)?", text, I):
+            result.series_one = True
+            spans.append(one.span())
         rest = _cut(text, spans)
         result.keywords, result.required = search_keywords(rest, result.filter_type)
         result.ref = bool(REF_RE.search(rest)) or bool(DONE_RE.search(lower))
@@ -936,6 +1034,11 @@ def parse(raw: str, now: datetime) -> Parse:
     if notes := NOTES_LIST_RE.match(text):
         result.intent, result.filter_type = "notes", "note"
         result.keywords, result.required = search_keywords(notes["rest"], "note")
+        return result
+
+    # «Покажи повторы», «какие у меня регулярные дела», «что у меня повторяется»
+    if REPEATS_LIST_RE.search(lower) and not CREATE_VERB_RE.search(lower):
+        result.intent = "repeats"
         return result
 
     # «Когда я свободен в четверг на час?», «Найди время встретиться с Ваней»
@@ -1040,7 +1143,11 @@ def parse(raw: str, now: datetime) -> Parse:
     is_task_word = bool(re.search(r"^(?:поставь|запиши|добавь|создай)\s+задач", lower))
     if text.rstrip().endswith("?") and not (has_verb or has_need or is_meeting):
         return result  # вопрос без «напомни/запиши» — не создаём задачу «Сколько дел ?»
-    if not (has_verb or is_meeting or has_need or is_task_word or ((info.date or info.period or time) and len(keywords(_cut(text, info.spans + time_spans))) >= 1)):
+    # «Купить хлеб», «позвонить в банк» — голое дело без срока, как в списке покупок
+    bare_todo = bool(re.match(r"^[а-яё]{3,}(?:ть|ться|чь|сти|зти)\s+\S", lower)) and len(keywords(text)) >= 2 \
+        and not re.search(r"что-(?:нибудь|то|либо)|\bэто\b", lower)
+    if not (has_verb or is_meeting or has_need or is_task_word or bare_todo
+            or ((info.date or info.period or time) and len(keywords(_cut(text, info.spans + time_spans))) >= 1)):
         return result  # unknown
 
     result.intent = "create"
