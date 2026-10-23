@@ -128,6 +128,8 @@
 .start__examples { position: relative; top: -40px; max-width: 560px; }
 .start__subtitle { font-size: 18px; line-height: 1.4; text-align: center; color: var(--c-text); }
 .start__examples { display: flex; flex-wrap: wrap; justify-content: center; gap: var(--sp-3); margin-top: var(--sp-11); }
+/* На телефоне примеры не помещаются по высоте: подъём на 40px уводил подпись под шапку */
+@media (max-width: 600px) { .start__subtitle, .start__examples { top: 0; } }
 
 .user-row { display: flex; justify-content: flex-end; }
 .bubble {
