@@ -1429,7 +1429,15 @@ async def answer_group(ctx: Ctx, p: nlu.Parse, action: str) -> dict:
         if len(rows) == 1:
             return await delete_record(ctx, rows[0], p)
         forms = TYPE_FORMS[p.filter_type] if p.filter_type else None
-        return await bulk_delete(ctx, Pending("bulk_delete", {"ids": [r.id for r in rows], "forms": forms}))
+        pending = Pending("bulk_delete", {"ids": [r.id for r in rows], "forms": forms})
+        if p.group_count and p.group_count != len(rows):
+            # «Эти две», а показано три — не угадываем, какие
+            ctx.conv.pending = pending
+            text, speech = ctx.say("group_count_mismatch", {"count": len(rows)})
+            return reply("confirm", text, speech, records=[r.to_contract() for r in rows], total=len(rows),
+                         awaiting=True, buttons=[button_action("Да, удалить все", "confirm_yes"),
+                                                 button_action("Нет", "cancel", style="secondary")])
+        return await bulk_delete(ctx, pending)
     open_rows = [r for r in rows if r.type != TaskType.meeting and r.status != TaskStatus.done]
     if not open_rows:
         meetings = [r for r in rows if r.type == TaskType.meeting]

@@ -102,6 +102,7 @@ class Parse:
     series_all: bool = False    # delete: «убери планёрку вообще» — все предстоящие дни повтора
     series_one: bool = False    # delete: «удали только ближайшую планёрку» — один день повтора
     group: bool = False         # delete: «удали эти две», «удали их» — все показанные только что записи
+    group_count: int | None = None  # «эти две» → 2: если показано другое число, переспросим
     day_part: str | None = None  # list: «сегодня вечером» — утром | днём | вечером
     next: bool = False          # search: «какое следующее дело», «ближайшая встреча» — ближайшая запись впереди
     only_when: bool = False     # во фразе только день: «а на завтра?» — список, а в уточнении это ответ
@@ -1117,6 +1118,8 @@ def parse(raw: str, now: datetime) -> Parse:
             spans.append(one.span())
         if group := GROUP_RE.search(text):
             result.group = True
+            counts = {"обе": 2, "оба": 2, "обеих": 2, "обоих": 2, "две": 2, "два": 2, "три": 3, "четыре": 4, "пять": 5}
+            result.group_count = next((counts[w] for w in group[0].lower().split() if w in counts), None)
             spans.append(group.span())
         rest = _cut(text, spans)
         result.keywords, result.required = search_keywords(rest, result.filter_type)
