@@ -104,6 +104,7 @@ class Parse:
     day_part: str | None = None  # list: «сегодня вечером» — утром | днём | вечером
     next: bool = False          # search: «какое следующее дело», «ближайшая встреча» — ближайшая запись впереди
     only_when: bool = False     # во фразе только день: «а на завтра?» — список, а в уточнении это ответ
+    doubt: list[dict] = field(default_factory=list)  # create: почему разбор неуверенный — спросим «Верно понял?»
 
 
 # ── Время ─────────────────────────────────────────────
@@ -955,8 +956,100 @@ def _with_repeat(text: str, now: datetime) -> Parse | None:
     return inner
 
 
+# ── Неуверенный разбор: «Верно понял?» ───────────────
+
+TYPO_WORDS = ["сегодня", "завтра", "послезавтра", "понедельник", "вторник", "среду", "четверг", "пятницу",
+              "субботу", "воскресенье", "января", "февраля", "марта", "апреля", "июня", "июля", "августа",
+              "сентября", "октября", "ноября", "декабря", "утра", "вечера"]
+
+
+def _close(a: str, b: str) -> bool:
+    """Одна опечатка: лишняя, пропущенная, заменённая буква или две соседние местами («зватра»)."""
+    if a == b or abs(len(a) - len(b)) > 1:
+        return False
+    if len(a) == len(b):
+        diff = [i for i in range(len(a)) if a[i] != b[i]]
+        return len(diff) == 1 or (len(diff) == 2 and diff[1] == diff[0] + 1
+                                  and a[diff[0]] == b[diff[1]] and a[diff[1]] == b[diff[0]])
+    short, long = sorted((a, b), key=len)
+    i = next((k for k in range(len(short)) if short[k] != long[k]), len(short))
+    return short[i:] == long[i + 1:]
+
+
+def fix_typos(text: str) -> tuple[str, list[dict]]:
+    """«Зватра в 10» → «завтра в 10». Правим только слова, которых нет в словаре, и только на слова дат."""
+    if _MORPH is None:
+        return text, []
+    fixes = []
+
+    def fix(m: re.Match) -> str:
+        word = m.group(0)
+        lower = word.lower().replace("ё", "е")
+        if len(lower) < 5 or _MORPH.word_is_known(lower):
+            return word
+        right = next((w for w in TYPO_WORDS if _close(lower, w)), None)
+        if not right:
+            return word
+        fixes.append({"why": "typo", "word": word, "right": right})
+        return right
+
+    return re.sub(r"[А-Яа-яЁё]+", fix, text), fixes
+
+
+# Расплывчатое время: угадываем и переспрашиваем
+VAGUE_TIME = [
+    (r"ближе\s+к\s+вечеру", "17:00"), (r"под\s+вечер", "18:00"), (r"после\s+работы", "18:00"),
+    (r"после\s+обеда", "14:00"), (r"(?:до|перед)\s+обедом|до\s+обеда", "12:00"), (r"в\s+обед", "13:00"),
+    (r"вечерком", "19:00"), (r"утречком|с\s+утра(?:\s+пораньше)?", "09:00"),
+]
+# Срок без даты: убираем из текста и переспрашиваем
+VAGUE_WHEN_RE = re.compile(r"\b(?:попозже|позже|потом|скоро|на\s+днях|как-нибудь|когда-нибудь|в\s+ближайшее\s+время)\b", I)
+HEDGE_RE = re.compile(r"\b(?:наверное|наверно|возможно|вроде\s+бы|вроде|кажется|примерно|может\s+быть)\b|^может\b|\bможет$", I)
+OR_WHEN_RE = re.compile(rf"\s*\bили\s+(?:(?:в|во|на|к|ко)\s+)?(?:\d{{1,2}}(?:[:.]\d{{2}})?|{WEEKDAY_RE}|завтра|послезавтра|сегодня|\d{{1,2}}\s+{MONTH_RE})\b", I)
+SELF_FIX_RE = re.compile(r"\s*,?\s*\b(?:а\s+нет|нет|точнее|вернее|ой)\b[,\s]+(?P<tail>(?:(?:в|во|на)\s+)?\S+(?:\s+\S+)?)$", I)
+
+
+def _doubts(result: "Parse", now: datetime) -> None:
+    """Что в разобранной фразе смущает: «или», «попозже», «наверное», «а нет, в 11», лишние числа."""
+    body = result.text or ""
+    if fix := SELF_FIX_RE.search(body):
+        time, ambiguous, _, info = parse_when(fix["tail"], now)
+        if not time:
+            time, ambiguous = reply_time(fix["tail"])
+        if time or info.date:
+            result.time = time or result.time
+            result.time_ambiguous = ambiguous if time else result.time_ambiguous
+            result.date = info.date or result.date
+            body = body[:fix.start()]
+            result.doubt.append({"why": "fix"})
+    if OR_WHEN_RE.search(body):
+        body = OR_WHEN_RE.sub("", body)
+        result.doubt.append({"why": "or"})
+    for pattern, time in VAGUE_TIME:
+        if m := re.search(rf"\b{pattern}\b", body, I):
+            if not result.time:
+                result.time, result.time_ambiguous = time, False
+                if result.date_kind == "none":
+                    result.date_kind = "exact"
+            body = body[:m.start()] + " " + body[m.end():]
+            result.doubt.append({"why": "vague", "word": m.group(0).lower(), "time": time})
+            break
+    if m := VAGUE_WHEN_RE.search(body):
+        body = body[:m.start()] + " " + body[m.end():]
+        result.doubt.append({"why": "vague", "word": m.group(0).lower()})
+    if HEDGE_RE.search(body.strip(" ,.!?")):
+        body = HEDGE_RE.sub(" ", body.strip(" ,.!?"))
+        result.doubt.append({"why": "hedge"})
+    body = " ".join(body.split()).strip(" ,.:;!—-")
+    # Число, похожее на время, осталось в тексте («встречу 15 с Олегом»); «2 литра» — не в счёт
+    if re.search(r"\b(?:[01]?\d|2[0-3])(?:[:.][0-5]\d)?\b(?!\s*(?:шт|кг|г\b|гр|л\b|литр|раз|минут|час|дн|недел|месяц|лет|год|%|руб|₽))",
+                 body, I) or re.search(r"\bчто-(?:то|нибудь)\b", body, I):
+        result.doubt.append({"why": "unclear"})
+    result.text = capitalize(body) if body else None
+
+
 def parse(raw: str, now: datetime) -> Parse:
-    text = strip_lead(" ".join(raw.strip().split()))
+    text, typos = fix_typos(strip_lead(" ".join(raw.strip().split())))
     if repeated := _with_repeat(text, now):
         return repeated
     result = Parse()
@@ -1225,6 +1318,8 @@ def parse(raw: str, now: datetime) -> Parse:
         result.type, result.has_subject = "meeting", True
         body = f"Встреча {body}"
     result.text = capitalize(body) if body else None
+    _doubts(result, now)
+    result.doubt = typos + result.doubt
     return result
 
 
