@@ -75,7 +75,7 @@ test('своё имя из динамиков не зовёт Стивенса, 
   await vi.advanceTimersByTimeAsync(700);
   const second = FakeRec.last!;
   expect(second).not.toBe(first);
-  second.say('Стив, отмени');
+  second.say('Стивс, отмени');
   expect(events).toEqual(['wake']);
   off();
   second.stop();
@@ -84,14 +84,14 @@ test('своё имя из динамиков не зовёт Стивенса, 
   vi.useRealTimers();
 });
 
-test('пока Стивенс говорит фразу без имени, «Стив» зовёт его', () => {
+test('пока Стивенс говорит фразу без имени, «Стивс» зовёт его', () => {
   vi.useFakeTimers();
   const events: string[] = [];
   const off = voice.on('wake', () => events.push('wake'));
   voice.setArmed(true);
   vi.advanceTimersByTime(500);
   voice.setEcho('Записал на завтра в 10');
-  FakeRec.last!.say('записал на завтра Стив подожди');
+  FakeRec.last!.say('записал на завтра стивз подожди');
   expect(events).toEqual(['wake']);
   voice.setEcho(null);
   off();
@@ -132,5 +132,26 @@ test('браузер завис и не заканчивает запись — 
   vi.advanceTimersByTime(1600);
   expect(events).toEqual(['recording', 'idle']);
   offState();
+  vi.useRealTimers();
+});
+
+test('короткое имя «Стивс» в разных написаниях зовёт, похожие слова — нет', () => {
+  vi.useFakeTimers();
+  for (const [text, hit] of [
+    ['Стивс, завтра в 10 созвон', true], ['стивз завтра созвон', true], ['стифс, напомни', true],
+    ['Стивес, запиши', true], ['Стив, запиши', true], ['steves remind me', true],
+    ['стиль у встречи деловой', false], ['стивидор придёт', false], ['стивсон', false],
+  ] as const) {
+    const events: string[] = [];
+    const off = voice.on('wake', () => events.push('wake'));
+    voice.setArmed(true);
+    vi.advanceTimersByTime(500);
+    FakeRec.last!.say(text);
+    expect(events, text).toEqual(hit ? ['wake'] : []);
+    off();
+    FakeRec.last!.stop();
+    voice.setArmed(false);
+    vi.advanceTimersByTime(700);
+  }
   vi.useRealTimers();
 });
