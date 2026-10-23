@@ -761,6 +761,13 @@ def merge_reply(pending: Pending, raw: str, now: datetime) -> dict | None:
         draft["date"] = info.date.isoformat()
         draft["date_kind"] = info.kind if draft["type"] == "task" else "exact"
         changed = True
+    half = re.fullmatch(r"(?:(?:нет|да)[\s,]+)?(утра|утром|вечера|вечером|дня|днём|днем|ночи)[\s.!]*", raw.strip(), re.I)
+    if half and draft.get("time") and not time:
+        # «Напомни в 7» → «вечера»: уточнили половину суток
+        h, m = map(int, draft["time"].split(":"))
+        h = h % 12 + (12 if half.group(1).lower().startswith(("веч", "дн", "дё")) else 0)
+        draft["time"], draft["ambiguous"] = f"{h:02d}:{m:02d}", False
+        return draft
     if not time and not draft.get("time"):
         # Сбивчивый ответ «есть 10… стой… поставь 10» — берём последнее время
         time, ambiguous = nlu.reply_time(raw)
@@ -1170,6 +1177,22 @@ async def complete_one(ctx: Ctx, record: Record) -> dict:
     return reply("completed", text, speech, records=[data])
 
 
+async def complete_all(ctx: Ctx, p: nlu.Parse) -> dict:
+    """«Отметь всё на сегодня выполненным» — открытые задачи и напоминания дня или периода; встречи не трогаем."""
+    period = p.period or nlu._day_period(p.date or ctx.today, ctx.today)
+    rows = await owner_records(ctx, Record.type.in_([TaskType.task, TaskType.reminder]), Record.status != TaskStatus.done,
+                               Record.date >= period.start.isoformat(), Record.date <= period.end.isoformat())
+    if not rows:
+        text, speech = ctx.say("completed_many_none", {"period": period.label})
+        return reply("found", text, speech, total=0)
+    for row in rows:
+        row.status = TaskStatus.done
+    await ctx.db.commit()
+    rows = sorted(rows, key=moment)
+    text, speech = ctx.say("completed_many", {"count": len(rows), "period": period.label})
+    return reply("completed", text, speech, records=[r.to_contract() for r in rows[:FOUND_LIMIT]], total=len(rows))
+
+
 def exact(found: list[Record], p: nlu.Parse) -> list[Record]:
     """«Встреча с Машей» — запись ровно с этими словами, а не «Встреча с Марией по сайту»."""
     want = set(p.keywords) | {"~встреч", "~звон"}
@@ -1225,6 +1248,10 @@ async def answer_delete(ctx: Ctx, p: nlu.Parse) -> dict:
             return await delete_record(ctx, only_series(ctx, near) or near[0], p)
         return which_one(ctx, near, "delete")
     if not (p.keywords or p.date or p.filter_type):
+        # Просто «удали» сразу после записи — её, «Вернуть» под ответом
+        focus = await owned_record(ctx, ctx.conv.focus)
+        if focus and focus.deleted_at is None:
+            return await delete_record(ctx, focus, p)
         text, speech = ctx.say("clarify_generic")
         return reply("clarify", text, speech, awaiting=True, buttons=[CANCEL])
     found = await find(ctx, p)
@@ -1309,6 +1336,8 @@ async def answer_series_delete(ctx: Ctx, pending: Pending, raw: str) -> dict | N
 
 
 async def answer_complete(ctx: Ctx, p: nlu.Parse) -> dict:
+    if p.bulk and not p.keywords:
+        return await complete_all(ctx, p)
     if p.filter_type == "meeting":
         if p.keywords or p.date:
             meetings = [r for r in await find(ctx, p) if is_future(r, ctx.now)]
@@ -2085,11 +2114,20 @@ UNDO_ACTIONS = ("undo", "restore", "restore_all")
 # «Отмени», «верни как было» без вопроса — то же, что «Отменить»/«Вернуть» под последним ответом
 UNDO_RE = re.compile(r"^(?:отмени(?:ть)?(?:\s+(?:это|последнее|вс[её]))?|отмена|верни(?:те)?(?:\s+(?:обратно|назад|как\s+было"
                      r"|вс[её]|это|е[её]|его|их))*)[\s.!]*$", re.I)
+# «Другое время», «давай другое время» на конфликт встреч — как кнопка «Другое время для новой»
+OTHER_TIME_RE = re.compile(r"^(?:(?:да|давай|ну|тогда)[\s,]+)*(?:друго[ей]|ино[ей]|поменяй|смени|измени)(?:\s+(?:время|час))?"
+                           r"(?:\s+(?:для\s+)?новой)?[\s.!]*$", re.I)
 # «Оставь обе» на конфликт встреч
 KEEP_BOTH_RE = re.compile(r"^(?:(?:да|ну)[\s,]+)?(?:оставь|оставляй|оставить|пусть\s+будут|сохрани)?\s*(?:обе|оба|обе\s+встречи|вместе)\b", re.I)
 # «А теперь на 12», «лучше в субботу» — перенос записи, о которой шла речь
 FOLLOW_MOVE_RE = re.compile(r"^(?:(?:а|ну|ой|нет|не)[\s,]+)*(?:(?:лучше|тогда|теперь|давай|можно|пусть)[\s,]+)+(?:будет\s+)?"
                             r"(?=(?:на|в|во|завтра|послезавтра|сегодня)\b)", re.I)
+# «Нет, в 11», «не, на пятницу» сразу после записи — поправка времени или дня
+FOLLOW_FIX_RE = re.compile(r"^(?:(?:а|ну|ой)[\s,]+)*(?:нет|не|неа)[\s,.!—-]+(?:а\s+|лучше\s+)?"
+                           r"(?=(?:на|в|во|завтра|послезавтра|сегодня)\b)", re.I)
+# «А на час раньше», «на полчаса позже»
+FOLLOW_SHIFT_RE = re.compile(r"^(?:(?:а|ну|и|тогда|давай)[\s,]+)*(?=на\s+(?:полчаса|\d*\s*час\w*|\d+\s*минут\w*)\s+(?:позже|раньше)\b)",
+                             re.I)
 ACK_RE = re.compile(r"^(?:да|нет|неа|не\s+надо|ага|угу|ок|окей|хорошо|понял|поняла|ясно|отлично|супер|класс|норм|понятно)[\s.!)]*$", re.I)
 ORDINAL_RE = re.compile(r"\b(перв(?:ую|ый|ое|ая)|втор(?:ую|ой|ое|ая)|трет(?:ью|ья|ье|ий)|четв[её]рт(?:ую|ый|ое|ая)"
                         r"|пят(?:ую|ый|ое|ая)|последн(?:юю|ий|ее|яя))\b|^(?:номер\s+)?([1-5])[\s.!]*$", re.I)
@@ -2199,6 +2237,8 @@ async def respond(ctx: Ctx, payload: ChatRequest) -> dict:
     if pending and pending.kind == "conflict" and not nlu.is_cancel_reply(raw):
         if KEEP_BOTH_RE.match(raw):
             return await save(ctx, {**pending.draft, "keep_both": True})
+        if OTHER_TIME_RE.match(raw) and (answer := await handle_action(ctx, "change_new_time", None)):
+            return answer
         if not is_new_request(p, raw) and (nlu.parse_when(raw, ctx.now)[0] or nlu.reply_time(raw)[0]):
             # «Давай в 16» — другое время для новой встречи
             pending = ctx.conv.pending = Pending("new_time", {**pending.draft, "time": None})
@@ -2228,7 +2268,8 @@ async def respond(ctx: Ctx, payload: ChatRequest) -> dict:
         if ctx.conv.undo and (answer := await handle_action(ctx, ctx.conv.undo["id"], ctx.conv.undo.get("record_id"))):
             return answer
         return reply("cancelled", *ctx.say("undo_nothing"))
-    if p.intent in ("unknown", "create") and ctx.conv.focus and (follow := FOLLOW_MOVE_RE.match(raw)):
+    if p.intent in ("unknown", "create") and ctx.conv.focus and (
+            follow := FOLLOW_MOVE_RE.match(raw) or FOLLOW_FIX_RE.match(raw) or FOLLOW_SHIFT_RE.match(raw)):
         # «А теперь на 12», «лучше в субботу» — переносим запись, о которой шла речь
         moved = nlu.parse("перенеси её " + raw[follow.end():], ctx.now)
         if moved.intent == "move" and (moved.date or moved.time or moved.shift) and not moved.keywords:
@@ -2265,6 +2306,9 @@ async def respond(ctx: Ctx, payload: ChatRequest) -> dict:
         return await answer_undated(ctx)
     if p.intent == "repeats":
         return await answer_repeats(ctx)
+    if p.intent == "bad_date":
+        text, speech = ctx.say("bad_date", {"text": p.text})
+        return reply("clarify", text, speech)
     if p.intent == "note":
         return await answer_note(ctx, p)
     if p.intent == "notes":
