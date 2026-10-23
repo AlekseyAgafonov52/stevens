@@ -648,7 +648,8 @@ def person_request(text: str) -> tuple[list[str], str] | None:
 # ── Главная функция ───────────────────────────────────
 
 THANKS_RE = re.compile(r"\b(спасибо|благодарю|благодарствую|спс)\b[,!.\s]*(стивенс|stevens)?[,!.]*", I)
-HELP_RE = re.compile(r"(что\s+ты\s+умеешь|что\s+умеешь|чем\s+(?:ты\s+)?(?:можешь\s+)?помочь|^помощь|^справка|как\s+(?:тобой|этим)\s+пользоваться)", I)
+HELP_RE = re.compile(r"(^(?:привет\w*|здравствуй\w*|добр(?:ый|ое|ого)\s+(?:день|утро|вечер|утра|вечера|дня)|хай|салют)(?:[\s,!.]+(?:стивенс|stevens))?[\s,!.)]*$"
+                     r"|^(?:кто\s+ты|ты\s+кто|как\s+тебя\s+зовут|что\s+ты\s+такое)[\s?!.]*$|что\s+ты\s+умеешь|что\s+умеешь|чем\s+(?:ты\s+)?(?:можешь\s+)?помочь|^помощь|^справка|как\s+(?:тобой|этим)\s+пользоваться)", I)
 DELETE_RE = re.compile(r"^(?:пожалуйста\s+)?(удали(?:те)?|удалить|убери(?:те)?|убрать|сотри|стереть|очисти(?:ть)?"
                        r"|отмени(?:те)?(?=\s+(?!это\b|последн|вс[её]\b)\S))\b", I)
 # «Удали все дела на завтра», «убери всё за все дни», «очисти пятницу»
@@ -944,6 +945,12 @@ def parse(raw: str, now: datetime) -> Parse:
         return repeated
     result = Parse()
 
+    # «Пока», «до свидания», «спокойной ночи» — целиком, как благодарность
+    if re.fullmatch(r"(?:(?:ну|ладно|всё|все|ок)[\s,]+)*(?:пока(?:-пока)?|до\s+свидания|до\s+завтра|спокойной\s+ночи|бывай)"
+                    r"(?:[\s,!.]+(?:стивенс|stevens))?[\s,!.)]*", text, I):
+        result.intent = "thanks"
+        return result
+
     # Благодарность: одна — thanks; с просьбой — выполняем просьбу (Р-124)
     thanks = THANKS_RE.search(text)
     if thanks:
@@ -959,6 +966,12 @@ def parse(raw: str, now: datetime) -> Parse:
 
     if HELP_RE.search(lower):
         result.intent = "help"
+        return result
+
+    # «32 октября», «31 ноября» — такого дня нет, переспрашиваем, а не молча берём сегодня
+    if (bad := re.search(rf"\b(\d{{1,2}})\s+{MONTH_RE}\b", text, I)) and not info.date and not re.search(
+            rf"\bдо\s+{bad.group(0)}", text, I):
+        result.intent, result.text = "bad_date", bad.group(0)
         return result
 
     # «Переименуй её в созвон», «сделай встречу с Иваном задачей», «добавь к встрече с Машей заметку …»
@@ -992,7 +1005,7 @@ def parse(raw: str, now: datetime) -> Parse:
         rest = _cut(text, spans)
         result.keywords, result.required = search_keywords(rest, result.filter_type)
         result.ref = bool(REF_RE.search(rest)) or bool(DONE_RE.search(lower))
-        result.bulk = result.intent == "delete" and bool(BULK_RE.search(lower))
+        result.bulk = bool(BULK_RE.search(lower))
         if not all_days:
             result.date = info.date
             if result.bulk and info.period and not info.date:
@@ -1066,6 +1079,8 @@ def parse(raw: str, now: datetime) -> Parse:
                 result.free_mode = "day"    # «Когда я свободнее всего на этой неделе?»
             else:
                 result.free_mode = "longest"  # «Когда я свободнее всего завтра?»
+        if re.search(r"\b(?:какие|какой|в\s+какой|в\s+какие)\s+(?:день|дни)\b", lower) and not info.date:
+            result.free_mode = "day"  # «Какие дни свободны на следующей неделе» — сравнение дней, а не окна понедельника
         result.weekends = bool(re.search(r"выходн|суббот|воскрес", lower))
         return result
 
