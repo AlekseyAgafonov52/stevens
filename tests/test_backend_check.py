@@ -30,7 +30,7 @@ async def main():
 
             def say(text, **extra):
                 return c.post("/api/chat", headers=h, json={"conversation_id": str(uuid.uuid4()), "text": text,
-                                                            "client_time": CLOCK, **extra})
+                                                            "client_time": CLOCK} | extra)
 
             # Новая вкладка: первые запросы разом — демо-данные один раз
             rs = await asyncio.gather(*[c.get(MONTH, headers=h) for _ in range(5)])
@@ -84,7 +84,13 @@ async def main():
 
             async def llm(**fields):
                 brain.parse_user_input = lambda text_: brain.IntentSchema(**fields)
-                return (await say("бубубу непонятная фраза")).json()
+                conv = str(uuid.uuid4())
+                r = (await say("бубубу непонятная фраза", conversation_id=conv)).json()
+                if fields["intent"].startswith("create_") and r["kind"] == "confirm":
+                    # Разбор нейросети — черновик с «верно понял?»; соглашаемся
+                    check("LLM: черновик с «верно понял?»", r["records"][0]["marks"] == ["draft"], r["text"])
+                    r = (await say("да", conversation_id=conv)).json()
+                return r
 
             r = await llm(intent="create_meeting", text="Встреча с Петей", date="tomorrow", time="25:99")
             check("LLM: время 25:99 не записано", r["kind"] == "clarify" and not r["records"], (r["kind"], r["text"]))

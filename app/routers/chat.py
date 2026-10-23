@@ -322,12 +322,16 @@ async def process_draft(ctx: Ctx, draft: dict) -> dict:
             if draft["date"] == today and has_time else None
         return clarify(ctx, "clarify_date_past", past, quick, values={"when": values["when"]})
 
-    # Высокий риск ошибки — «правильно понял?» (Р-19)
-    if draft.get("ambiguous") and not draft.get("confirmed"):
+    # Высокий риск ошибки — «правильно понял?» (Р-19); разбор неуверенный — «верно понял?» с причиной
+    if (draft.get("ambiguous") or draft.get("doubt")) and not draft.get("confirmed"):
         ctx.conv.pending = Pending("confirm", draft)
         values, speech_values = ctx.record_values(draft_record(draft, []))
         values["type"] = TYPE_WORD[kind]
-        text, speech = ctx.say("confirm", values, speech_values)
+        if draft.get("doubt"):
+            values["hint"] = doubt_hint(draft["doubt"])
+            text, speech = ctx.say("confirm_doubt", values, speech_values)
+        else:
+            text, speech = ctx.say("confirm", values, speech_values)
         return reply("confirm", text, speech, records=[draft_record(draft, ["draft"])], awaiting=True, buttons=[
             button_action("Да, верно", "confirm_yes"),
             button_action("Нет", "confirm_no", style="secondary"),
@@ -757,6 +761,25 @@ def undo_button(ctx: Ctx, record: Record) -> list[dict]:
     return [button_action("Отменить", "undo", record.id, style="secondary")] if "d10" in ctx.features else []
 
 
+DOUBT_HINTS = {
+    "typo": "«{word}» — полагаю, «{right}».",
+    "or": "Вы назвали два варианта, я взял первый.",
+    "fix": "Беру то, что вы назвали последним.",
+    "vague_time": "«{word}» понял как {time}.",
+    "vague": "«{word}» — это без точного срока.",
+    "hedge": "Мне послышалось сомнение.",
+    "unclear": "Разобрал не всё.",
+    "llm": "Фраза непростая, хочу убедиться.",
+}
+
+
+def doubt_hint(doubt: list[dict]) -> str:
+    """Почему переспрашиваем — первая причина словами Стивенса."""
+    first = doubt[0]
+    key = "vague_time" if first["why"] == "vague" and first.get("time") else first["why"]
+    return DOUBT_HINTS.get(key, DOUBT_HINTS["unclear"]).format(**first)
+
+
 def draft_from(p: nlu.Parse, today: date) -> dict:
     draft = {
         "type": p.type or "task",
@@ -767,6 +790,8 @@ def draft_from(p: nlu.Parse, today: date) -> dict:
         "ambiguous": p.time_ambiguous,
         "has_subject": p.has_subject,
     }
+    if p.doubt:
+        draft["doubt"] = p.doubt
     if p.repeat_days:
         draft["repeat"] = {"days": p.repeat_days, "until": p.until.isoformat() if p.until else None}
     if p.date:
@@ -774,6 +799,23 @@ def draft_from(p: nlu.Parse, today: date) -> dict:
     elif draft["type"] == "task" and p.vague_period and p.period is None:
         draft["date_kind"] = "none"
     return draft
+
+
+async def answer_confirm_fix(ctx: Ctx, pending: Pending, rest: str) -> dict | None:
+    """«Верно понял?» → «нет, в 11» / «нет, позвонить папе»: сразу поправляем черновик, без «что поправить?»."""
+    draft = {**pending.draft, "ambiguous": False, "doubt": []}
+    if merged := merge_reply(Pending("confirm_no", draft), rest, ctx.now):
+        return await process_draft(ctx, merged)
+    p = nlu.parse(rest, ctx.now)
+    if p.intent != "create" or not p.text:
+        return None
+    new = draft_from(p, ctx.today)
+    if new["type"] == "task":
+        new["type"] = draft["type"]  # «нет, позвонить папе» — тип не назван, остаётся прежний
+    for key in ("date", "time", "date_kind"):
+        if not new.get(key) or new.get(key) == "none":
+            new[key] = draft.get(key)
+    return await process_draft(ctx, {**new, "confirmed": True})
 
 
 def merge_reply(pending: Pending, raw: str, now: datetime) -> dict | None:
@@ -799,6 +841,8 @@ def merge_reply(pending: Pending, raw: str, now: datetime) -> dict | None:
     if time:
         draft["time"] = time
         draft["ambiguous"] = ambiguous and pending.kind != "confirm_no"
+        # Время назвали сами — расплывчатое «попозже» больше не смущает
+        draft["doubt"] = [d for d in draft.get("doubt", []) if d["why"] != "vague"]
         if draft.get("date_kind") == "none":
             draft["date_kind"] = "exact"
         changed = True
@@ -872,6 +916,8 @@ async def llm_parse(text: str, now: datetime) -> nlu.Parse:
         # «До» бывает только у задачи: встреча и напоминание — в точное время
         p.date_kind = (intent.date_kind if p.type == "task" else "exact") if p.date else "none"
         p.time_ambiguous = bool(intent.time_ambiguous)
+        # Правила фразу не поняли, разобрала нейросеть — запись показываем черновиком с «верно понял?»
+        p.doubt = [{"why": "llm"}]
     elif intent.intent in ("list", "search"):
         p.intent = intent.intent
         p.filter_type = intent.filter_type if intent.filter_type in TYPE_WORD else None
@@ -2230,6 +2276,9 @@ async def respond(ctx: Ctx, payload: ChatRequest) -> dict:
     if pending and pending.kind in ("multi", "confirm") and YES_RE.match(raw):
         if answer := await handle_action(ctx, "confirm_yes", None):
             return answer
+    if pending and pending.kind == "confirm" and (no := NO_RE.match(raw)) and (
+            rest := raw[no.end():].strip(" ,.!—-")) and (answer := await answer_confirm_fix(ctx, pending, rest)):
+        return answer
     if pending and pending.kind in ("multi", "confirm") and NO_RE.match(raw):
         if answer := await handle_action(ctx, "cancel" if pending.kind == "multi" else "confirm_no", None):
             return answer
