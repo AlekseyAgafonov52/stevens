@@ -43,7 +43,7 @@ WHICH_LIMIT = 5
 
 @dataclass
 class Pending:
-    kind: str                      # draft | confirm | conflict | new_time | confirm_no | multi | multi_ask | move | move_when | move_all | edit | bulk_delete | note | series_delete | undated
+    kind: str                      # meeting_delete | draft | confirm | conflict | new_time | confirm_no | multi | multi_ask | move | move_when | move_all | edit | bulk_delete | note | series_delete | undated
     draft: dict = field(default_factory=dict)
 
 
@@ -54,6 +54,8 @@ class Conversation:
     focus: int | None = None       # о какой записи шла речь: «перенеси её», «удали это»
     found: list[int] = field(default_factory=list)  # что нашёл поиск: «удали её» после нескольких — спросим какую
     bulk_deleted: list[int] = field(default_factory=list)  # «Вернуть все» после массового удаления
+    undo: dict | None = None       # кнопка «Отменить»/«Вернуть» последнего ответа: «отмени», «верни» голосом
+    choices: dict | None = None    # «Какую из них?»: действие и записи на выбор — «первую», «ту, что в субботу»
     touched: float = field(default_factory=clock.time)
 
 
@@ -212,8 +214,10 @@ async def find(ctx: Ctx, p: nlu.Parse, types: set[str] | None = None) -> list[Re
     if p.date:
         conditions.append(Record.date == p.date.isoformat())
     rows = await owner_records(ctx, *conditions)
+    if p.next:
+        rows = [r for r in rows if is_future(r, ctx.now)]
     if not p.keywords:
-        return rows if (p.filter_type or p.period or p.date) else []
+        return rows if (p.filter_type or p.period or p.date or p.next) else []
     return by_keywords(rows, p)
 
 
@@ -838,12 +842,20 @@ def examples(kind: str, template_id: str, ctx: Ctx, items: list[str]) -> dict:
     return reply(kind, text, speech, buttons=[button_text(x) for x in items])
 
 
+DAY_PARTS = {"утром": ("05:00", "11:59"), "днём": ("12:00", "16:59"), "вечером": ("17:00", "23:59")}
+
+
 async def answer_list(ctx: Ctx, p: nlu.Parse) -> dict:
     period = p.period or nlu.describe_period(ctx.today, ctx.today, ctx.today)
     conditions = [Record.date.is_not(None), Record.date >= period.start.isoformat(), Record.date <= period.end.isoformat()]
     if p.filter_type:
         conditions.append(Record.type == TaskType(p.filter_type))
     rows = sorted(await owner_records(ctx, *conditions), key=lambda r: (r.date, r.time or "99:99", r.id))
+    if p.day_part:
+        # «Что у меня сегодня вечером» — только дела с временем в эту часть дня
+        start, end = DAY_PARTS[p.day_part]
+        rows = [r for r in rows if r.time and start <= r.time <= end]
+        period = nlu.Period(period.start, period.end, f"{period.label} {p.day_part}", f"{period.label_speech} {p.day_part}")
     values = {"period": period.label, "count": len(rows)}
     speech_values = {"period": period.label_speech}
     if rows:
@@ -966,6 +978,8 @@ async def answer_search(ctx: Ctx, p: nlu.Parse) -> dict:
         future = sorted([r for r in found if is_future(r, ctx.now)], key=moment)
         want_past = p.tense == "past" or not future
         ordered = (past + future) if want_past and past else (future + past)
+        if p.next:
+            ordered = ordered[:3]
         first = ordered[0]
         template = "found_when_last" if (want_past and past) else "found_when_next"
         values, speech_values = ctx.record_values(first.to_contract())
@@ -1068,6 +1082,7 @@ def which_one(ctx: Ctx, candidates: list[Record], action_id: str) -> dict:
     ctx.conv.pending = None
     chosen = nearest_first(one_per_series(candidates, ctx.now), ctx.now)[:WHICH_LIMIT]
     text, speech = ctx.say("which_one")
+    ctx.conv.choices = {"action": action_id, "ids": [r.id for r in chosen]}
     buttons = []
     for record in chosen:
         value = parse_date(record.date)
@@ -1088,10 +1103,20 @@ async def delete_one(ctx: Ctx, record: Record, template: str = "deleted") -> dic
     return reply("deleted", text, speech, records=[data], buttons=buttons)
 
 
+def meeting_not_done(ctx: Ctx, meetings: list[Record]) -> dict:
+    """Встречу не отмечают выполненной — предлагаем удалить; «да» голосом или кнопка удаляют её."""
+    text, speech = ctx.say("completed_meeting_no")
+    if len(meetings) != 1 or "d2" not in ctx.features:
+        return reply("clarify", text, speech, awaiting=True, buttons=[CANCEL])
+    ctx.conv.focus = meetings[0].id
+    ctx.conv.pending = Pending("meeting_delete", {"id": meetings[0].id})
+    return reply("clarify", text, speech, records=[meetings[0].to_contract()], awaiting=True,
+                 buttons=[button_action("Удалить", "delete", meetings[0].id), CANCEL])
+
+
 async def complete_one(ctx: Ctx, record: Record) -> dict:
     if record.type == TaskType.meeting:
-        text, speech = ctx.say("completed_meeting_no")
-        return reply("clarify", text, speech, awaiting=True, buttons=[CANCEL])
+        return meeting_not_done(ctx, [record])
     record.status = TaskStatus.done
     await ctx.db.commit()
     ctx.conv.focus = record.id
@@ -1241,8 +1266,12 @@ async def answer_series_delete(ctx: Ctx, pending: Pending, raw: str) -> dict | N
 
 async def answer_complete(ctx: Ctx, p: nlu.Parse) -> dict:
     if p.filter_type == "meeting":
-        text, speech = ctx.say("completed_meeting_no")
-        return reply("clarify", text, speech, awaiting=True, buttons=[CANCEL])
+        if p.keywords or p.date:
+            meetings = [r for r in await find(ctx, p) if is_future(r, ctx.now)]
+        else:
+            focus = await owned_record(ctx, ctx.conv.focus)
+            meetings = [focus] if focus and focus.deleted_at is None and focus.type == TaskType.meeting else []
+        return meeting_not_done(ctx, nearest_first(meetings, ctx.now)[:1] if single(ctx, meetings) else meetings)
     if near := await focused(ctx, p):
         open_near = [r for r in near if r.status != TaskStatus.done] or near
         return await complete_one(ctx, open_near[0]) if len(open_near) == 1 else which_one(ctx, open_near, "complete")
@@ -1254,8 +1283,7 @@ async def answer_complete(ctx: Ctx, p: nlu.Parse) -> dict:
     if not open_ones:
         meetings = await find(ctx, nlu.Parse(keywords=p.keywords, date=p.date), types={"meeting"})
         if meetings:
-            text, speech = ctx.say("completed_meeting_no")
-            return reply("clarify", text, speech, awaiting=True, buttons=[CANCEL])
+            return meeting_not_done(ctx, meetings)
         text, speech = ctx.say("found_none")
         return reply("found", text, speech, total=0)
     if one := single(ctx, open_ones):
@@ -1265,9 +1293,9 @@ async def answer_complete(ctx: Ctx, p: nlu.Parse) -> dict:
 
 # ── Массовое удаление: «удали все дела на завтра», «убери всё за все дни» ──
 
-YES_RE = re.compile(r"^(?:(?:стив\w*|stevens?)[\s,]+)?(?:(?:да|ага|угу|давай|подтверждаю|конечно|точно|ок|окей)\b[^?]*"
+YES_RE = re.compile(r"^(?:(?:стив\w*|stevens?)[\s,]+)?(?:(?:да|ага|угу|давай|подтверждаю|конечно|точно|ок|окей|верно|правильно|хорошо|записывай|сохраняй|можно)\b[^?]*"
                     r"|(?:удаляй|удали)(?:\s+(?:все|всё|их))?[\s.!]*)$", re.I)
-NO_RE = re.compile(r"^(?:(?:стив\w*|stevens?)[\s,]+)?(?:нет|не\s+надо|не\s+удаляй|не\s+нужно|отмена|отмени|стоп|оставь)\b", re.I)
+NO_RE = re.compile(r"^(?:(?:стив\w*|stevens?)[\s,]+)?(?:нет|неа|не-а|не\s+надо|не\s+удаляй|не\s+нужно|отмена|отмени|стоп|оставь)\b", re.I)
 
 
 def bulk_scope(ctx: Ctx, p: nlu.Parse) -> str:
@@ -1342,6 +1370,9 @@ async def restore_all(ctx: Ctx) -> dict:
         text, speech = ctx.say("found_none")
         return reply("found", text, speech, total=0)
     ordered = sorted(rows, key=lambda r: (r.date or "9999-99-99", r.time or "99:99", r.id))
+    # Вернули повтор — одна карточка, как при удалении, а не все его дни подряд
+    if len({r.series_id for r in rows}) == 1 and rows[0].series_id:
+        ordered = ordered[:1]
     text, speech = ctx.say("bulk_restored", {"count": len(rows)})
     return reply("created", text, speech, records=[r.to_contract(marks=["new"]) for r in ordered[:FOUND_LIMIT]],
                  total=len(rows))
@@ -1938,13 +1969,18 @@ async def undo_series(ctx: Ctx, record: Record) -> dict:
 
 # ── Эндпоинт ──────────────────────────────────────────
 
-def answers_time(pending: Pending, raw: str, now: datetime) -> bool:
+INFINITIVE_RE = re.compile(r"\b[а-яё]{3,}(?:ть|ться|тись|чь)\b", re.I)
+
+
+def answers_time(pending: Pending, raw: str, now: datetime, p: nlu.Parse | None = None) -> bool:
     """Ждём время, а в ответе оно есть без глагола «запиши/напомни»: «не слушай 13:00» — это ответ, мусор отбросим."""
     if pending.kind == "multi_ask":
         waiting = True
     else:
         waiting = not pending.draft.get("time")
     if not waiting or nlu.CREATE_VERB_RE.search(raw.strip().lower()):
+        return False
+    if p and p.intent == "create" and p.text and INFINITIVE_RE.search(p.text) and (p.date or p.time):
         return False
     return bool(nlu.parse_when(raw, now)[0] or nlu.reply_time(raw)[0])
 
@@ -1957,6 +1993,8 @@ SHOW_RE = re.compile(r"^(?:(?:стив\w*|stevens?)[\s,]+)?(?:покажи(?:\s+
 
 
 def is_new_request(p: nlu.Parse, raw: str) -> bool:
+    if p.only_when:
+        return False
     if p.intent in ("list", "search", "help", "off_topic", "delete", "complete", "thanks", "move", "edit", "note", "notes",
                     "undated"):
         return True
@@ -1987,12 +2025,59 @@ async def chat_endpoint(
         ctx.trace.pop("template", None)
         text, speech = ctx.say("error_backend")
         answer = reply("error", text, speech)
+    ctx.conv.undo = next((b["send"]["action"] for b in answer.get("buttons") or []
+                          if b["send"].get("action", {}).get("id") in UNDO_ACTIONS), None)
     await chatlog.write(owner, payload, answer, ctx.trace, waiting, int((clock.perf_counter() - started) * 1000))
     return answer
 
 
+UNDO_ACTIONS = ("undo", "restore", "restore_all")
+# «Отмени», «верни как было» без вопроса — то же, что «Отменить»/«Вернуть» под последним ответом
+UNDO_RE = re.compile(r"^(?:отмени(?:ть)?(?:\s+(?:это|последнее|вс[её]))?|отмена|верни(?:те)?(?:\s+(?:обратно|назад|как\s+было"
+                     r"|вс[её]|это|е[её]|его|их))*)[\s.!]*$", re.I)
+# «Оставь обе» на конфликт встреч
+KEEP_BOTH_RE = re.compile(r"^(?:(?:да|ну)[\s,]+)?(?:оставь|оставляй|оставить|пусть\s+будут|сохрани)?\s*(?:обе|оба|обе\s+встречи|вместе)\b", re.I)
+# «А теперь на 12», «лучше в субботу» — перенос записи, о которой шла речь
+FOLLOW_MOVE_RE = re.compile(r"^(?:(?:а|ну|ой|нет|не)[\s,]+)*(?:(?:лучше|тогда|теперь|давай|можно|пусть)[\s,]+)+(?:будет\s+)?"
+                            r"(?=(?:на|в|во|завтра|послезавтра|сегодня)\b)", re.I)
+ACK_RE = re.compile(r"^(?:да|нет|неа|не\s+надо|ага|угу|ок|окей|хорошо|понял|поняла|ясно|отлично|супер|класс|норм|понятно)[\s.!)]*$", re.I)
+ORDINAL_RE = re.compile(r"\b(перв(?:ую|ый|ое|ая)|втор(?:ую|ой|ое|ая)|трет(?:ью|ья|ье|ий)|четв[её]рт(?:ую|ый|ое|ая)"
+                        r"|пят(?:ую|ый|ое|ая)|последн(?:юю|ий|ее|яя))\b|^(?:номер\s+)?([1-5])[\s.!]*$", re.I)
+
+
+def pick_choice(raw: str, rows: list[Record], now: datetime) -> Record | None:
+    """Выбор из «Какую из них?» словами: «первую», «ту, что в субботу», «про интеграцию». None — не выбрал."""
+    if not rows:
+        return None
+    if m := ORDINAL_RE.search(raw):
+        if m.group(2):
+            index = int(m.group(2)) - 1
+        else:
+            word = m.group(1).lower()
+            index = -1 if word.startswith("последн") else next(
+                i for i, stem in enumerate(("перв", "втор", "трет", "четв", "пят")) if word.startswith(stem))
+        return rows[index] if -len(rows) <= index < len(rows) else None
+    time, _, _, info = nlu.parse_when(raw, now)
+    near = rows
+    if info.date:
+        near = [r for r in near if r.date == info.date.isoformat()]
+    if time:
+        near = [r for r in near if r.time == time]
+    if (info.date or time) and len(near) == 1:
+        return near[0]
+    keys = [k for k in nlu.keywords(raw) if k not in ("~встреч", "~звон")]
+    if keys:
+        scores = [(matches(r, keys), r) for r in near or rows]
+        best = max(score for score, _ in scores)
+        top = [r for score, r in scores if score == best]
+        if best and len(top) == 1:
+            return top[0]
+    return None
+
+
 async def respond(ctx: Ctx, payload: ChatRequest) -> dict:
     ctx.found, ctx.conv.found = ctx.conv.found, []
+    choices, ctx.conv.choices = ctx.conv.choices, None
     await series.extend(ctx.db, ctx.owner, ctx.today)
     if payload.action:
         answer = await handle_action(ctx, payload.action.id, payload.action.record_id)
@@ -2001,6 +2086,10 @@ async def respond(ctx: Ctx, payload: ChatRequest) -> dict:
 
     raw = payload.text.strip()
     pending = ctx.conv.pending
+    if choices and raw:
+        rows = await records_by_ids(ctx, choices["ids"])
+        if (pick := pick_choice(raw, rows, ctx.now)) and (answer := await handle_action(ctx, choices["action"], pick.id)):
+            return answer
     if pending and pending.kind == "bulk_delete" and "d2" in ctx.features:
         if NO_RE.match(raw):
             ctx.conv.pending = None
@@ -2013,6 +2102,12 @@ async def respond(ctx: Ctx, payload: ChatRequest) -> dict:
             return skip_undated(ctx)
         if YES_RE.match(raw) or SHOW_RE.match(raw):
             return await answer_undated(ctx)
+    if pending and pending.kind == "meeting_delete":
+        if YES_RE.match(raw) and (answer := await handle_action(ctx, "delete", pending.draft["id"])):
+            return answer
+        if NO_RE.match(raw) or nlu.is_cancel_reply(raw):
+            ctx.conv.pending = None
+            return reply("cancelled", *ctx.say("cancelled"))
     if pending and pending.kind == "series_delete" and nlu.is_cancel_reply(raw):
         ctx.conv.pending = None
         return reply("cancelled", *ctx.say("cancelled"))
@@ -2040,6 +2135,23 @@ async def respond(ctx: Ctx, payload: ChatRequest) -> dict:
     if pending and pending.kind == "move_when" and not is_new_request(p, raw):
         if answer := await answer_move_when(ctx, pending, raw):
             return answer
+    if choices and (nlu.is_cancel_reply(raw) or NO_RE.match(raw)):
+        ctx.conv.pending = None
+        return reply("cancelled", *ctx.say("cancelled"))
+    if choices and not is_new_request(p, raw) and not UNDO_RE.match(raw):
+        # Не выбрал из «Какую из них?» — спрашиваем ещё раз, вопрос не теряем
+        rows = await records_by_ids(ctx, choices["ids"])
+        if rows:
+            keep = ctx.conv.pending
+            answer = which_one(ctx, rows, choices["action"])
+            ctx.conv.pending = keep
+            return answer
+    if pending and pending.kind == "conflict" and not nlu.is_cancel_reply(raw):
+        if KEEP_BOTH_RE.match(raw):
+            return await save(ctx, {**pending.draft, "keep_both": True})
+        if not is_new_request(p, raw) and (nlu.parse_when(raw, ctx.now)[0] or nlu.reply_time(raw)[0]):
+            # «Давай в 16» — другое время для новой встречи
+            pending = ctx.conv.pending = Pending("new_time", {**pending.draft, "time": None})
     asking = pending and pending.kind in ("draft", "new_time", "confirm_no", "multi_ask", "multi", "confirm", "conflict")
     if asking and nlu.is_cancel_reply(raw):
         # «Стой», «убери всё» в ответ на вопрос — отмена, а не удаление записей
@@ -2047,7 +2159,7 @@ async def respond(ctx: Ctx, payload: ChatRequest) -> dict:
         text, speech = ctx.say("cancelled")
         return reply("cancelled", text, speech)
     if pending and pending.kind in ("draft", "new_time", "confirm_no", "multi_ask") and (
-            not is_new_request(p, raw) or answers_time(pending, raw, ctx.now)):
+            not is_new_request(p, raw) or answers_time(pending, raw, ctx.now, p)):
         if pending.kind == "multi_ask":
             answer = await answer_multi_ask(ctx, pending, raw)
         else:
@@ -2062,11 +2174,26 @@ async def respond(ctx: Ctx, payload: ChatRequest) -> dict:
     asked = ctx.conv.pending
     ctx.conv.pending = None
 
+    if UNDO_RE.match(raw) and not asked:
+        if ctx.conv.undo and (answer := await handle_action(ctx, ctx.conv.undo["id"], ctx.conv.undo.get("record_id"))):
+            return answer
+        return reply("cancelled", *ctx.say("undo_nothing"))
+    if p.intent in ("unknown", "create") and ctx.conv.focus and (follow := FOLLOW_MOVE_RE.match(raw)):
+        # «А теперь на 12», «лучше в субботу» — переносим запись, о которой шла речь
+        moved = nlu.parse("перенеси её " + raw[follow.end():], ctx.now)
+        if moved.intent == "move" and (moved.date or moved.time or moved.shift) and not moved.keywords:
+            ctx.trace["intent"] = "move"
+            return await answer_move(ctx, moved)
     if p.intent == "unknown" and llm_enabled():
         p = llm_parse(raw, ctx.now)
         ctx.trace.update(intent=p.intent, llm=True)
 
     # Ждали «да» или «нет», а ответ не поняли — вопрос не теряем, переспрашиваем
+    if p.intent == "unknown" and asked and asked.kind == "conflict":
+        ctx.conv.pending = asked
+        return await process_draft(ctx, asked.draft)
+    if p.intent == "unknown" and not asked and ACK_RE.match(raw):
+        return reply("thanks", *ctx.say("ack"))
     if p.intent == "unknown" and asked and asked.kind in ("multi", "confirm", "bulk_delete"):
         ctx.conv.pending = asked
         text, speech = ctx.say("yes_no_again")
