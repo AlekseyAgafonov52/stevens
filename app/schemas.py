@@ -11,7 +11,7 @@ class Action(BaseModel):
 
 
 class ChatRequest(BaseModel):
-    conversation_id: str
+    conversation_id: str = Field(min_length=1, max_length=128)
     text: str = Field(default="", max_length=300)
     source: Literal["voice", "text", "button"] = "text"
     action: Optional[Action] = None

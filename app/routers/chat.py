@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import os
 import re
 import time as clock
@@ -12,7 +13,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, Header
+from fastapi import APIRouter, BackgroundTasks, Depends, Header
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -781,11 +782,21 @@ def llm_enabled() -> bool:
     return bool(os.getenv("YANDEX_API_KEY") and os.getenv("YANDEX_FOLDER_ID"))
 
 
-def llm_parse(text: str, now: datetime) -> nlu.Parse:
-    """Если правила не поняли — спрашиваем LLM (brain.py) и переводим её ответ в Parse."""
+LLM_TIME_RE = re.compile(r"^([01]?\d|2[0-3]):([0-5]\d)(?::\d{2})?$")
+
+
+def llm_time(value: str | None) -> str | None:
+    """Время от LLM: «9:30», «10:00:00» → «09:30», «10:00»; «25:99» и прочее — None."""
+    m = LLM_TIME_RE.match((value or "").strip())
+    return f"{int(m.group(1)):02d}:{m.group(2)}" if m else None
+
+
+async def llm_parse(text: str, now: datetime) -> nlu.Parse:
+    """Если правила не поняли — спрашиваем LLM (brain.py) и переводим её ответ в Parse.
+    Запрос к Яндексу синхронный — в отдельном потоке, чтобы остальные запросы не ждали."""
     try:
         from brain import parse_user_input
-        intent = parse_user_input(text)
+        intent = await asyncio.to_thread(parse_user_input, text)
     except Exception as error:  # noqa: BLE001 — LLM недоступна: «не понял»
         print(f"LLM недоступна: {error}")
         return nlu.Parse()
@@ -810,10 +821,11 @@ def llm_parse(text: str, now: datetime) -> nlu.Parse:
     p = nlu.Parse()
     if intent.intent.startswith("create_"):
         p.intent, p.type = "create", intent.intent.removeprefix("create_")
-        p.text = intent.text
+        p.text = intent.text[:300] if intent.text else None
         p.date = to_date(intent.date)
-        p.time = intent.time if intent.time and len(intent.time) == 5 else None
-        p.date_kind = intent.date_kind if p.date else "none"
+        p.time = llm_time(intent.time)
+        # «До» бывает только у задачи: встреча и напоминание — в точное время
+        p.date_kind = (intent.date_kind if p.type == "task" else "exact") if p.date else "none"
         p.time_ambiguous = bool(intent.time_ambiguous)
     elif intent.intent in ("list", "search"):
         p.intent = intent.intent
@@ -2007,6 +2019,7 @@ def is_new_request(p: nlu.Parse, raw: str) -> bool:
 @router.post("/chat")
 async def chat_endpoint(
     payload: ChatRequest,
+    background: BackgroundTasks,
     owner: Owner = Depends(get_owner),
     db: AsyncSession = Depends(get_db),
     x_stevens_features: str | None = Header(default=None),
@@ -2027,7 +2040,9 @@ async def chat_endpoint(
         answer = reply("error", text, speech)
     ctx.conv.undo = next((b["send"]["action"] for b in answer.get("buttons") or []
                           if b["send"].get("action", {}).get("id") in UNDO_ACTIONS), None)
-    await chatlog.write(owner, payload, answer, ctx.trace, waiting, int((clock.perf_counter() - started) * 1000))
+    # Журнал пишем уже после ответа: пользователь его не ждёт
+    background.add_task(chatlog.write, owner, payload, answer, ctx.trace, waiting,
+                        int((clock.perf_counter() - started) * 1000))
     return answer
 
 
@@ -2185,7 +2200,7 @@ async def respond(ctx: Ctx, payload: ChatRequest) -> dict:
             ctx.trace["intent"] = "move"
             return await answer_move(ctx, moved)
     if p.intent == "unknown" and llm_enabled():
-        p = llm_parse(raw, ctx.now)
+        p = await llm_parse(raw, ctx.now)
         ctx.trace.update(intent=p.intent, llm=True)
 
     # Ждали «да» или «нет», а ответ не поняли — вопрос не теряем, переспрашиваем

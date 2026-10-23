@@ -97,8 +97,10 @@ async def create(db: AsyncSession, owner: Owner, draft: dict, today: date) -> tu
 async def extend(db: AsyncSession, owner: Owner, today: date) -> None:
     """Бессрочные повторы: досоздаём дни, чтобы впереди всегда был год."""
     edge = (today + timedelta(days=REFILL_DAYS)).isoformat()
+    # Календарь и чат приходят разом: строку повтора продлевает тот, кто первым её занял, остальные пропускают
     rows = (await db.execute(select(Series).where(owner_filter(owner), Series.ended.is_(False),
-                                                  Series.until.is_(None), Series.filled_until < edge))).scalars().all()
+                                                  Series.until.is_(None), Series.filled_until < edge)
+                             .with_for_update(skip_locked=True))).scalars().all()
     if not rows:
         return
     created = datetime.now(timezone.utc)

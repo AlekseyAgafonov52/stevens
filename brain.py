@@ -22,6 +22,9 @@ client = openai.OpenAI(
     api_key=YANDEX_KEY or "missing",
     base_url="https://ai.api.cloud.yandex.net/v1",
     project=YANDEX_FOLDER,
+    # Яндекс не ответил за 10 секунд — «не понял», а не минуты ожидания (по умолчанию 10 минут и 2 повтора)
+    timeout=10,
+    max_retries=0,
 )
 
 class IntentSchema(BaseModel):
