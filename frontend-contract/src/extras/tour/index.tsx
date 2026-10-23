@@ -72,7 +72,7 @@ export function TourBar() {
           <div className="tour__text">{step.task}</div>
           <div className="tour__hint">
             <span className="tour__label">{isPress ? T.tour_press : T.tour_say}</span>
-            <Pill variant="primary" className="tour__phrase" disabled={!canPress} onClick={sendHint}>
+            <Pill variant={canPress ? 'primary' : 'dimmed'} className="tour__phrase" disabled={!canPress} onClick={sendHint}>
               {isPress ? phrase : `«${phrase}»`}
             </Pill>
           </div>
