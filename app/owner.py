@@ -101,9 +101,9 @@ CLEAN_EVERY = 6 * 3600
 
 
 def sandbox_days() -> int:
-    """STEVENS_SANDBOX_DAYS=30 — удалять песочницы, в которые не заходили 30 дней. Не задано или 0 — не удалять."""
+    """Удалять песочницы, в которые не заходили столько дней: по умолчанию 30, STEVENS_SANDBOX_DAYS=0 — не удалять."""
     try:
-        return max(0, int(os.getenv("STEVENS_SANDBOX_DAYS", "0")))
+        return max(0, int(os.getenv("STEVENS_SANDBOX_DAYS", "30")))
     except ValueError:
         return 0
 
