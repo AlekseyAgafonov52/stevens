@@ -108,5 +108,5 @@ def client_now(client_time: str) -> datetime:
     """Местное «сейчас» пользователя без пояса: даты записей тоже местные."""
     try:
         return datetime.fromisoformat(client_time).replace(tzinfo=None)
-    except ValueError:
+    except (TypeError, ValueError):  # не прислали или прислали не дату
         return datetime.now()

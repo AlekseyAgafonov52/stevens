@@ -17,7 +17,9 @@ if not DATABASE_URL:
     raise ValueError("DATABASE_URL is not set in .env file")
 
 # Теперь Pylance точно знает, что здесь строка (str)
-engine = create_async_engine(DATABASE_URL, echo=os.getenv("SQL_ECHO") == "1")
+# pre_ping: после перезапуска PostgreSQL старые соединения не дают ошибку на первом запросе
+engine = create_async_engine(DATABASE_URL, echo=os.getenv("SQL_ECHO") == "1", pool_pre_ping=True,
+                             pool_size=10, max_overflow=20)
 
 AsyncSessionLocal = async_sessionmaker(
     bind=engine,

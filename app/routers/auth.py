@@ -1,4 +1,5 @@
 """Вход по логину и паролю — раздел 14 контракта v1.4."""
+import asyncio
 import re
 import secrets
 from datetime import datetime, timedelta, timezone
@@ -6,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Body, Depends, Header
 from fastapi.responses import JSONResponse, Response
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
@@ -54,9 +56,14 @@ async def register(payload: object = Body(default=None), db: AsyncSession = Depe
     exists = (await db.execute(select(Account).where(Account.login_lower == login.lower()))).scalars().first()
     if exists:
         return error(409, "login_taken")
-    account = Account(login=login, login_lower=login.lower(), password_hash=hash_password(password))
+    # bcrypt считает ~0,2 с: в отдельном потоке, чтобы чат других не ждал
+    account = Account(login=login, login_lower=login.lower(), password_hash=await asyncio.to_thread(hash_password, password))
     db.add(account)
-    await db.flush()
+    try:
+        await db.flush()
+    except IntegrityError:  # двойной клик «Зарегистрироваться»: логин занял соседний запрос
+        await db.rollback()
+        return error(409, "login_taken")
     # Аккаунт создаётся пустым: песочница не переносится (Р-181)
     return await _issue(db, account)
 
@@ -69,7 +76,7 @@ async def login(payload: object = Body(default=None), db: AsyncSession = Depends
         select(Account).where(Account.login_lower == payload["login"].strip().lower())
     )).scalars().first()
     # И при неверном пароле, и при несуществующем логине — одна ошибка
-    if not account or not verify_password(payload["password"], account.password_hash):
+    if not account or not await asyncio.to_thread(verify_password, payload["password"], account.password_hash):
         return error(401, "invalid_credentials")
     return await _issue(db, account)
 

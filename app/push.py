@@ -66,7 +66,10 @@ def fire_at(record: Record, tz) -> datetime | None:
         return None
     if record.type not in (TaskType.reminder, TaskType.meeting) or record.status == TaskStatus.done:
         return None
-    at = datetime.fromisoformat(f"{record.date}T{record.time}").replace(tzinfo=tz)
+    try:
+        at = datetime.fromisoformat(f"{record.date}T{record.time}").replace(tzinfo=tz)
+    except ValueError:  # кривые дата или время в одной записи не должны останавливать пуши всем
+        return None
     return at - timedelta(minutes=MEETING_EARLY_MIN) if record.type == TaskType.meeting else at
 
 
