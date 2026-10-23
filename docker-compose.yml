@@ -26,8 +26,8 @@ services:
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/taskapp
       YANDEX_API_KEY: ${YANDEX_API_KEY:-}
       YANDEX_FOLDER_ID: ${YANDEX_FOLDER_ID:-}
-      # Удалять песочницы, в которые не заходили N дней (0 — не удалять)
-      STEVENS_SANDBOX_DAYS: ${STEVENS_SANDBOX_DAYS:-0}
+      # Удалять песочницы, в которые не заходили N дней (по умолчанию 30, 0 — не удалять)
+      STEVENS_SANDBOX_DAYS: ${STEVENS_SANDBOX_DAYS:-30}
     ports:
       - "8000:8000"
     depends_on:
