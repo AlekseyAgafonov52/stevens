@@ -1035,6 +1035,11 @@ def parse(raw: str, now: datetime) -> Parse:
     elif result.type == "meeting":
         result.has_subject = bool(keywords(body))
     body = body.strip(" ,.:;!—-")
+    # «Завтра в 9 с Петей» — только с кем, без дела: это встреча
+    who = re.fullmatch(r"(?:с|со)\s+([А-ЯЁA-Zа-яё][\w-]*)(?:\s+(?:и|или)\s+[А-ЯЁA-Zа-яё][\w-]*)*", body, I)
+    if who and result.type == "task" and word_key(who.group(1)).startswith("@"):
+        result.type, result.has_subject = "meeting", True
+        body = f"Встреча {body}"
     result.text = capitalize(body) if body else None
     return result
 

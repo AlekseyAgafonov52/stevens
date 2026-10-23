@@ -40,7 +40,7 @@ DIALOG = [
     ("найди планёрку", "found", lambda r: r["total"] == 1 and first(r)["date"] == "2026-10-27"),
     # Удаление одного дня
     ("удали планёрку в следующий вторник", "deleted",
-     lambda r: first(r)["date"] == "2026-10-27" and "Остальные" in r["text"] or "только" in r["text"]),
+     lambda r: first(r)["date"] == "2026-10-27" and ("остальные" in r["text"].lower() or "только" in r["text"])),
     ("что у меня 3 ноября", "list", lambda r: "Планёрка" in texts(r)),
     # Без дня — спрашивает
     ("удали йогу", "clarify", lambda r: "Все предстоящие" in labels(r) and r["awaiting_reply"]),
@@ -67,6 +67,12 @@ DIALOG = [
     ("что у меня в декабре", "list", lambda r: "без срока" not in r["text"]),
     ("какие у меня встречи завтра", "list", lambda r: "без срока" not in r["text"]),
     ("покажи задачи без срока", "found", lambda r: r["total"] == 2),
+    # «Да» голосом на «Записать все?»
+    ("завтра в 9:00 с Петей потом отправить договор Маше", "confirm", lambda r: texts(r)[0] == "Встреча с Петей"),
+    ("ммм ну это", "clarify", lambda r: r["awaiting_reply"]),
+    ("да записать всё", "created", lambda r: len(r["records"]) == 2),
+    ("завтра в 11 созвон с Олегом потом купить корм", "confirm", None),
+    ("нет", "cancelled", None),
     # Заметки не предлагаются как задачи без срока, но находятся
     ("покажи все заметки", "found", lambda r: texts(r) == ["Идея для стартапа"]),
     ("найди заметку про стартап", "found", lambda r: texts(r) == ["Идея для стартапа"]),

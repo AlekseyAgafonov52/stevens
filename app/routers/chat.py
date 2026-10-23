@@ -1513,6 +1513,11 @@ async def move_one(ctx: Ctx, record: Record, changes: dict) -> dict:
         new_date = new_date or record.date
         start = max(0, min(minutes(record.time) + changes["shift"], 23 * 60 + 59))
         new_time = hhmm(start)
+    # «Перенеси на 15» — тот же день, что сейчас (если он не прошёл); «перенеси на пятницу» — то же время
+    if not new_date and new_time and record.date and record.date >= ctx.today.isoformat():
+        new_date = record.date
+    if new_date and not new_time and record.time and needs_time(record) and new_date != record.date:
+        new_time = record.time  # на тот же день — ничего бы не поменялось: спросим время
     if not new_date:
         return await ask_move_day(ctx, record, new_time)
     if not new_time and needs_time(record):
@@ -2013,6 +2018,13 @@ async def respond(ctx: Ctx, payload: ChatRequest) -> dict:
         return reply("cancelled", *ctx.say("cancelled"))
     if pending and pending.kind == "series_delete" and (answer := await answer_series_delete(ctx, pending, raw)):
         return answer
+    # «Да» / «нет» голосом или текстом на «Записать все?» и «Правильно понял?» — как кнопки
+    if pending and pending.kind in ("multi", "confirm") and YES_RE.match(raw):
+        if answer := await handle_action(ctx, "confirm_yes", None):
+            return answer
+    if pending and pending.kind in ("multi", "confirm") and NO_RE.match(raw):
+        if answer := await handle_action(ctx, "cancel" if pending.kind == "multi" else "confirm_no", None):
+            return answer
     if (fix := fix_words(raw, ctx.now)) and (answer := await answer_fix(ctx, *fix)):
         return answer
     p = nlu.parse(raw, ctx.now)
@@ -2047,11 +2059,20 @@ async def respond(ctx: Ctx, payload: ChatRequest) -> dict:
             return await ask_many(ctx, pending.draft["drafts"])
         if answer := ask_again(ctx, pending):
             return answer
+    asked = ctx.conv.pending
     ctx.conv.pending = None
 
     if p.intent == "unknown" and llm_enabled():
         p = llm_parse(raw, ctx.now)
         ctx.trace.update(intent=p.intent, llm=True)
+
+    # Ждали «да» или «нет», а ответ не поняли — вопрос не теряем, переспрашиваем
+    if p.intent == "unknown" and asked and asked.kind in ("multi", "confirm", "bulk_delete"):
+        ctx.conv.pending = asked
+        text, speech = ctx.say("yes_no_again")
+        no = "confirm_no" if asked.kind == "confirm" else "cancel"
+        return reply("clarify", text, speech, awaiting=True, buttons=[
+            button_action("Да", "confirm_yes"), button_action("Нет", no, style="secondary")])
 
     if p.intent == "delete" and "d2" not in ctx.features:
         p.intent = "unknown"
