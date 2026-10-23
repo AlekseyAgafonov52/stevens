@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models  # noqa: F401 — таблицы для create_all
 from app.database import Base, engine, get_db
-from app.owner import CLIENT_ID_RE, ensure_sandbox, seed_sandbox
+from app.owner import CLIENT_ID_RE, clean_loop, ensure_sandbox, seed_sandbox
 from app import push
 from app.routers import auth, chat, records
 from app.routers import push as push_router
@@ -29,13 +29,16 @@ async def lifespan(app: FastAPI):
         await conn.exec_driver_sql("ALTER TABLE records ADD COLUMN IF NOT EXISTS repeat VARCHAR(24)")
         await conn.exec_driver_sql("ALTER TABLE records ADD COLUMN IF NOT EXISTS demo BOOLEAN NOT NULL DEFAULT false")
         await conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_records_series_id ON records (series_id)")
+        await conn.exec_driver_sql("ALTER TABLE sandboxes ADD COLUMN IF NOT EXISTS seen_at TIMESTAMPTZ NOT NULL DEFAULT now()")
         # Время создания у всех записей: старым демо-записям песочницы без него ставим «сейчас»
         await conn.exec_driver_sql(
             "UPDATE records SET demo = true, created_at = now() WHERE sandbox_id IS NOT NULL AND created_at IS NULL")
     print("✅ База данных готова.")
     pusher = asyncio.create_task(push.loop())
+    cleaner = asyncio.create_task(clean_loop())
     yield
     pusher.cancel()
+    cleaner.cancel()
     await engine.dispose()
 
 

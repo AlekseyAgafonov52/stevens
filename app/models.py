@@ -58,6 +58,8 @@ class Sandbox(Base):
 
     client_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     created_at: Mapped[dt] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    # Когда вкладка заходила последний раз (с точностью до часа): по нему чистим заброшенные
+    seen_at: Mapped[dt] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 class Series(Base):

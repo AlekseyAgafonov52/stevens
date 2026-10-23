@@ -4,20 +4,23 @@ X-Client-Id: <uuid> в песочнице. Пришли оба — исполь�
 """
 from __future__ import annotations
 
+import asyncio
 import csv
 import hashlib
+import os
 import re
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from fastapi import Depends, Header, HTTPException
-from sqlalchemy import delete, insert, select
+from sqlalchemy import delete, insert, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database import get_db
-from app.models import Account, AuthToken, DateKind, Record, Sandbox, TaskStatus, TaskType
+from app.database import AsyncSessionLocal, get_db
+from app.models import (Account, AuthToken, DateKind, PushSnooze, PushSubscription, Record, Sandbox, Series,
+                        TaskStatus, TaskType)
 
 CSV_PATH = Path(__file__).resolve().parent.parent / "data" / "events_1000.csv"
 SHARED_SANDBOX = "shared-demo"
@@ -77,7 +80,11 @@ async def seed_sandbox(db: AsyncSession, client_id: str) -> None:
 
 async def ensure_sandbox(db: AsyncSession, client_id: str) -> None:
     """Неизвестный id → заводим песочницу и копируем в неё демо-данные."""
-    if await db.get(Sandbox, client_id):
+    if box := await db.get(Sandbox, client_id):
+        now = datetime.now(timezone.utc)
+        if box.seen_at is None or box.seen_at < now - SEEN_STEP:
+            await db.execute(update(Sandbox).where(Sandbox.client_id == client_id).values(seen_at=now))
+            await db.commit()
         return
     # Первые запросы новой вкладки идут разом: песочницу заводит только один из них
     created = await db.execute(
@@ -87,6 +94,43 @@ async def ensure_sandbox(db: AsyncSession, client_id: str) -> None:
         return
     await seed_sandbox(db, client_id)
     await db.commit()
+
+
+SEEN_STEP = timedelta(hours=1)
+CLEAN_EVERY = 6 * 3600
+
+
+def sandbox_days() -> int:
+    """STEVENS_SANDBOX_DAYS=30 — удалять песочницы, в которые не заходили 30 дней. Не задано или 0 — не удалять."""
+    try:
+        return max(0, int(os.getenv("STEVENS_SANDBOX_DAYS", "0")))
+    except ValueError:
+        return 0
+
+
+async def clean_sandboxes(db: AsyncSession, days: int) -> int:
+    """Каждая новая вкладка — 1000 демо-записей: заброшенные песочницы удаляем целиком. Общую не трогаем."""
+    old = select(Sandbox.client_id).where(Sandbox.seen_at < datetime.now(timezone.utc) - timedelta(days=days),
+                                          Sandbox.client_id != SHARED_SANDBOX)
+    ids = list((await db.execute(old)).scalars().all())
+    if not ids:
+        return 0
+    for table in (PushSnooze, PushSubscription, Record, Series):
+        await db.execute(delete(table).where(table.sandbox_id.in_(ids)))
+    await db.execute(delete(Sandbox).where(Sandbox.client_id.in_(ids)))
+    await db.commit()
+    return len(ids)
+
+
+async def clean_loop() -> None:
+    while days := sandbox_days():
+        try:
+            async with AsyncSessionLocal() as db:
+                if removed := await clean_sandboxes(db, days):
+                    print(f"🧹 Удалено заброшенных песочниц: {removed}")
+        except Exception as error:  # noqa: BLE001
+            print(f"⚠️ Чистка песочниц: {error}")
+        await asyncio.sleep(CLEAN_EVERY)
 
 
 def token_hash(token: str) -> str:
