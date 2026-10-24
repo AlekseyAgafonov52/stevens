@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import (
 )
 from sqlalchemy.orm import DeclarativeBase
 
-load_dotenv(override=True)
+load_dotenv()  # Явно заданное окружение сервера важнее локального .env.
 DATABASE_URL = os.getenv("DATABASE_URL")
 
 # Проверка, что URL вообще задан

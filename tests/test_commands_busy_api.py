@@ -48,7 +48,7 @@ DIALOG = [
 async def main():
     fails = 0
 
-    def check(name, ok, detail=""):
+    def check(name, ok, detail: object=""):
         nonlocal fails
         print(("ok " if ok else "BAD"), name, "" if ok else detail)
         fails += not ok
@@ -98,9 +98,13 @@ async def main():
             check("предпросмотр", counts(preview) == (3, 2, 1, 2) and preview["applied"] is False, counts(preview))
             same = (await c.get("/api/transfer/export", params={"client_time": CLOCK}, headers=h)).json()["records"]
             check("предпросмотр ничего не меняет", same == rows)
-            done = (await c.post("/api/transfer/import", json={"text": text, "apply": True, "client_time": CLOCK},
+            failed = await c.post("/api/transfer/import", json={"text": text, "apply": True, "client_time": CLOCK}, headers=h)
+            check("ошибка импорта — без частичного применения", failed.status_code == 422
+                  and (await c.get("/api/transfer/export", params={"client_time": CLOCK}, headers=h)).json()["records"] == rows)
+            valid_text = json.dumps({"records": edit["records"][:-2]}, ensure_ascii=False)
+            done = (await c.post("/api/transfer/import", json={"text": valid_text, "apply": True, "client_time": CLOCK},
                                  headers=h)).json()
-            check("применить", counts(done) == (3, 2, 1, 2) and done["applied"] is True, counts(done))
+            check("применить", counts(done) == (3, 2, 1, 0) and done["applied"] is True, counts(done))
             after = (await c.get("/api/transfer/export", params={"client_time": CLOCK}, headers=h)).json()["records"]
             by_text = {x["text"]: x for x in after}
             check("после импорта",

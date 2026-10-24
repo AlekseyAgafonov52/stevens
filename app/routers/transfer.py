@@ -2,7 +2,7 @@
 
 GET  /api/transfer/export          — JSON всех записей (повтор — одной строкой с id «s12»)
 POST /api/transfer/import          — {"text": "<JSON>", "apply": false} — предпросмотр «добавлю N, изменю M, удалю K»;
-                                     с "apply": true — применяет то, что без ошибок
+                                     с "apply": true — применяет пакет только без ошибок
 
 Строка без id — новая запись, с id — правка, с "delete": true — удаление. Строки, которых нет в тексте, не трогаем.
 """
@@ -157,7 +157,7 @@ def weekdays_of(value: object) -> list[int] | None:
 
 
 def series_id_of(value: object) -> int | None:
-    if isinstance(value, str) and (m := re.fullmatch(r"s(\d+)", value.strip(), re.I)):
+    if isinstance(value, str) and len(value) <= 11 and (m := re.fullmatch(r"s(\d+)", value.strip(), re.I)):
         return int(m.group(1))
     return None
 
@@ -206,7 +206,8 @@ def new_record(owner: Owner, kind: str, item: dict) -> tuple[Record | None, str 
     body = patch_body(item)
     body.setdefault("text", item.get("text"))
     if kind == "note":
-        body.pop("date", None), body.pop("time", None)
+        body.pop("date", None)
+        body.pop("time", None)
     problem = apply_patch(record, body)
     return (None, problem) if problem else (record, None)
 
@@ -237,8 +238,7 @@ async def plan_series_new(db: AsyncSession, owner: Owner, plan: Plan, index: int
     shown = {"type": kind, "text": draft["text"], "time": time, "end_time": draft["end_time"],
              "repeat": {"weekdays": days, "until": until}, "from": draft["date"]}
     plan.add("add", shown)
-    if apply:
-        plan.later.append(draft)
+    plan.later.append(draft)
 
 
 async def end_series(db: AsyncSession, owner: Owner, row: Series, today: date) -> list[Record]:
@@ -256,7 +256,7 @@ async def plan_series_edit(db: AsyncSession, owner: Owner, plan: Plan, index: in
     if not row or row.ended:
         return plan.fail(index, item, f"повтора s{sid} нет")
     upcoming = await series.upcoming(db, owner, sid, today)
-    first = upcoming[0].date if upcoming else today.isoformat()
+    first = (upcoming[0].date or today.isoformat()) if upcoming else today.isoformat()
     before = series_item(row, first)
     if item.get("delete") is True:
         plan.add("delete", before)
@@ -264,6 +264,9 @@ async def plan_series_edit(db: AsyncSession, owner: Owner, plan: Plan, index: in
             await end_series(db, owner, row, today)
         return
     after = {**before, **{k: item[k] for k in ("text", "time", "end_time", "repeat", "from") if k in item}}
+    if "repeat" in item and (not isinstance(item["repeat"], dict)
+                             or weekdays_of(item["repeat"].get("weekdays")) is None):
+        return plan.fail(index, item, "invalid_fields")
     if isinstance(after.get("repeat"), dict):
         after["repeat"] = {"weekdays": weekdays_of(after["repeat"].get("weekdays")) or before["repeat"]["weekdays"],
                            "until": after["repeat"].get("until")}
@@ -285,7 +288,9 @@ async def plan_series_edit(db: AsyncSession, owner: Owner, plan: Plan, index: in
     if (time is not None and (not isinstance(time, str) or not TIME_RE.match(time))) or \
             (end is not None and (not isinstance(end, str) or not TIME_RE.match(end))):
         return plan.fail(index, item, ERRORS["invalid_time"])
-    if row.type == TaskType.busy and (not time or not end or end == time):
+    if row.type in (TaskType.meeting, TaskType.reminder, TaskType.busy) and not time:
+        return plan.fail(index, item, ERRORS["date_time_required"])
+    if row.type == TaskType.busy and (not end or end == time):
         return plan.fail(index, item, ERRORS["date_time_required"])
     plan.add("update", after, before)
     if apply:
@@ -296,7 +301,8 @@ async def plan_series_edit(db: AsyncSession, owner: Owner, plan: Plan, index: in
 
 async def build(db: AsyncSession, owner: Owner, items: list, today: date, apply: bool) -> Plan:
     plan = Plan()
-    ids = [i["id"] for i in items if isinstance(i, dict) and isinstance(i.get("id"), int) and not isinstance(i["id"], bool)]
+    ids = [i["id"] for i in items if isinstance(i, dict) and isinstance(i.get("id"), int)
+           and not isinstance(i["id"], bool) and 1 <= i["id"] <= 2147483647]
     existing = {r.id: r for r in (await db.execute(select(Record).where(owner.filter(), Record.id.in_(ids)))).scalars()} \
         if ids else {}
     seen: set = set()
@@ -305,6 +311,13 @@ async def build(db: AsyncSession, owner: Owner, items: list, today: date, apply:
             plan.fail(index, item, "строка не в фигурных скобках")
             continue
         rid = item.get("id")
+        parsed_series_id = series_id_of(rid) if isinstance(rid, str) else None
+        if rid is not None and (isinstance(rid, bool) or not isinstance(rid, (int, str))
+                                or isinstance(rid, int) and not 1 <= rid <= 2147483647
+                                or isinstance(rid, str) and (parsed_series_id is None
+                                    or not 1 <= parsed_series_id <= 2147483647)):
+            plan.fail(index, item, "invalid_fields")
+            continue
         if rid is not None and rid in seen:
             plan.fail(index, item, f"id {rid} встречается дважды")
             continue
@@ -321,8 +334,8 @@ async def build(db: AsyncSession, owner: Owner, items: list, today: date, apply:
                 await plan_series_new(db, owner, plan, index, item, kind, today, apply)
                 continue
             record, problem = new_record(owner, kind, item)
-            if problem:
-                plan.fail(index, item, ERRORS.get(problem, problem))
+            if problem or record is None:
+                plan.fail(index, item, ERRORS.get(problem or "invalid_fields", problem or "invalid_fields"))
                 continue
             plan.add("add", record_item(record))
             if apply:
@@ -359,7 +372,7 @@ async def import_records(body: object = Body(default=None), owner: Owner = Depen
         return error("empty", "вставьте JSON")
     try:
         items = items_of(read_json(body["text"]))
-    except (ValueError, AttributeError, TypeError) as exc:
+    except (ValueError, AttributeError, TypeError, RecursionError) as exc:
         return error("bad_json", str(exc))
     if not items:
         return error("empty", "в JSON нет записей")
@@ -368,10 +381,19 @@ async def import_records(body: object = Body(default=None), owner: Owner = Depen
     today = today_of(body.get("client_time"))
     apply = body.get("apply") is True
     plan = await build(db, owner, items, today, apply)
+    materialized = sum(len(series.days_between(date.fromisoformat(draft["date"]),
+        min(parse_date(draft["repeat"].get("until")) or date.max, series.horizon(today, series.HORIZON_DAYS)),
+        draft["repeat"]["days"])) for draft in plan.later)
+    if materialized > MAX_ITEMS:
+        await db.rollback()
+        return error("too_many", f"не больше {MAX_ITEMS} строк за раз")
     if not apply:
         await db.rollback()  # предпросмотр: правки в сессии были только для проверки
         return {"applied": False, **plan.summary()}
-    await db.commit()
+    if plan.errors:
+        await db.rollback()
+        return JSONResponse(status_code=422, content={"applied": False, **plan.summary()})
     for draft in plan.later:
-        await series.create(db, owner, draft, today)
+        await series.create(db, owner, draft, today, commit=False)
+    await db.commit()
     return {"applied": True, **plan.summary()}

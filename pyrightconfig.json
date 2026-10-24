@@ -1,0 +1,5 @@
+{
+  "include": ["app", "brain.py", "tests", "tools", "audit_run_tests.py", "test_brain.py"],
+  "pythonVersion": "3.13",
+  "typeCheckingMode": "basic"
+}

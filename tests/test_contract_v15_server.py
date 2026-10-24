@@ -14,7 +14,7 @@ CLOCK = "2026-10-21T10:00:00+03:00"
 fails = 0
 
 
-def check(name, ok, info=""):
+def check(name, ok, info: object=""):
     global fails
     print(("OK  " if ok else "FAIL"), name, info if not ok else "")
     fails += 0 if ok else 1
@@ -69,11 +69,13 @@ async def main():
             events = (await db.execute(select(ClientLog.event))).scalars().all()
             check("client_log пишется", "mic_failed" in events, events)
             meeting = await db.get(Record, rec["id"])
+            assert meeting is not None, "Created meeting must exist"
             data = json.loads(push.payload(meeting))
             body = (data["title"], data["body"])
             check("пуш встречи: заголовок — текст, ниже «Через полчаса у вас встреча.»",
                   body == ("Встреча с Олегом", "Через полчаса у вас встреча."), body)
-            check("встреча звонит за remind_before", (push.fire_at(meeting, push.zone("Europe/Moscow")).strftime("%H:%M")) == "14:30")
+            fire_time = push.fire_at(meeting, push.zone("Europe/Moscow"))
+            check("встреча звонит за remind_before", fire_time is not None and fire_time.strftime("%H:%M") == "14:30")
     print("fails:", fails)
     sys.exit(1 if fails else 0)
 

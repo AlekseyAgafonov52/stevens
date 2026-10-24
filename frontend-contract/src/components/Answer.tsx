@@ -7,6 +7,7 @@ import { pressButton } from '../state/chat';
 import { useApp, type AnswerMessage } from '../state/store';
 import { AnswerExtraButtons, RecordCardOverride, cardEditHandler } from '../extensions/points';
 import { NotifyOffer } from './NotifyOffer';
+import { undoImport } from '../state/imports';
 import { Pill, type PillVariant } from './Pill';
 import { RecordCard } from './RecordCard';
 
@@ -117,6 +118,10 @@ export function Answer({ message, isLast }: Props) {
         </div>
       )}
       {isLast && response.kind === 'created' && <NotifyOffer messageId={message.id} />}
+      {isLast && !message.restored && message.importUndo && (
+        <div className="answer__buttons"><Pill variant="secondary" disabled={waiting}
+          onClick={() => void undoImport(message.importUndo!)}>{T.btn_restore}</Pill></div>
+      )}
     </div>
   );
 }

@@ -2,14 +2,17 @@
 from fastapi import APIRouter, Body, Depends
 from fastapi.responses import JSONResponse, Response
 from datetime import datetime, timezone
+import hmac
 
 from sqlalchemy import delete, select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import push
 from app.database import get_db
 from app.models import PushSnooze, PushSubscription, Record
 from app.owner import Owner, get_owner
+from app.logic.push_targets import allowed_endpoint, valid_keys
 
 router = APIRouter(prefix="/api/push", tags=["push"])
 
@@ -28,14 +31,16 @@ async def subscribe(
     endpoint = body.get("endpoint")
     keys = body.get("keys") or {}
     tz = body.get("timezone") or "UTC"
-    if not isinstance(endpoint, str) or not endpoint.startswith("https://") or len(endpoint) > 1000:
+    if not allowed_endpoint(endpoint) or not valid_keys(keys):
         return JSONResponse(status_code=422, content={"error": "invalid_subscription"})
-    if not isinstance(keys.get("p256dh"), str) or not isinstance(keys.get("auth"), str):
+    await db.execute(pg_insert(PushSubscription).values(endpoint=endpoint, p256dh=keys["p256dh"], auth=keys["auth"],
+        timezone=str(tz)[:64], account_id=owner.account.id if owner.account else None, sandbox_id=owner.sandbox_id)
+        .on_conflict_do_nothing(index_elements=[PushSubscription.endpoint]))
+    sub = (await db.execute(select(PushSubscription).where(PushSubscription.endpoint == endpoint).with_for_update())).scalar_one()
+    if not (hmac.compare_digest(sub.p256dh.rstrip("="), keys["p256dh"].rstrip("="))
+            and hmac.compare_digest(sub.auth.rstrip("="), keys["auth"].rstrip("="))):
+        await db.rollback()
         return JSONResponse(status_code=422, content={"error": "invalid_subscription"})
-    sub = (await db.execute(select(PushSubscription).where(PushSubscription.endpoint == endpoint))).scalars().first()
-    if not sub:
-        sub = PushSubscription(endpoint=endpoint)
-        db.add(sub)
     # Тот же браузер мог войти в аккаунт после песочницы — подписка переезжает к новому владельцу
     sub.account_id = owner.account.id if owner.account else None
     sub.sandbox_id = None if owner.account else owner.sandbox_id
@@ -60,7 +65,7 @@ async def snooze(body: dict = Body(...), db: AsyncSession = Depends(get_db)):
     """Кнопка «Через 10 минут» в пуше. Service worker не знает токена входа,
     поэтому браузер узнаём по адресу его подписки — он есть только у него самого."""
     endpoint, record_id = body.get("endpoint"), body.get("record_id")
-    if not isinstance(endpoint, str) or not isinstance(record_id, int):
+    if not isinstance(endpoint, str) or isinstance(record_id, bool) or not isinstance(record_id, int) or not 1 <= record_id <= 2147483647:
         return JSONResponse(status_code=422, content={"error": "invalid_snooze"})
     sub = (await db.execute(select(PushSubscription).where(PushSubscription.endpoint == endpoint))).scalars().first()
     record = await db.get(Record, record_id)

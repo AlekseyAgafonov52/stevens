@@ -11,6 +11,7 @@ from app.chatlog import enabled as log_enabled, who
 from app.database import AsyncSessionLocal
 from app.models import ClientLog
 from app.owner import Owner, get_owner
+from app.voice.audio import AudioError, ogg_opus
 
 router = APIRouter(prefix="/api", tags=["client"])
 
@@ -51,13 +52,17 @@ async def stt(request: Request, owner: Owner = Depends(get_owner)):
         return JSONResponse(status_code=503, content={"error": "stt_unavailable"})
     if not audio:
         return {"text": ""}
-    params = {"lang": "ru-RU", "folderId": os.getenv("YANDEX_FOLDER_ID"), "format": "oggopus"}
     try:
-        async with httpx.AsyncClient(timeout=15) as client:
+        audio = await ogg_opus(audio, kind)
+    except AudioError as error:
+        return JSONResponse(status_code=error.status, content={"error": error.code})
+    params = {"lang": "ru-RU", "format": "oggopus"}
+    try:
+        async with httpx.AsyncClient(timeout=12) as client:
             answer = await client.post(STT_URL, params=params, content=audio,
                                        headers={"Authorization": f"Api-Key {os.getenv('YANDEX_API_KEY')}"})
         answer.raise_for_status()
         return {"text": (answer.json().get("result") or "").strip()}
     except Exception as error:  # noqa: BLE001
-        print(f"stt error: {error!r}")
+        print(f"stt error: {type(error).__name__}")
         return JSONResponse(status_code=503, content={"error": "stt_unavailable"})

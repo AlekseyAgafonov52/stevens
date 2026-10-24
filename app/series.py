@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from datetime import date, datetime, timedelta, timezone
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import DateKind, Record, Series, TaskStatus, TaskType
@@ -17,6 +17,11 @@ from app.textfmt import MONTHS_GEN, parse_date
 
 HORIZON_DAYS = 365   # на сколько вперёд создаём дни бессрочного повтора
 REFILL_DAYS = 300    # продлеваем, когда созданного осталось меньше чем на столько дней
+
+
+def horizon(today: date, days: int) -> date:
+    """Календарные границы не должны приводить к переполнению даты."""
+    return today + timedelta(days=min(days, (date.max - today).days))
 
 DAY_ONE = ["каждый понедельник", "каждый вторник", "каждую среду", "каждый четверг", "каждую пятницу",
            "каждую субботу", "каждое воскресенье"]
@@ -69,16 +74,20 @@ def occurrence(owner: Owner, series: Series, day: date, created: datetime) -> Re
     )
 
 
-async def create(db: AsyncSession, owner: Owner, draft: dict, today: date) -> tuple[Series, list[Record]]:
+async def create(db: AsyncSession, owner: Owner, draft: dict, today: date, *, commit: bool = True) -> tuple[Series | None, list[Record]]:
     """Повтор и его дни с первого (draft["date"]) до конца или на год вперёд. Дней нет — пустой список."""
     repeat = draft["repeat"]
     weekdays = sorted(set(repeat["days"]))
     until = parse_date(repeat.get("until"))
     first = parse_date(draft["date"]) or today
-    last = min(until, today + timedelta(days=HORIZON_DAYS)) if until else today + timedelta(days=HORIZON_DAYS)
+    last = min(until, horizon(today, HORIZON_DAYS)) if until else horizon(today, HORIZON_DAYS)
+    if draft["type"] in ("meeting", "reminder", "busy") and not draft.get("time"):
+        raise ValueError("date_time_required")
+    if draft["type"] == "busy" and (not draft.get("end_time") or draft["end_time"] == draft["time"]):
+        raise ValueError("date_time_required")
     dates = days_between(first, last, weekdays)
     if not dates:
-        return None, []  # type: ignore[return-value]
+        return None, []
     created = datetime.now(timezone.utc)
     series = Series(
         account_id=owner.account.id if owner.account else None, sandbox_id=None if owner.account else owner.sandbox_id,
@@ -90,25 +99,33 @@ async def create(db: AsyncSession, owner: Owner, draft: dict, today: date) -> tu
     await db.flush()
     records = [occurrence(owner, series, day, created) for day in dates]
     db.add_all(records)
-    await db.commit()
-    for record in records[:1]:
-        await db.refresh(record)
+    if commit:
+        await db.commit()
+        for record in records[:1]:
+            await db.refresh(record)
+    else:
+        await db.flush()
     return series, records
 
 
 async def extend(db: AsyncSession, owner: Owner, today: date) -> None:
-    """Бессрочные повторы: досоздаём дни, чтобы впереди всегда был год."""
-    edge = (today + timedelta(days=REFILL_DAYS)).isoformat()
+    """Досоздаём год вперёд, не выходя за конечный срок серии."""
+    edge = horizon(today, REFILL_DAYS).isoformat()
     # Календарь и чат приходят разом: строку повтора продлевает тот, кто первым её занял, остальные пропускают
     rows = (await db.execute(select(Series).where(owner_filter(owner), Series.ended.is_(False),
-                                                  Series.until.is_(None), Series.filled_until < edge)
+                                                  or_(Series.until.is_(None), Series.filled_until < Series.until),
+                                                  Series.filled_until < edge)
                              .with_for_update(skip_locked=True))).scalars().all()
     if not rows:
         return
     created = datetime.now(timezone.utc)
-    last = today + timedelta(days=HORIZON_DAYS)
     for series in rows:
-        start = (parse_date(series.filled_until) or today) + timedelta(days=1)
+        filled = parse_date(series.filled_until) or today
+        if filled == date.max:
+            continue
+        start = filled + timedelta(days=1)
+        until = parse_date(series.until)
+        last = min(until, horizon(today, HORIZON_DAYS)) if until else horizon(today, HORIZON_DAYS)
         db.add_all([occurrence(owner, series, day, created) for day in days_between(start, last, weekdays_of(series))])
         series.filled_until = last.isoformat()
     await db.commit()

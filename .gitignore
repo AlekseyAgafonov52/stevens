@@ -51,4 +51,11 @@ docker-compose.override.yml
 *.swp
 *.swo
 .DS_Store
-Thumbs.dbstart.log
+Thumbs.db
+start.log
+
+# Local audit and regression artifacts
+/audit-results/
+/audit-results-v2/
+/contract-v16-analysis/
+/fix-results/

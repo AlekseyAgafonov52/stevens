@@ -15,7 +15,7 @@ type Errors = { login?: string; password?: string; common?: string };
 function validate(login: string, password: string): Errors {
   const errors: Errors = {};
   if (!LOGIN_RE.test(login.trim())) errors.login = T.auth_err_login_format;
-  if (password.length < 5) errors.password = T.auth_err_password_short;
+  if (password.length < 5 || password.length > 128) errors.password = T.auth_err_password_short;
   return errors;
 }
 
@@ -100,6 +100,7 @@ export function AuthScreen() {
               <input
                 className={`field__input field__input--password ${errors.password ? 'field__input--error' : ''}`}
                 type={visible ? 'text' : 'password'}
+                maxLength={128}
                 value={password}
                 autoComplete={tab === 'login' ? 'current-password' : 'new-password'}
                 disabled={busy}

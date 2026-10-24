@@ -71,6 +71,7 @@ async def main():
                 body = {"conversation_id": conv, "text": phrase, "source": "text", "client_time": CLOCK,
                         "timezone": "Europe/Moscow"}
                 if isinstance(phrase, tuple):
+                    assert last is not None, "Button action requires a previous answer"
                     btn = next((b for b in last["buttons"] if b["send"].get("action", {}).get("id") == phrase[1]), None)
                     if not btn:
                         fails += 1

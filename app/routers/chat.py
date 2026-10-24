@@ -9,6 +9,7 @@ import asyncio
 import os
 import re
 import time as clock
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from uuid import uuid4
@@ -61,16 +62,22 @@ class Conversation:
     touched: float = field(default_factory=clock.time)
 
 
-CONVERSATIONS: dict[tuple[str, str], Conversation] = {}
+CONVERSATIONS: OrderedDict[tuple[str, str], Conversation] = OrderedDict()
 CONVERSATION_TTL = 2 * 3600
 
 
 def conversation(owner: Owner, conversation_id: str) -> Conversation:
     now = clock.time()
-    if len(CONVERSATIONS) > 5000:
-        for key in [k for k, v in CONVERSATIONS.items() if now - v.touched > CONVERSATION_TTL]:
-            del CONVERSATIONS[key]
-    item = CONVERSATIONS.setdefault((owner.key, conversation_id), Conversation())
+    while CONVERSATIONS and now - next(iter(CONVERSATIONS.values())).touched > CONVERSATION_TTL:
+        CONVERSATIONS.popitem(last=False)
+    key = (owner.key, conversation_id)
+    item = CONVERSATIONS.get(key)
+    if item is None or now - item.touched > CONVERSATION_TTL:
+        CONVERSATIONS.pop(key, None)
+        while len(CONVERSATIONS) >= 5000:
+            CONVERSATIONS.popitem(last=False)
+        item = CONVERSATIONS[key] = Conversation()
+    CONVERSATIONS.move_to_end(key)
     item.touched = now
     return item
 
@@ -91,7 +98,7 @@ def button_text(label: str, text: str | None = None, style: str | None = None) -
 
 
 def button_action(label: str, action_id: str, record_id: int | None = None, style: str | None = None) -> dict:
-    action = {"id": action_id}
+    action: dict[str, str | int] = {"id": action_id}
     if record_id is not None:
         action["record_id"] = record_id
     button = {"label": label, "send": {"action": action}}
@@ -305,7 +312,7 @@ async def process_draft(ctx: Ctx, draft: dict) -> dict:
         # Повтор: первый день — ближайший подходящий, сегодняшний только если время ещё впереди
         start = max(parse_date(draft.get("date")) or ctx.today, ctx.today)
         # У занятости сегодняшний день подходит, пока она не кончилась: «по будням работа с 9 до 18» в 10 утра
-        until_time = draft.get("end_time") if draft["type"] == "busy" and draft.get("end_time", "") > (draft.get("time") or "") else draft.get("time")
+        until_time = draft.get("end_time") if draft["type"] == "busy" and isinstance(draft.get("end_time"), str) and draft["end_time"] > (draft.get("time") or "") else draft.get("time")
         draft = {**draft, "date": nlu.first_day(draft["repeat"]["days"], start, ctx.now, until_time).isoformat(),
                  "date_kind": "exact"}
     if night_morning(ctx, draft) and not draft.get("date"):
@@ -356,10 +363,14 @@ async def process_draft(ctx: Ctx, draft: dict) -> dict:
     # Дата или время в прошлом (Р-36)
     today = ctx.today.isoformat()
     # Занятость уже идёт («сегодня с 9 до 18», а сейчас 10) — не прошлое, пока не кончилась
-    ends = draft.get("end_time") if kind == "busy" and draft.get("end_time", "") > (draft.get("time") or "") else draft.get("time")
+    start_time = draft.get("time")
+    end_time = draft.get("end_time")
+    ends: str | None = start_time if isinstance(start_time, str) else None
+    if kind == "busy" and isinstance(end_time, str) and end_time > (ends or ""):
+        ends = end_time
     if has_date and (draft["date"] < today or (draft["date"] == today and has_time
                                               and draft["date_kind"] == "exact"
-                                              and ends <= ctx.now.strftime("%H:%M"))):
+                                              and ends is not None and ends <= ctx.now.strftime("%H:%M"))):
         past = dict(draft)
         values, _ = ctx.record_values(draft_record(draft, []))
         if draft["date"] < today:
@@ -392,7 +403,7 @@ async def process_draft(ctx: Ctx, draft: dict) -> dict:
 
     # Встреча попадает на занятость: «В это время у вас «Работа» (09:00–18:00)»
     if kind == "meeting" and not draft.get("keep_both") and not draft.get("busy_ok"):
-        start = minutes(draft["time"])
+        start = minutes(required_time(draft["time"]))
         end = minutes(draft["end_time"]) if draft.get("end_time") else start + LENGTH["meeting"]
         end = end if end > start else 24 * 60
         overlap = [r for r in await owner_records(ctx, Record.type == TaskType.busy, Record.date == draft["date"],
@@ -435,7 +446,7 @@ async def process_draft(ctx: Ctx, draft: dict) -> dict:
 
 def busy_days(ctx: Ctx, draft: dict) -> list[str]:
     """Дни, где новая занятость встанет: один день или первая неделя повтора."""
-    first = parse_date(draft["date"])
+    first = required_date(draft["date"])
     if not draft.get("repeat"):
         return [first.isoformat()]
     until = parse_date(draft["repeat"].get("until"))
@@ -449,7 +460,7 @@ async def busy_clash(ctx: Ctx, draft: dict) -> dict | None:
     if not days:
         return None
     rows = await owner_records(ctx, Record.type == TaskType.busy, Record.date.in_(days), Record.time.is_not(None))
-    start, end = minutes(draft["time"]), minutes(draft["end_time"])
+    start, end = minutes(required_time(draft["time"])), minutes(draft["end_time"])
     end = end if end > start else 24 * 60
     same = [r for r in rows if r.text.lower() == draft["text"].lower() and r.time == draft["time"]
             and (r.end_time or "") == draft["end_time"]]
@@ -481,6 +492,29 @@ async def busy_clash(ctx: Ctx, draft: dict) -> dict | None:
 DENSE_MINUTES = 30  # порог плотного графика из отчёта аналитика: 12% пар встреч
 
 
+def required_time(value: object) -> str:
+    """Timed operations must not silently interpret a missing time as midnight."""
+    if not isinstance(value, str) or re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", value) is None:
+        raise ValueError("Invalid or missing record time")
+    return value
+
+
+def required_date(value: str | None) -> date:
+    day = parse_date(value)
+    if day is None:
+        raise ValueError("Invalid or missing record date")
+    return day
+
+
+def record_kind(record: Record) -> str:
+    # A legacy row without a type must not be classified as a task.
+    return record.type.value if record.type is not None else ""
+
+
+def record_minutes(record: Record) -> int:
+    return minutes(required_time(record.time))
+
+
 def minutes(hhmm: str) -> int:
     h, m = hhmm.split(":")
     return int(h) * 60 + int(m)
@@ -492,14 +526,14 @@ async def dense_neighbours(ctx: Ctx, draft: dict) -> list[Record]:
         return []
     same_day = await owner_records(ctx, Record.type == TaskType.meeting, Record.date == draft["date"],
                                    Record.time.is_not(None))
-    start = minutes(draft["time"])
-    before = [r for r in same_day if 0 < start - minutes(r.time) < DENSE_MINUTES]
-    after = [r for r in same_day if 0 < minutes(r.time) - start < DENSE_MINUTES]
+    start = minutes(required_time(draft["time"]))
+    before = [r for r in same_day if 0 < start - record_minutes(r) < DENSE_MINUTES]
+    after = [r for r in same_day if 0 < record_minutes(r) - start < DENSE_MINUTES]
     near = []
     if before:
-        near.append(max(before, key=lambda r: minutes(r.time)))
+        near.append(max(before, key=lambda r: record_minutes(r)))
     if after:
-        near.append(min(after, key=lambda r: minutes(r.time)))
+        near.append(min(after, key=lambda r: record_minutes(r)))
     return near
 
 
@@ -546,7 +580,7 @@ async def save(ctx: Ctx, draft: dict) -> dict:
             speech = f"{speech} {tail_speech}"
     if near:
         # Плотный график: встречу сохраняем, показываем её и соседей — любую можно открыть и поправить
-        gap = min(abs(minutes(r.time) - minutes(record.time)) for r in near)
+        gap = min(abs(record_minutes(r) - record_minutes(record)) for r in near)
         tail, tail_speech = ctx.say("dense_schedule", {"count": gap})
         text = f"{text} {tail}"
         speech = f"{speech} {tail_speech}" if speech and tail_speech else speech
@@ -567,7 +601,7 @@ async def save_series(ctx: Ctx, draft: dict) -> dict:
         return reply("clarify", text, speech)
     first = records[0]
     ctx.conv.focus = first.id
-    day = parse_date(first.date)
+    day = required_date(first.date)
     values = {"text": first.text, "rule": rule, "first": date_text(day, ctx.today), "count": len(records)}
     speech_values = {"first": date_speech(day, ctx.today)}
     if until:
@@ -616,7 +650,7 @@ async def ask_many(ctx: Ctx, drafts: list[dict]) -> dict:
     i = missing[0]
     draft = drafts[i]
     ctx.conv.pending = Pending("multi_ask", {"drafts": drafts, "i": i})
-    day = parse_date(draft["date"])
+    day = required_date(draft["date"])
     diff = (day - ctx.today).days
     when = {0: "сегодня", 1: "завтра", 2: "послезавтра"}.get(diff) or f"{day.day} {MONTHS_GEN[day.month - 1]}"
     what = draft["text"][:1].lower() + draft["text"][1:]
@@ -685,11 +719,11 @@ LENGTH = {"meeting": 60}                # встреча занимает час
 def span(record: Record) -> tuple[int, int]:
     """Сколько минут дня занимает запись: занятость и встреча «с … до …» — весь интервал, иначе по LENGTH.
     Интервал через полночь («с 22 до 6») в этот день занимает время до конца суток."""
-    start = minutes(record.time)
+    start = record_minutes(record)
     if record.end_time:
         end = minutes(record.end_time)
         return start, end if end > start else 24 * 60
-    return start, start + LENGTH.get(record.type.value if record.type else "", 30)
+    return start, start + LENGTH.get(record_kind(record) if record.type else "", 30)
 
 
 def hhmm(total: int) -> str:
@@ -788,7 +822,7 @@ async def answer_free(ctx: Ctx, p: nlu.Parse) -> dict:
 def free_at(ctx: Ctx, p: nlu.Parse, day: date, rows: list[Record], windows: list[tuple[int, int]], what: str,
             send_day: str) -> dict:
     """«Я свободен в пятницу в 15?» — да или нет, а если занято, то с чем и где окна."""
-    start = minutes(p.time)
+    start = minutes(required_time(p.time))
     end = start + p.duration
     clash = [r for r in rows if r.time and r.status != TaskStatus.done
              and span(r)[0] < end and start < span(r)[1]]
@@ -836,12 +870,13 @@ async def day_loads(ctx: Ctx, start: date, end: date) -> list[DayLoad]:
     rows = await owner_records(ctx, Record.date >= start.isoformat(), Record.date <= end.isoformat())
     by_day: dict[str, list[Record]] = {}
     for r in rows:
-        if r.status != TaskStatus.done:
+        if r.date is not None and r.status != TaskStatus.done:
             by_day.setdefault(r.date, []).append(r)
     busy_by_day: dict[str, list[Record]] = {}
     for day_rows in by_day.values():
-        for r in [x for x in day_rows if x.type == TaskType.busy]:
-            busy_by_day.setdefault(r.date, []).append(r)
+        for r in [x for x in day_rows if x.type == TaskType.busy and x.date is not None]:
+            if r.date is not None:
+                busy_by_day.setdefault(r.date, []).append(r)
             day_rows.remove(r)
     loads = []
     for n in range((end - start).days + 1):
@@ -1029,7 +1064,7 @@ def merge_busy(draft: dict, raw: str, now: datetime) -> dict | None:
     elif draft.get("time") and not draft.get("end_time") and (m := BUSY_END_RE.match(raw.strip())):
         h, mm = int(m.group(1)), int(m.group(2) or 0)
         part = (m.group(3) or "").lower()
-        start = minutes(draft["time"])
+        start = minutes(required_time(draft["time"]))
         if part in ("вечера", "дня") and h < 12 or (not part and h < 12 and h * 60 + mm <= start and (h + 12) * 60 + mm > start):
             h += 12  # «с 9» → «до 6» — это 18:00
         if h < 24 and mm < 60 and h * 60 + mm != start:
@@ -1280,7 +1315,7 @@ async def answer_repeats(ctx: Ctx) -> dict:
         ctx.conv.found = [r.id for r in rows[:FOUND_LIMIT]]
     items = []
     for r in rows[:FOUND_LIMIT]:
-        rule = r.repeat_contract() or {"weekdays": [parse_date(r.date).weekday()]}
+        rule = r.repeat_contract() or {"weekdays": [required_date(r.date).weekday()]}
         items.append(f"{r.text} — {series.rule_text(rule['weekdays'], r.time, r.end_time)}")
     text, speech = ctx.say("repeats_some", {"count": len(rows)}, {"count": len(rows), "items": "; ".join(items)})
     return reply("found", text, speech, records=[r.to_contract() for r in rows[:FOUND_LIMIT]], total=len(rows))
@@ -1316,11 +1351,11 @@ async def answer_briefing(ctx: Ctx) -> dict:
         text, speech = ctx.say("briefing", values)
     # Плотные места: встречи, между началами которых меньше 30 минут
     meetings = [r for r in rows if r.type == TaskType.meeting and r.time]
-    dense = [(a, b) for a, b in zip(meetings, meetings[1:]) if 0 < minutes(b.time) - minutes(a.time) < DENSE_MINUTES]
+    dense = [(a, b) for a, b in zip(meetings, meetings[1:]) if 0 < record_minutes(b) - record_minutes(a) < DENSE_MINUTES]
     if dense:
         a, b = dense[0]
         tail, tail_speech = ctx.say("briefing_dense", {"start": a.time, "end": b.time,
-                                                       "count": minutes(b.time) - minutes(a.time)})
+                                                       "count": record_minutes(b) - record_minutes(a)})
         text = f"{text} {tail}"
         speech = f"{speech} {tail_speech}" if speech and tail_speech else speech
     return with_busy_tail(ctx, reply("list", text, speech, records=[r.to_contract() for r in rows], total=len(rows)),
@@ -1540,10 +1575,10 @@ async def focused(ctx: Ctx, p: nlu.Parse, types: set[str] | None = None) -> list
         rows = await ctx.db.execute(select(Record).where(ctx.owner.filter(), Record.deleted_at.is_(None),
                                                          Record.id.in_(ctx.found)))
         order = {rid: i for i, rid in enumerate(ctx.found)}
-        found = sorted([r for r in rows.scalars().all() if not types or r.type.value in types],
+        found = sorted([r for r in rows.scalars().all() if not types or record_kind(r) in types],
                        key=lambda r: order[r.id])
         if p.filter_type:
-            found = [r for r in found if r.type.value == p.filter_type] or found
+            found = [r for r in found if record_kind(r) == p.filter_type] or found
         if found and p.ordinal is not None:
             # «Удали первую» после списка — запись под этим номером в показанном
             return found[p.ordinal:p.ordinal + 1]
@@ -1552,7 +1587,7 @@ async def focused(ctx: Ctx, p: nlu.Parse, types: set[str] | None = None) -> list
     if p.ordinal:
         return []  # «удали вторую», а показана одна запись
     record = await owned_record(ctx, ctx.conv.focus)
-    if record and record.deleted_at is None and (not types or record.type.value in types):
+    if record and record.deleted_at is None and (not types or record_kind(record) in types):
         return [record]
     if ctx.conv.focus is None:
         conditions = [Record.type == TaskType(p.filter_type)] if p.filter_type else []
@@ -1626,7 +1661,7 @@ async def delete_record(ctx: Ctx, record: Record, p: nlu.Parse) -> dict:
 def ask_series_delete(ctx: Ctx, record: Record) -> dict:
     ctx.conv.pending = Pending("series_delete", {"record_id": record.id})
     ctx.conv.focus = record.id
-    day = parse_date(record.date)
+    day = required_date(record.date)
     repeat = record.repeat_contract() or {"weekdays": [day.weekday()]}
     values = {"text": record.text, "rule": series.rule_text(repeat["weekdays"]), "date": date_text(day, ctx.today)}
     text, speech = ctx.say("series_which_delete", values, {"date": date_speech(day, ctx.today)})
@@ -1640,11 +1675,14 @@ def ask_series_delete(ctx: Ctx, record: Record) -> dict:
 async def delete_series(ctx: Ctx, record: Record) -> dict:
     """Все предстоящие дни повтора; прошедшие остаются в истории. «Вернуть все» — как у массового удаления."""
     ctx.conv.pending = None
-    rows = await series.upcoming(ctx.db, ctx.owner, record.series_id, ctx.today)
+    series_id = record.series_id
+    if series_id is None:
+        return examples("not_understood", "not_understood", ctx, EXAMPLES)
+    rows = await series.upcoming(ctx.db, ctx.owner, series_id, ctx.today)
     stamp = datetime.now(timezone.utc)
     for row in rows:
         row.deleted_at = stamp
-    await series.set_ended(ctx.db, ctx.owner, {record.series_id}, True)
+    await series.set_ended(ctx.db, ctx.owner, {series_id}, True)
     await ctx.db.commit()
     ctx.conv.bulk_deleted = [r.id for r in rows]
     ctx.conv.focus = None
@@ -1856,6 +1894,8 @@ async def answer_edit(ctx: Ctx, p: nlu.Parse) -> dict:
 
 
 async def edit_one(ctx: Ctx, record: Record, changes: dict) -> dict:
+    if record.type is None and not changes.get("type"):
+        return examples("not_understood", "not_understood", ctx, EXAMPLES)
     ctx.conv.pending = None
     ctx.conv.focus = record.id
     template = "fixed"
@@ -1868,7 +1908,7 @@ async def edit_one(ctx: Ctx, record: Record, changes: dict) -> dict:
         record.text = f"{record.text} — {changes['note']}"[:300]
         template = "noted"
     new_type = changes.get("type")
-    if new_type and record.type.value != new_type:
+    if new_type and record_kind(record) != new_type:
         record.type = TaskType(new_type)
         record.status = None if new_type == "meeting" else (record.status or TaskStatus.open)
         if new_type != "task" and record.date_kind != DateKind.exact:
@@ -1877,7 +1917,7 @@ async def edit_one(ctx: Ctx, record: Record, changes: dict) -> dict:
     await ctx.db.commit()
     data = record.to_contract(marks=["new"])
     values, speech_values = ctx.record_values(data)
-    values["type"] = TYPE_WORD[record.type.value]
+    values["type"] = TYPE_WORD[record_kind(record)]
     text, speech = ctx.say(template, values, speech_values)
     # Встрече и напоминанию нужны день и время — спрашиваем, как при переносе
     if new_type and new_type != "task" and not (record.date and record.time):
@@ -1945,7 +1985,7 @@ def needs_time(record: Record) -> bool:
 async def ask_move_day(ctx: Ctx, record: Record, time: str | None = None) -> dict:
     """«На какой день перенести?» — ближайшие дни со свободным окном и тот же день через неделю."""
     ctx.conv.pending = Pending("move_when", {"record_id": record.id, "time": time})
-    need = span(record)[1] - span(record)[0] if record.time else LENGTH.get(record.type.value, 30)
+    need = span(record)[1] - span(record)[0] if record.time else LENGTH.get(record_kind(record), 30)
     days: list[date] = []
     for shift in range(14):
         day = ctx.today + timedelta(days=shift)
@@ -1975,7 +2015,7 @@ async def ask_move_day(ctx: Ctx, record: Record, time: str | None = None) -> dic
 async def ask_move_time(ctx: Ctx, record: Record, day: date, queue: list[int] | None = None) -> dict:
     """«Во сколько?» — свободные окна выбранного дня кнопками. queue — кого спросить следом (перенос всех)."""
     ctx.conv.pending = Pending("move_when", {"record_id": record.id, "date": day.isoformat(), "queue": queue or []})
-    need = span(record)[1] - span(record)[0] if record.time else LENGTH.get(record.type.value, 30)
+    need = span(record)[1] - span(record)[0] if record.time else LENGTH.get(record_kind(record), 30)
     windows = await day_windows(ctx, day, need, skip=record.id)
     values = {"day": date_text(day, ctx.today), "text": record.text}
     if not windows:
@@ -1995,7 +2035,7 @@ async def move_one(ctx: Ctx, record: Record, changes: dict) -> dict:
     new_date, new_time = changes.get("date"), changes.get("time")
     if changes.get("shift") and record.time:
         new_date = new_date or record.date
-        start = max(0, min(minutes(record.time) + changes["shift"], 23 * 60 + 59))
+        start = max(0, min(record_minutes(record) + changes["shift"], 23 * 60 + 59))
         new_time = hhmm(start)
     # «Перенеси на 15» — тот же день, что сейчас (если он не прошёл); «перенеси на пятницу» — то же время
     if not new_date and new_time and record.date and record.date >= ctx.today.isoformat():
@@ -2088,8 +2128,8 @@ async def busy_except(ctx: Ctx, day: date, ids: set[int]) -> list[tuple[int, int
 
 
 def type_forms(rows: list[Record]) -> tuple[str, str, str] | None:
-    kinds = {r.type.value for r in rows}
-    return TYPE_FORMS[kinds.pop()] if len(kinds) == 1 else None
+    kinds = {record_kind(r) for r in rows}
+    return TYPE_FORMS.get(kinds.pop()) if len(kinds) == 1 else None
 
 
 async def moved_all(ctx: Ctx, rows: list[Record], day: date) -> dict:
@@ -2129,7 +2169,7 @@ async def answer_move_all(ctx: Ctx, p: nlu.Parse) -> dict:
     if p.shift:
         moved = [r for r in rows if r.time]
         for r in moved:
-            r.time = hhmm(max(0, min(minutes(r.time) + p.shift, 23 * 60 + 59)))
+            r.time = hhmm(max(0, min(record_minutes(r) + p.shift, 23 * 60 + 59)))
         return await move_rows(ctx, moved, source, moved) or reply("cancelled", *ctx.say("cancelled"))
     if not p.date:
         return ask_move_all_day(ctx, rows, source)
@@ -2150,11 +2190,13 @@ def ask_move_all_day(ctx: Ctx, rows: list[Record], source: date) -> dict:
 
 async def plan_move_all(ctx: Ctx, rows: list[Record], day: date) -> dict:
     """День назван: те же часы свободны — предлагаем перенести как есть, иначе время по очереди."""
+    if not rows:
+        return reply("cancelled", *ctx.say("cancelled"))
     if day < ctx.today:
         return ask_move_all_day(ctx, rows, parse_date(rows[0].date) or ctx.today)
     timed = [r for r in rows if r.time]
     if not timed:
-        return await move_rows(ctx, rows, day, rows)
+        return await move_rows(ctx, rows, day, rows) or reply("cancelled", *ctx.say("cancelled"))
     busy = await busy_except(ctx, day, {r.id for r in rows})
     free = [r for r in timed if same_time_free(r, busy)]
     ctx.conv.pending = Pending("move_all", {"ids": [r.id for r in rows], "date": day.isoformat()})
@@ -2259,7 +2301,7 @@ def replace_word_form(text: str, wrong: str, right: str) -> str | None:
     form = morph.parse(hit.group())[0]
     if key.startswith("@"):
         form = next((f for f in morph.parse(hit.group()) if "Name" in f.tag), form)
-    grammemes = {g for g in (form.tag.case, form.tag.number) if g}
+    grammemes = {str(g) for g in (form.tag.case, form.tag.number) if g}
     new = right
     for parsed in morph.parse(right)[:3]:
         if (inflected := parsed.inflect(grammemes)) is not None:
@@ -2337,6 +2379,11 @@ async def owned_record(ctx: Ctx, record_id: int | None) -> Record | None:
 async def handle_action(ctx: Ctx, action_id: str, record_id: int | None) -> dict | None:
     """Ответ на нажатие. None — действие не наше или доп выключен: разбираем текст."""
     pending = ctx.conv.pending
+    gate = {"delete": "f12", "complete": "f12", "restore": "f12", "restore_all": "f12", "edit": "f12",
+            "undo": "f5", "briefing": "f18", "move": "f17", "move_all_same": "f17", "move_all_each": "f17",
+            "delete_occurrence": "f15", "delete_series": "f15", "show_undated": "f7", "skip_undated": "f7"}.get(action_id)
+    if gate and not features.on(gate):
+        return examples("not_understood", "not_understood", ctx, EXAMPLES)
     if action_id == "cancel":
         ctx.conv.pending = None
         text, speech = ctx.say("cancelled")
@@ -2435,11 +2482,14 @@ async def keep_anyway(ctx: Ctx, draft: dict) -> dict:
 
 async def undo_series(ctx: Ctx, record: Record) -> dict:
     """«Отменить» под только что записанным повтором — убираем его целиком."""
-    rows = await series.upcoming(ctx.db, ctx.owner, record.series_id, ctx.today)
+    series_id = record.series_id
+    if series_id is None:
+        return examples("not_understood", "not_understood", ctx, EXAMPLES)
+    rows = await series.upcoming(ctx.db, ctx.owner, series_id, ctx.today)
     stamp = datetime.now(timezone.utc)
     for row in rows:
         row.deleted_at = stamp
-    await series.set_ended(ctx.db, ctx.owner, {record.series_id}, True)
+    await series.set_ended(ctx.db, ctx.owner, {series_id}, True)
     await ctx.db.commit()
     text, speech = ctx.say("undo_done", {"text": record.text})
     return reply("deleted", text, speech, records=[record.to_contract(marks=["deleted"])])
@@ -2502,9 +2552,11 @@ async def chat_endpoint(
     db: AsyncSession = Depends(get_db),
     x_stevens_features: str | None = Header(default=None),
 ):
-    features = {f.strip().lower() for f in (x_stevens_features or "").split(",") if f.strip()}
+    # v1.6 не требует старого заголовка допов; явный заголовок оставлен для старого фронта.
+    features = ({"d2", "d3", "d10"} if x_stevens_features is None else
+                {f.strip().lower() for f in x_stevens_features.split(",") if f.strip()})
     ctx = Ctx(owner=owner, db=db, conv=conversation(owner, payload.conversation_id),
-              now=client_now(payload.client_time), features=features)
+              now=client_now(payload.client_time or ""), features=features)
     started = clock.perf_counter()
     waiting = ctx.conv.pending.kind if ctx.conv.pending else None
     try:
@@ -2595,6 +2647,8 @@ FOLLOW_PERSON_RE = re.compile(r"^(?:а|и)\s+(?:(?:что|как)\s+)?(?:с|со
 def hold_reask(ctx: Ctx, asked: Pending) -> dict:
     """Пока запись не дописана, новую не делаем: «Сначала закончим с «…». Во сколько встреча?»"""
     question = ask_again(ctx, asked)
+    if question is None:
+        return clarify(ctx, "clarify_generic", asked.draft)
     ctx.trace["template"] = "hold_reask"
     text, speech = ctx.say("hold_reask", {"text": asked.draft["text"], "question": question["text"]},
                            {"question": question["speech"] or question["text"]})
@@ -2676,6 +2730,8 @@ async def answer_edit_ask(ctx: Ctx, pending: Pending, raw: str, p: nlu.Parse) ->
 
 async def answer_remind_before(ctx: Ctx, p: nlu.Parse) -> dict:
     """«Напомни о ней за час» — встреча в фокусе (или последняя показанная)."""
+    if p.remind_before is None:
+        return examples("not_understood", "not_understood", ctx, EXAMPLES)
     found = [r for r in await focused(ctx, p) if r.type == TaskType.meeting]
     if not found:
         return examples("not_understood", "not_understood", ctx, EXAMPLES)

@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.models import Account, AuthToken
 from app.owner import account_by_token, bearer, token_hash
-from app.security import hash_password, verify_password
+from app.security import hash_password, pwd_context, verify_password
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -32,6 +32,10 @@ def _credentials(payload: object) -> tuple[str, str] | JSONResponse:
     if not isinstance(login, str) or not LOGIN_RE.match(login.strip()):
         return error(422, "invalid_login")
     if not isinstance(password, str) or not 5 <= len(password) <= 128:
+        return error(422, "invalid_password")
+    try:
+        password.encode("utf-8")
+    except UnicodeError:
         return error(422, "invalid_password")
     return login.strip(), password
 
@@ -72,12 +76,16 @@ async def register(payload: object = Body(default=None), db: AsyncSession = Depe
 async def login(payload: object = Body(default=None), db: AsyncSession = Depends(get_db)):
     if not isinstance(payload, dict) or not isinstance(payload.get("login"), str) or not isinstance(payload.get("password"), str):
         return error(401, "invalid_credentials")
+    if not 5 <= len(payload["password"]) <= 128:
+        return error(401, "invalid_credentials")
     account = (await db.execute(
         select(Account).where(Account.login_lower == payload["login"].strip().lower())
     )).scalars().first()
     # И при неверном пароле, и при несуществующем логине — одна ошибка
     if not account or not await asyncio.to_thread(verify_password, payload["password"], account.password_hash):
         return error(401, "invalid_credentials")
+    if pwd_context.needs_update(account.password_hash):
+        account.password_hash = await asyncio.to_thread(hash_password, payload["password"])
     return await _issue(db, account)
 
 

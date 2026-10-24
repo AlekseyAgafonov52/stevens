@@ -14,11 +14,13 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from cryptography.hazmat.primitives import serialization
 from py_vapid import Vapid
 from pywebpush import WebPushException, webpush
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from app.database import AsyncSessionLocal
 from app.textfmt import plural
 from app.models import AppSetting, PushSent, PushSnooze, PushSubscription, Record, TaskStatus, TaskType
+from app.logic.push_targets import PushSession, allowed_endpoint, valid_keys
 
 TICK_SECONDS = 30
 # Опоздали больше чем на столько (сервер спал) — уже не шлём
@@ -39,16 +41,24 @@ async def vapid() -> Vapid:
         if row:
             _vapid = Vapid.from_pem(row.value.encode())
         else:
-            _vapid = Vapid()
-            _vapid.generate_keys()
-            db.add(AppSetting(key="vapid_private_pem", value=_vapid.private_pem().decode()))
+            candidate = Vapid()
+            candidate.generate_keys()
+            await db.execute(pg_insert(AppSetting).values(key="vapid_private_pem", value=candidate.private_pem().decode())
+                             .on_conflict_do_nothing())
             await db.commit()
+            row = await db.get(AppSetting, "vapid_private_pem")
+            if row is None:
+                raise RuntimeError("VAPID key was not persisted")
+            _vapid = Vapid.from_pem(row.value.encode())
     return _vapid
 
 
 async def public_key() -> str:
     """applicationServerKey для pushManager.subscribe — точка в base64url без '='."""
-    raw = (await vapid()).public_key.public_bytes(
+    key = (await vapid()).public_key
+    if key is None:
+        raise RuntimeError("VAPID public key is unavailable")
+    raw = key.public_bytes(
         serialization.Encoding.X962, serialization.PublicFormat.UncompressedPoint
     )
     return base64.urlsafe_b64encode(raw).decode().rstrip("=")
@@ -101,33 +111,46 @@ def payload(record: Record, snoozed: bool = False) -> str:
     }, ensure_ascii=False)
 
 
-def send(sub: PushSubscription, data: str, key: Vapid) -> bool:
-    """False — подписка больше не действует (браузер её отозвал)."""
+def send(sub: PushSubscription, data: str, key: Vapid) -> bool | None:
+    """True — доставлено, False — подписка отозвана, None — нужна повторная попытка."""
+    if not allowed_endpoint(sub.endpoint) or not valid_keys({"p256dh": sub.p256dh, "auth": sub.auth}):
+        return False
     try:
-        webpush(
-            {"endpoint": sub.endpoint, "keys": {"p256dh": sub.p256dh, "auth": sub.auth}},
-            data=data, vapid_private_key=key, vapid_claims=dict(CLAIMS), ttl=600, timeout=10,
-        )
+        with PushSession() as session:
+            answer = webpush(
+                {"endpoint": sub.endpoint, "keys": {"p256dh": sub.p256dh, "auth": sub.auth}},
+                data=data, vapid_private_key=key, vapid_claims=dict(CLAIMS), ttl=600, timeout=10,
+                requests_session=session,
+            )
+            status = getattr(answer, "status_code", None)
+            if status in (404, 410):
+                return False
+            if not isinstance(status, int) or not 200 <= status < 300:
+                return None
     except WebPushException as error:
         status = error.response.status_code if error.response is not None else None
         if status in (404, 410):
             return False
-        print(f"⚠️ Пуш не ушёл: {status} {error}")
+        print(f"⚠️ Пуш не ушёл: HTTP {status}")
+        return None
     except Exception as error:  # сеть и прочее — попробуем со следующей записью
-        print(f"⚠️ Пуш не ушёл: {error}")
+        print(f"⚠️ Пуш не ушёл: {type(error).__name__}")
+        return None
     return True
 
 
 async def tick() -> None:
     key = await vapid()
     async with AsyncSessionLocal() as db:
+        if not (await db.execute(select(func.pg_try_advisory_xact_lock(78109324)))).scalar():
+            return  # Другой процесс уже обрабатывает очередь уведомлений.
         subs = (await db.execute(select(PushSubscription))).scalars().all()
         owners: dict[tuple, list[PushSubscription]] = {}
         for sub in subs:
-            owners.setdefault((sub.account_id, sub.sandbox_id), []).append(sub)
+            owners.setdefault((sub.account_id, sub.sandbox_id, sub.timezone), []).append(sub)
         sent = set((await db.execute(select(PushSent.key))).scalars().all())
         dead: list[int] = []
-        for (account_id, sandbox_id), group in owners.items():
+        for (account_id, sandbox_id, _), group in owners.items():
             tz = zone(group[-1].timezone)
             now = datetime.now(tz)
             days = [(now - timedelta(days=1)).date().isoformat(), now.date().isoformat(),
@@ -142,24 +165,42 @@ async def tick() -> None:
                     continue
                 data = payload(record)
                 for sub in group:
-                    if sub.id not in dead and not await asyncio.to_thread(send, sub, data, key):
+                    sub_key = f"{record_key(record)}:s{sub.id}"
+                    if sub.id in dead or sub_key in sent:
+                        continue
+                    result = await asyncio.to_thread(send, sub, data, key)
+                    if result is False:
                         dead.append(sub.id)
-                db.add(PushSent(key=record_key(record)))
-                sent.add(record_key(record))
+                    elif result is True:
+                        db.add(PushSent(key=sub_key))
+                        sent.add(sub_key)
         # Отложенные «Через 10 минут»: запись могли уже выполнить или удалить — тогда молчим
         due = (await db.execute(
             select(PushSnooze).where(PushSnooze.at <= datetime.now(timezone.utc))
         )).scalars().all()
         for snooze in due:
-            await db.delete(snooze)
             record = await db.get(Record, snooze.record_id)
             if record is None or record.deleted_at is not None or record.status == TaskStatus.done:
+                await db.delete(snooze)
                 continue
-            group = owners.get((snooze.account_id, snooze.sandbox_id), [])
+            group = [sub for (a, s, _), values in owners.items()
+                     if (a, s) == (snooze.account_id, snooze.sandbox_id) for sub in values]
             data = payload(record, snoozed=True)
+            complete = True
             for sub in group:
-                if sub.id not in dead and not await asyncio.to_thread(send, sub, data, key):
+                sub_key = f"z{snooze.id}:s{sub.id}"
+                if sub.id in dead or sub_key in sent:
+                    continue
+                result = await asyncio.to_thread(send, sub, data, key)
+                if result is False:
                     dead.append(sub.id)
+                elif result is None:
+                    complete = False
+                else:
+                    db.add(PushSent(key=sub_key))
+                    sent.add(sub_key)
+            if complete:
+                await db.delete(snooze)
         if dead:
             await db.execute(delete(PushSubscription).where(PushSubscription.id.in_(dead)))
         # Старые отметки больше не нужны

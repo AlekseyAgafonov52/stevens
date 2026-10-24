@@ -366,7 +366,7 @@ def parse_when(text: str, now: datetime) -> tuple[str | None, bool, list[tuple[i
         # «Во вторник через неделю», «через 2 недели в пятницу» — ближайший вторник плюс недели
         weeks = re.search(r"недел", text[rel_span[0]:rel_span[1]], I)
         day_word = re.search(rf"(?:\b(?:в|во|на)\s+)?\b{WEEKDAY_RE}\b", rest, I) if weeks else None
-        if day_word:
+        if day_word and rel_date is not None:
             today = now.date()
             n = (rel_date - today).days // 7
             target = _weekday_index(day_word.group(1))
@@ -1131,14 +1131,15 @@ def _close(a: str, b: str) -> bool:
 
 def fix_typos(text: str) -> tuple[str, list[dict]]:
     """«Зватра в 10» → «завтра в 10». Правим только слова, которых нет в словаре, и только на слова дат."""
-    if _MORPH is None:
+    morph = _MORPH
+    if morph is None:
         return text, []
     fixes = []
 
     def fix(m: re.Match) -> str:
         word = m.group(0)
         lower = word.lower().replace("ё", "е")
-        if len(lower) < 5 or _MORPH.word_is_known(lower):
+        if len(lower) < 5 or morph.word_is_known(lower):
             return word
         right = next((w for w in TYPO_WORDS if _close(lower, w)), None)
         if not right:
@@ -1441,7 +1442,10 @@ def parse(raw: str, now: datetime) -> Parse:
 
     if (info.date or info.period) and not time and not _cut(text, info.spans).strip(" ,.!?"):
         result.intent, result.only_when = "list", True
-        result.period = info.period or _day_period(info.date, now.date())
+        if info.period is not None:
+            result.period = info.period
+        elif info.date is not None:
+            result.period = _day_period(info.date, now.date())
         return result
 
     if OFFTOPIC_RE.search(lower) and not CREATE_VERB_RE.search(lower):
@@ -1449,7 +1453,7 @@ def parse(raw: str, now: datetime) -> Parse:
         return result
 
     # Создание
-    is_reminder = bool(REMIND_RE.search(lower))
+    is_reminder = bool(REMIND_RE.search(lower) or re.match(r"^напоминание\b", lower))
     # Встреча важнее слова «напоминание»: «напомни про встречу в 15» — встреча, с проверкой конфликтов
     is_meeting = bool(re.search(MEETING_WORD_RE, lower))
     has_verb = bool(CREATE_VERB_RE.search(lower))
@@ -1461,7 +1465,7 @@ def parse(raw: str, now: datetime) -> Parse:
     # «Купить хлеб», «позвонить в банк» — голое дело без срока, как в списке покупок
     bare_todo = bool(re.match(r"^[а-яё]{3,}(?:ть|ться|чь|сти|зти)\s+\S", lower)) and len(keywords(text)) >= 2 \
         and not re.search(r"что-(?:нибудь|то|либо)|\bэто\b", lower)
-    if not (has_verb or is_meeting or has_need or is_task_word or bare_todo or busy_word
+    if not (has_verb or is_meeting or is_reminder or has_need or is_task_word or bare_todo or busy_word
             or ((info.date or info.period or time) and len(keywords(_cut(text, info.spans + time_spans))) >= 1)):
         return result  # unknown
 
@@ -1483,7 +1487,7 @@ def parse(raw: str, now: datetime) -> Parse:
     result.date = info.date
     result.date_kind = info.kind if info.date else ("none" if result.type == "task" and not time else "exact")
     result.vague_period = bool(info.period) and not info.date
-    if result.vague_period and result.type == "task" and not time and info.period.end >= now.date():
+    if info.period is not None and result.vague_period and result.type == "task" and not time and info.period.end >= now.date():
         # «На этой неделе позвонить бабушке» — задача со сроком до конца периода
         result.date, result.date_kind, result.vague_period = info.period.end, "deadline", False
 

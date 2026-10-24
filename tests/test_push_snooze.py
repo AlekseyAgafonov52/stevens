@@ -4,6 +4,9 @@ from datetime import datetime, timedelta, timezone
 sys.path.insert(0, os.getcwd())
 os.environ.setdefault("DATABASE_URL", "postgresql+asyncpg://postgres@localhost:5433/stevens")
 import httpx
+import base64
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import ec
 from sqlalchemy import select, update
 from app import push
 from app.database import AsyncSessionLocal
@@ -30,10 +33,13 @@ async def main():
                     "action": None, "client_time": "2026-10-21T10:00:00+03:00", "timezone": "Europe/Moscow"}
             r = (await c.post("/api/chat", json=body, headers=h)).json()
             rid = r["records"][0]["id"]
-            endpoint = "https://push.example/" + uuid.uuid4().hex
-            sub = {"endpoint": endpoint, "keys": {"p256dh": "x", "auth": "y"}, "timezone": "Europe/Moscow"}
+            endpoint = "https://fcm.googleapis.com/audit/" + uuid.uuid4().hex
+            raw = ec.generate_private_key(ec.SECP256R1()).public_key().public_bytes(serialization.Encoding.X962, serialization.PublicFormat.UncompressedPoint)
+            keys = {"p256dh": base64.urlsafe_b64encode(raw).decode().rstrip("="),
+                    "auth": base64.urlsafe_b64encode(b"0123456789abcdef").decode().rstrip("=")}
+            sub = {"endpoint": endpoint, "keys": keys, "timezone": "Europe/Moscow"}
             check("подписка", (await c.post("/api/push/subscribe", json=sub, headers=h)).status_code == 204)
-            foreign = "https://push.example/" + uuid.uuid4().hex
+            foreign = "https://fcm.googleapis.com/audit/" + uuid.uuid4().hex
             await c.post("/api/push/subscribe", json={**sub, "endpoint": foreign}, headers=other)
             check("чужой браузер не отложит", (await c.post("/api/push/snooze", json={"endpoint": foreign, "record_id": rid})).status_code == 404)
             check("неизвестный браузер", (await c.post("/api/push/snooze", json={"endpoint": "https://nope", "record_id": rid})).status_code == 404)

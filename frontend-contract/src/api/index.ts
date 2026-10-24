@@ -4,7 +4,6 @@ import { parseChat, parseRecord } from './schema';
 import type {
   AuthResponse, BackendFeature, ChatRequest, ChatResponse, RecordItem, RecordPatch, TransferResult, User,
 } from './types';
-import { isoWithOffset } from '../lib/clock';
 import { FEATURES_HEADER } from './types';
 
 export type ApiError =
@@ -12,7 +11,7 @@ export type ApiError =
   | { type: 'timeout' }
   | { type: 'server' }
   | { type: 'unauthorized' }
-  | { type: 'http'; status: number; code: string | null };
+  | { type: 'http'; status: number; code: string | null; errors?: TransferResult['errors'] };
 
 export class ApiFailure extends Error {
   constructor(public readonly error: ApiError) {
@@ -69,12 +68,15 @@ async function request(path: string, { method = 'GET', body, timeout = 25000, au
   if (response.status >= 500) throw new ApiFailure({ type: 'server' });
   if (!response.ok) {
     let code: string | null = null;
+    let errors: TransferResult['errors'];
     try {
-      code = ((await response.json()) as { error?: string }).error ?? null;
+      const data = (await response.json()) as { error?: string; errors?: TransferResult['errors'] };
+      code = data.error ?? null;
+      errors = data.errors;
     } catch {
       /* без тела */
     }
-    throw new ApiFailure({ type: 'http', status: response.status, code });
+    throw new ApiFailure({ type: 'http', status: response.status, code, errors });
   }
   return response;
 }
@@ -208,18 +210,25 @@ export const api = {
     await request(`/api/records/${id}`, { method: 'DELETE' });
   },
 
-  /** Импорт и выгрузка: все записи одним JSON (повтор — строкой с id «s12») */
+  /** Контракт v1.6: полные записи, каждый день повтора отдельной записью. */
   async exportRecords(): Promise<string> {
-    const response = await request(`/api/transfer/export?client_time=${encodeURIComponent(isoWithOffset())}`, {});
+    const response = await request('/api/records/export', {});
     return JSON.stringify(await json(response), null, 2);
   },
 
-  /** apply: false — только предпросмотр «добавлю N, изменю M, удалю K» */
+  /** Предпросмотр или атомарное применение; при ошибках строки не пропускаются. */
   async importRecords(text: string, apply: boolean): Promise<TransferResult> {
-    const response = await request('/api/transfer/import', {
-      method: 'POST', timeout: 60000, body: { text, apply, client_time: isoWithOffset() },
+    let body: unknown;
+    try { body = JSON.parse(text); }
+    catch { throw new ApiFailure({ type: 'http', status: 422, code: 'bad_json' }); }
+    const response = await request(`/api/records/import/${apply ? 'apply' : 'preview'}`, {
+      method: 'POST', timeout: 60000, body,
     });
     return (await json(response)) as TransferResult;
+  },
+
+  async undoImport(undoId: string): Promise<void> {
+    await request('/api/records/import/undo', { method: 'POST', body: { undo_id: undoId } });
   },
 
   async restoreRecord(id: number): Promise<RecordItem> {

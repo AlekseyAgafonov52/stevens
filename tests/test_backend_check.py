@@ -18,7 +18,7 @@ MONTH = "/api/records?from=2026-10-01&to=2026-10-31"
 
 async def main():
     fails = 0
-    def check(name, ok, info=""):
+    def check(name, ok, info: object=""):
         nonlocal fails
         print(("OK  " if ok else "FAIL"), name, "" if ok else info)
         fails += 0 if ok else 1
@@ -66,8 +66,10 @@ async def main():
                 started = time.perf_counter()
                 await c.get("/api/health")
                 return time.perf_counter() - started
-            *_, wait = await asyncio.gather(*[c.post("/api/auth/login", json={"login": login, "password": "12345"})
+            results = await asyncio.gather(*[c.post("/api/auth/login", json={"login": login, "password": "12345"})
                                               for _ in range(3)], health_during_login())
+            wait = results[-1]
+            assert isinstance(wait, float)
             check("вход не стопорит сервер", wait < 0.15, round(wait, 3))
 
             # Без client_time и с пустым текстом — ответ, а не 500
@@ -128,7 +130,7 @@ async def main():
             chat._llm_down_until = 0.0
             brain.parse_user_input = original
             del os.environ["YANDEX_API_KEY"], os.environ["YANDEX_FOLDER_ID"]
-            check("у Яндекса есть таймаут", 0 < brain.client.timeout <= 15 and brain.client.max_retries <= 1,
+            check("у Яндекса есть таймаут", isinstance(brain.client.timeout, (int, float)) and 0 < brain.client.timeout <= 15 and brain.client.max_retries <= 1,
                   (brain.client.timeout, brain.client.max_retries))
 
             # Запись с кривым временем в базе не останавливает уведомления

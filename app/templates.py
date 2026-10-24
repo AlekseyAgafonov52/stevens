@@ -13,6 +13,14 @@ from app.textfmt import capitalize, plural
 
 # ID → (варианты text, озвучка или None)
 TEMPLATES: dict[str, tuple[list[str], str | None]] = {
+    "import_done": ([
+        "Готово: добавил {add}, изменил {update}, удалил {delete}.",
+        "Сделано. Добавлено {add}, изменено {update}, удалено {delete}.",
+    ], None),
+    "import_undone": ([
+        "Вернул всё как было до импорта.",
+        "Отменил импорт, записи прежние.",
+    ], None),
     "created_task": ([
         "Записал задачу на {when}: «{text}».",
         "Готово: «{text}» — {when}.",

@@ -57,6 +57,7 @@ def run_tests():
     print(f"\n--- ИТОГИ ---")
     print(f"Пройдено: {passed}")
     print(f"Провалено: {failed}")
+    return failed
 
 if __name__ == "__main__":
-    run_tests()
+    raise SystemExit(1 if run_tests() else 0)

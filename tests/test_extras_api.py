@@ -72,12 +72,13 @@ EXPECT = {
  "П-5": lambda r: len(r["records"]) == 1,
 }
 async def main():
+    fails = 0
     async with app.router.lifespan_context(app):
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t") as c:
             for name, turns in CASES:
                 cid = "d-" + uuid.uuid4().hex[:12]
                 h = {"X-Client-Id": cid}
-                if name != "Д-7": h["X-Stevens-Features"] = "d2,d3,d10"
+                h["X-Stevens-Features"] = "" if name == "Д-7" else "d2,d3,d10"
                 await c.post("/api/sandbox/reset", headers=h)
                 conv = str(uuid.uuid4()); last=None
                 for text, act, kind, tpl in turns:
@@ -87,11 +88,16 @@ async def main():
                         if act == "briefing":  # фронт шлёт действие сам, без кнопки
                             b["action"] = {"id": "briefing"}; b["source"] = "text"
                         elif act == "slot":  # кнопка со временем шлёт текст
+                            assert last is not None, "Slot action requires a previous answer"
                             b["text"] = last["buttons"][0]["send"]["text"]; b["source"] = "button"
                         else:
+                            assert last is not None, "Button action requires a previous answer"
                             btn = next(x for x in last["buttons"] if x["send"].get("action", {}).get("id") == act)
                             b["action"] = btn["send"]["action"]; b["text"] = btn["label"]; b["source"] = "button"
                     r = (await c.post("/api/chat", json=b, headers=h)).json(); last = r
                     ok = r["kind"] == kind and tpl in used and (text != turns[-1][0] or EXPECT.get(name, lambda r: True)(r))
+                    fails += not ok
                     print("OK " if ok else "BAD", name, r["kind"], used, r["text"], [(x["label"][:30], x.get("style")) for x in r["buttons"]], [x["marks"] for x in r["records"]][:2])
-asyncio.run(main())
+    print("fails:", fails)
+    return fails
+sys.exit(1 if asyncio.run(main()) else 0)

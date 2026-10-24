@@ -5,6 +5,7 @@ from typing import Literal, Optional, List
 from pydantic import BaseModel, Field
 from dotenv import load_dotenv
 import openai
+from openai.types.responses import FunctionToolParam
 
 load_dotenv()
 
@@ -103,11 +104,12 @@ def extract_json_from_text(text: str) -> dict | None:
 
 
 def parse_user_input(text: str) -> Optional[IntentSchema]:
-    tools = [{
+    tools: list[FunctionToolParam] = [{
         "type": "function",
         "name": "extract_intent",
         "description": "Извлекает намерение и параметры из запроса пользователя",
         "parameters": IntentSchema.model_json_schema(),
+        "strict": False,
     }]
 
     system_prompt = """Ты — ассистент Стивенс. Твоя задача — разобрать текст в JSON.
@@ -132,7 +134,7 @@ def parse_user_input(text: str) -> Optional[IntentSchema]:
             temperature=0.1,
             instructions=system_prompt,
             input=text,
-            tools=tools,  # type: ignore
+            tools=tools,
             store=False,
         )
 

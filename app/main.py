@@ -1,5 +1,6 @@
 """Stevens API по контракту v1.4 с допами (d2, d3, d10)."""
 import asyncio
+import os
 from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
@@ -13,16 +14,17 @@ from app.database import Base, engine, get_db
 from app.owner import CLIENT_ID_RE, clean_loop, ensure_sandbox, seed_sandbox
 from app import push
 from app import features
-from app.routers import auth, chat, client, records, transfer
+from app.routers import auth, chat, client, imports, records, transfer
 from app.routers import push as push_router
+from app.logic.request_limits import RequestLimits
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    async with engine.begin() as conn:  # type: ignore
+    async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     # Тип «заметка» появился позже таблицы: в старой базе его нет в перечислении
-    async with engine.connect() as conn:  # type: ignore
+    async with engine.connect() as conn:
         conn = await conn.execution_options(isolation_level="AUTOCOMMIT")
         await conn.exec_driver_sql("ALTER TYPE record_type ADD VALUE IF NOT EXISTS 'note'")
         await conn.exec_driver_sql("ALTER TYPE record_type ADD VALUE IF NOT EXISTS 'busy'")
@@ -42,17 +44,21 @@ async def lifespan(app: FastAPI):
     print("✅ База данных готова.")
     pusher = asyncio.create_task(push.loop())
     cleaner = asyncio.create_task(clean_loop())
-    yield
-    pusher.cancel()
-    cleaner.cancel()
-    await engine.dispose()
+    try:
+        yield
+    finally:
+        pusher.cancel()
+        cleaner.cancel()
+        await asyncio.gather(pusher, cleaner, return_exceptions=True)
+        await engine.dispose()
 
 
 app = FastAPI(title="Stevens API", version="1.5.0", lifespan=lifespan)
+app.add_middleware(RequestLimits)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[s.strip() for s in os.getenv("STEVENS_CORS_ORIGINS", "http://localhost:5173,http://localhost:8080,http://localhost:8081,http://127.0.0.1:8081").split(",") if s.strip()],
     allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
@@ -72,6 +78,7 @@ async def validation_error(request: Request, exc: RequestValidationError):
 
 app.include_router(auth.router)
 app.include_router(chat.router)
+app.include_router(imports.router)
 app.include_router(records.router)
 app.include_router(push_router.router)
 app.include_router(client.router)
