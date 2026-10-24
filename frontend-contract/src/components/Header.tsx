@@ -30,10 +30,10 @@ export function Header() {
     ? []
     : [{ label: T.menu_install, onSelect: () => (canInstall ? void install() : setHint(installHintKey())) }];
 
-  // Ф10: «Уведомления: включить / выключить»; нет f10 на сервере или браузер не умеет — пункта нет
+  // Ф10: «Уведомления» с галочкой, меню не закрывается; нет f10 на сервере или браузер не умеет — пункта нет
   const notifyOn = useSyncExternalStore(notifyStore.subscribe, () => notifyStore.get().on);
   const notifyItem = serverHas('f10') && typeof window !== 'undefined' && 'Notification' in window
-    ? [{ label: notifyOn ? T.menu_notify_off : T.menu_notify_on,
+    ? [{ label: T.menu_notify, checked: notifyOn,
          onSelect: () => void (notifyOn ? disableNotify() : enableNotify()) }]
     : [];
 

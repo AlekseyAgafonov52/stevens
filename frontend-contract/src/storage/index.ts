@@ -44,7 +44,7 @@ export const storage = {
   setBriefingDay: (day: string) => write('briefing_day', day),
   notifyDeclined: () => read('notify_declined') === '1',
   setNotifyDeclined: () => write('notify_declined', '1'),
-  /** Меню «Уведомления: включить» снимает отказ */
+  /** Галочка «Уведомления» в меню снимает отказ */
   clearNotifyDeclined: () => write('notify_declined', null),
   notifyFired: (): string[] => {
     try {

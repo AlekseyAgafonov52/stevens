@@ -1,7 +1,9 @@
 /** Выпадающее меню шапки — 02-screens.md, 2.1. */
+import { Check } from 'lucide-react';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 
-export type MenuItem = { label: string; onSelect: () => void };
+/** checked задан — переключатель: галочка справа, меню не закрывается, можно нажимать туда-сюда */
+export type MenuItem = { label: string; onSelect: () => void; checked?: boolean };
 
 type Props = {
   trigger: (props: { open: boolean; toggle: () => void }) => ReactNode;
@@ -49,11 +51,13 @@ export function Menu({ trigger, heading, items }: Props) {
               key={item.label}
               ref={(el) => { itemRefs.current[index] = el; }}
               type="button"
-              role="menuitem"
+              role={item.checked === undefined ? 'menuitem' : 'menuitemcheckbox'}
+              aria-checked={item.checked}
               className="menu__item"
-              onClick={() => { setOpen(false); item.onSelect(); }}
+              onClick={() => { if (item.checked === undefined) setOpen(false); item.onSelect(); }}
             >
               {item.label}
+              {item.checked && <Check className="menu__check" size={16} strokeWidth={1.5} aria-hidden="true" />}
             </button>
           ))}
         </div>

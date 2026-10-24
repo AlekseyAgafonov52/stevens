@@ -39,8 +39,7 @@ export const T = {
   menu_logout: 'Выйти',
   menu_install: 'Установить как приложение',
   menu_tour: 'Пройти обучение',
-  menu_notify_on: 'Уведомления: включить',
-  menu_notify_off: 'Уведомления: выключить',
+  menu_notify: 'Уведомления',
   profile_label: 'Профиль', // aria-label кружка аккаунта
 
   // ── Окно «Новый диалог» ─────────────────────────────

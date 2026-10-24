@@ -111,7 +111,12 @@
   color: var(--c-text);
   cursor: pointer;
   white-space: nowrap;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
 }
+/* Галочка переключателя — справа, цвет текста */
+.menu__check { margin-left: auto; flex: none; color: var(--c-text); }
 .menu__item:focus-visible { outline: none; background: var(--c-bubble); }
 @media (hover: hover) {
   .menu__item:hover { background: var(--c-bubble); }
