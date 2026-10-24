@@ -155,13 +155,6 @@ export function Composer() {
           <RecordingRow />
         ) : (
           <>
-            <span className="mic-wrap">
-              <button type="button" className="icon-btn icon-btn--dark" aria-label={T.btn_mic} disabled={waiting}
-                onClick={() => { emitActivity('button-press'); startRecording(); }}>
-                <Mic size={18} strokeWidth={1.5} aria-hidden="true" />
-              </button>
-              {serverHas('f20') && <WakeDot />}
-            </span>
             <div className="composer__field">
               <textarea
                 ref={ref}
@@ -189,6 +182,13 @@ export function Composer() {
               disabled={!canSend} onClick={submit}>
               <ArrowUp size={18} strokeWidth={1.75} aria-hidden="true" />
             </button>
+            <span className="mic-wrap">
+              <button type="button" className="icon-btn icon-btn--dark" aria-label={T.btn_mic} disabled={waiting}
+                onClick={() => { emitActivity('button-press'); startRecording(); }}>
+                <Mic size={18} strokeWidth={1.5} aria-hidden="true" />
+              </button>
+              {serverHas('f20') && <WakeDot />}
+            </span>
           </>
         )}
       </div>

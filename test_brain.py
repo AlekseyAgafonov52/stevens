@@ -1,63 +1,53 @@
+"""Explicit live-provider check against existing golden record expectations.
+
+python test_brain.py --live
+Offline validation belongs to tests/test_ai_parser.py; this command needs real credentials.
+"""
+import argparse
+from datetime import datetime
 import json
-from brain import parse_user_input
+from pathlib import Path
 
-def run_tests():
-    with open("golden_dataset_v2.json", "r", encoding="utf-8") as f:
-        data = json.load(f)
+from brain import Input, Unavailable, parse_user_input
 
-    cases = data["cases"]
-    passed = 0
-    failed = 0
 
-    for case in cases:
-        if "phrase" not in case: # Пропускаем диалоги (turns) для простоты
+def run_tests() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--live", action="store_true", help="allow requests to the configured Yandex provider")
+    args = parser.parse_args()
+    if not args.live:
+        parser.error("Use --live for real provider calls; use python tests/test_ai_parser.py for offline checks")
+    data = json.loads(Path(__file__).with_name("golden_dataset_v2.json").read_text(encoding="utf-8"))
+    clock = data["meta"]["test_clock"]
+    failures = 0
+    for case in data["cases"]:
+        if "phrase" not in case:
             continue
-            
-        phrase = case["phrase"]
         expected = case["expected_parse"]
-        
-        print(f"\nТест {case['id']}: {phrase}")
-        result = parse_user_input(phrase)
-        
-        if not result:
-            print("❌ Нейросеть вернула None")
-            failed += 1
-            continue
-            
-        # Проверяем ключевые поля
+        context = Input(text=case["phrase"], now=datetime.fromisoformat(clock["client_time"]),
+                        timezone=clock["timezone"], source="text")
+        try:
+            result = parse_user_input(case["phrase"], context=context)
+        except Unavailable:
+            print("Provider unavailable; live checks stopped")
+            return 1
         errors = []
-        
-        # Умная проверка intent (чтобы create_task == create)
-        expected_intent = expected.get("intent", "")
-        actual_intent = result.intent
-        if expected_intent == "create":
-            if not actual_intent.startswith("create_"):
-                errors.append(f"intent: ожидалось create, получено {actual_intent}")
-        elif expected_intent != actual_intent:
-            errors.append(f"intent: ожидалось {expected_intent}, получено {actual_intent}")
+        if result.intent != expected["intent"]:
+            errors.append("intent")
+        record = case["expected_response"].get("record")
+        if record and expected["intent"] == "create":
+            item = result.items[0] if result.items else None
+            if item is None:
+                errors.append("items")
+            else:
+                for field in ("type", "text", "date", "time", "date_kind"):
+                    if field in record and getattr(item, field) != record[field]:
+                        errors.append(field)
+        failures += bool(errors)
+        print(case["id"], "FAIL " + ",".join(errors) if errors else "OK")
+    print("fails:", failures)
+    return failures
 
-        if expected.get("text") and result.text != expected.get("text"):
-            errors.append(f"text: ожидалось '{expected.get('text')}', получено '{result.text}'")
-            
-        if expected.get("date") and result.date != expected.get("date"):
-             errors.append(f"date: ожидалось {expected.get('date')}, получено {result.date}")
-             
-        if expected.get("time") and result.time != expected.get("time"):
-             errors.append(f"time: ожидалось {expected.get('time')}, получено {result.time}")
-
-        if errors:
-            print(f"❌ ОШИБКА:")
-            for err in errors:
-                print(f"   - {err}")
-            failed += 1
-        else:
-            print("✅ OK")
-            passed += 1
-
-    print(f"\n--- ИТОГИ ---")
-    print(f"Пройдено: {passed}")
-    print(f"Провалено: {failed}")
-    return failed
 
 if __name__ == "__main__":
     raise SystemExit(1 if run_tests() else 0)

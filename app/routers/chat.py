@@ -23,6 +23,9 @@ from app.database import get_db
 from app.models import REMIND_BEFORE_DEFAULT, DateKind, Record, TaskStatus, TaskType
 from app.owner import Owner, get_owner
 from app.schemas import ChatRequest
+from app.ai.schema import Awaiting as AIAwaiting, Input as AIInput
+from app.ai.adapter import query_context, supported as ai_supported, to_parses
+from app.ai.provider import InvalidResponse, Unavailable
 from app.templates import render
 from app.textfmt import (
     MONTHS_GEN, TYPE_FORMS, TYPE_GEN_PLURAL, TYPE_WORD, capitalize, client_now, date_speech, date_text, parse_date, plural,
@@ -176,7 +179,7 @@ def draft_record(draft: dict, marks: list[str]) -> dict:
         "id": None, "type": draft["type"], "text": draft["text"], "date": draft.get("date"),
         "time": draft.get("time"), "end_time": draft.get("end_time"), "date_kind": draft["date_kind"],
         "status": None if draft["type"] in ("meeting", "busy") else "open",
-        "remind_before": (draft.get("remind_before") or REMIND_BEFORE_DEFAULT) if draft["type"] == "meeting" else None,
+        "remind_before": (draft["remind_before"] if draft.get("remind_before") is not None else REMIND_BEFORE_DEFAULT) if draft["type"] == "meeting" else None,
         "created_at": None, "marks": marks, "highlight": None,
     }
 
@@ -978,7 +981,7 @@ def draft_from(p: nlu.Parse, today: date) -> dict:
         "ambiguous": p.time_ambiguous,
         "has_subject": p.has_subject,
     }
-    if p.remind_before:
+    if p.remind_before is not None:
         draft["remind_before"] = p.remind_before
     if p.time_guess:
         draft["part_word"] = p.part_word
@@ -1092,79 +1095,68 @@ def llm_enabled() -> bool:
     return bool(os.getenv("YANDEX_API_KEY") and os.getenv("YANDEX_FOLDER_ID"))
 
 
-LLM_TIME_RE = re.compile(r"^([01]?\d|2[0-3]):([0-5]\d)(?::\d{2})?$")
-
-
-def llm_time(value: str | None) -> str | None:
-    """Время от LLM: «9:30», «10:00:00» → «09:30», «10:00»; «25:99» и прочее — None."""
-    m = LLM_TIME_RE.match((value or "").strip())
-    return f"{int(m.group(1)):02d}:{m.group(2)}" if m else None
-
-
-LLM_PAUSE = 60          # Яндекс не ответил — минуту не спрашиваем, сразу «не понял»
+LLM_PAUSE = 60
 _llm_down_until = 0.0
 
 
-async def llm_parse(text: str, now: datetime) -> nlu.Parse:
-    """Если правила не поняли — спрашиваем LLM (brain.py) и переводим её ответ в Parse.
-    Запрос к Яндексу синхронный — в отдельном потоке, чтобы остальные запросы не ждали."""
+async def ai_context(ctx: Ctx, payload: ChatRequest, pending: Pending | None) -> AIInput:
+    moment = ctx.now
+    if payload.client_time:
+        try:
+            moment = datetime.fromisoformat(payload.client_time)
+        except ValueError:
+            pass
+    awaiting = None
+    if pending:
+        template = (pending.draft.get("ask") or {}).get("template", "")
+        question = ("yes_no" if pending.kind in ("confirm", "multi", "conflict", "bulk_delete") else
+                    "series" if pending.kind == "series_delete" else
+                    "person" if "person" in template else
+                    "day_time" if "when" in template else
+                    "day" if "day" in template else
+                    "time" if "time" in template or template == "clarify_busy_end" or pending.kind == "multi_ask" else "text")
+        about = {key: pending.draft[key] for key in ("type", "text", "date", "time", "end_time")
+                 if key in pending.draft}
+        quick = (pending.draft.get("ask") or {}).get("quick")
+        awaiting = AIAwaiting(question=question, about=about or None,
+                              options=[label for label, _ in quick] if quick else None)
+    focus = await owned_record(ctx, ctx.conv.focus)
+    return AIInput(text=payload.text.strip(), now=moment, timezone=payload.timezone, source=payload.source,
+                   awaiting=awaiting, focus=focus.to_contract() if focus and focus.deleted_at is None else None,
+                   last_query=query_context(ctx.conv.last_query))
+
+
+async def llm_parse(text: str, now: datetime, *, context: AIInput | None = None,
+                    trace: dict | None = None) -> nlu.Parse:
+    """Validated v1.6 result adapted to current dialogue logic; at most 10 seconds."""
     global _llm_down_until
+    trace = trace if trace is not None else {}
     if clock.time() < _llm_down_until:
+        trace["llm_status"] = "cooldown"
         return nlu.Parse()
+    started = clock.perf_counter()
+    trace["llm"] = True
     try:
         from brain import parse_user_input
-        intent = await asyncio.to_thread(parse_user_input, text)
-    except Exception as error:  # noqa: BLE001 — LLM недоступна: «не понял»
-        print(f"LLM недоступна: {error!r}")
+        result = await asyncio.wait_for(asyncio.to_thread(parse_user_input, text,
+            context=context or AIInput(text=text, now=now)), timeout=10)
+    except Exception as error:  # provider or schema failure: retain the rules fallback
         _llm_down_until = clock.time() + LLM_PAUSE
+        reason = str(error) if isinstance(error, (InvalidResponse, Unavailable)) else type(error).__name__
+        trace.update(llm_status="invalid_response" if isinstance(error, InvalidResponse) else "unavailable",
+                     error="LLM: " + reason)
         return nlu.Parse()
-    if not intent or intent.intent == "unknown":
+    finally:
+        trace["llm_ms"] = int((clock.perf_counter() - started) * 1000)
+    trace["llm_result"] = result.model_dump(mode="json", by_alias=True)
+    if not ai_supported(result):
+        trace["llm_status"] = "unsupported_intent"
         return nlu.Parse()
-    today = now.date()
-    tokens = {"today": 0, "tomorrow": 1, "day_after_tomorrow": 2, "yesterday": -1}
-    weekdays = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
-
-    def to_date(token: str | None) -> date | None:
-        if not token:
-            return None
-        token = token.lower()
-        if token in tokens:
-            return today + timedelta(days=tokens[token])
-        if token in weekdays:
-            return today + timedelta(days=(weekdays.index(token) - today.weekday()) % 7)
-        if token == "end_of_week":
-            return nlu.week_bounds(today)[1]
-        return parse_date(token)
-
-    p = nlu.Parse()
-    if intent.intent.startswith("create_"):
-        p.intent, p.type = "create", intent.intent.removeprefix("create_")
-        p.text = intent.text[:300] if intent.text else None
-        p.date = to_date(intent.date)
-        p.time = llm_time(intent.time)
-        # «До» бывает только у задачи: встреча и напоминание — в точное время
-        p.date_kind = (intent.date_kind if p.type == "task" else "exact") if p.date else "none"
-        p.time_ambiguous = bool(intent.time_ambiguous)
-        # Правила фразу не поняли, разобрала нейросеть — запись показываем черновиком с «верно понял?»
-        p.doubt = [{"why": "llm"}]
-    elif intent.intent in ("list", "search"):
-        p.intent = intent.intent
-        p.filter_type = intent.filter_type if intent.filter_type in TYPE_WORD else None
-        if intent.intent == "search":
-            words = " ".join(filter(None, [intent.keyword, *(intent.people or []), *(intent.organizations or [])]))
-            p.keywords = nlu.keywords(words)
-            p.ask, p.tense = intent.ask, intent.tense
-        period = (intent.period or "today").lower()
-        if period in ("this_week", "next_week"):
-            start = nlu.week_bounds(today + timedelta(days=7 if period == "next_week" else 0))[0]
-            label = "на этой неделе" if period == "this_week" else "на следующей неделе"
-            p.period = nlu.Period(start, start + timedelta(days=6), label, label)
-        elif intent.intent == "list":
-            day = to_date(period) or today
-            p.period = nlu.describe_period(day, day, today)
-    else:
-        p.intent = intent.intent
-    return p
+    parses = to_parses(result, now.date())
+    trace["llm_status"] = "unknown" if parses[0].intent == "unknown" else "ok"
+    if len(parses) > 1:
+        trace["_llm_items"] = parses
+    return parses[0]
 
 
 # ── Ответы по типу запроса ────────────────────────────
@@ -2884,8 +2876,9 @@ async def respond(ctx: Ctx, payload: ChatRequest) -> dict:
             ctx.trace["intent"] = "move"
             return await answer_move(ctx, moved)
     if p.intent == "unknown" and llm_enabled():
-        p = await llm_parse(raw, ctx.now)
-        ctx.trace.update(intent=p.intent, llm=True)
+        context = await ai_context(ctx, payload, asked)
+        p = await llm_parse(raw, ctx.now, context=context, trace=ctx.trace)
+        ctx.trace.update(intent=p.intent)
 
     # Ждали «да» или «нет», а ответ не поняли — вопрос не теряем, переспрашиваем
     if p.intent == "unknown" and asked and asked.kind == "conflict":
@@ -2908,9 +2901,13 @@ async def respond(ctx: Ctx, payload: ChatRequest) -> dict:
         p.intent = "unknown"
 
     if p.intent == "create":
-        many = nlu.parse_many(raw, ctx.now)
+        many = ctx.trace.pop("_llm_items", None) or nlu.parse_many(raw, ctx.now)
+        if many and ctx.trace.get("llm") and not all(ready_draft(ctx, draft_from(item, ctx.today)) for item in many):
+            return examples("not_understood", "not_understood", ctx, EXAMPLES)
         if many and (answer := await answer_many(ctx, many)):
             return answer
+        if many and ctx.trace.get("llm"):
+            return examples("not_understood", "not_understood", ctx, EXAMPLES)
         return await process_draft(ctx, draft_from(p, ctx.today))
     if p.intent == "undated":
         return await answer_undated(ctx)

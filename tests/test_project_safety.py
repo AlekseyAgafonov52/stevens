@@ -27,14 +27,16 @@ import brain
 class ProjectSafetyTests(unittest.TestCase):
     def test_llm_tool_request_and_response_without_provider(self):
         output = SimpleNamespace(type="function_call", name="extract_intent", arguments=json.dumps(
-            {"intent": "create_task", "text": "Check", "time": "9:00"}))
+            {"intent": "create", "items": [{"type": "task", "text": "Check", "time": "09:00"}],
+             "confidence": 0.9, "layer": "llm"}))
         response = SimpleNamespace(output=[output], output_text="")
-        with patch.object(brain.client.responses, "create", return_value=response) as create:
+        with patch.dict(os.environ, {"YANDEX_API_KEY": "fake", "YANDEX_FOLDER_ID": "fake"}), \
+                patch.object(brain.client.responses, "create", return_value=response) as create:
             result = brain.parse_user_input("Check")
         self.assertIsNotNone(result)
         assert result is not None
-        self.assertEqual(result.intent, "create_task")
-        self.assertEqual(result.time, "09:00")
+        self.assertEqual(result.intent, "create")
+        self.assertEqual(result.items[0].time, "09:00")
         tool = create.call_args.kwargs["tools"][0]
         self.assertEqual(tool["name"], "extract_intent")
         self.assertFalse(tool["strict"])

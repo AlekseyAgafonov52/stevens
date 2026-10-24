@@ -85,7 +85,13 @@ async def main():
             original = brain.parse_user_input
 
             async def llm(**fields):
-                brain.parse_user_input = lambda text_: brain.IntentSchema(**fields)
+                chat._llm_down_until = 0.0
+                def parsed(text_, *, context=None):
+                    kind = fields["intent"].removeprefix("create_")
+                    item = {k: v for k, v in fields.items() if k != "intent"}
+                    item.update(type=kind, date="2026-10-22")
+                    return brain.Result.model_validate({"intent": "create", "items": [item], "confidence": 0.9, "layer": "llm"})
+                brain.parse_user_input = parsed
                 conv = str(uuid.uuid4())
                 r = (await say("бубубу непонятная фраза", conversation_id=conv)).json()
                 if fields["intent"].startswith("create_") and r["kind"] == "confirm":
@@ -95,19 +101,20 @@ async def main():
                 return r
 
             r = await llm(intent="create_meeting", text="Встреча с Петей", date="tomorrow", time="25:99")
-            check("LLM: время 25:99 не записано", r["kind"] == "clarify" and not r["records"], (r["kind"], r["text"]))
-            r = await llm(intent="create_reminder", text="Полить цветы", date="tomorrow", time="9:30:00")
-            check("LLM: 9:30:00 → 09:30", r["kind"] == "created" and r["records"][0]["time"] == "09:30", r["text"])
+            check("LLM: время 25:99 отклоняет разбор", r["kind"] == "not_understood" and not r["records"], (r["kind"], r["text"]))
+            r = await llm(intent="create_reminder", text="Полить цветы", date="tomorrow", time="09:30")
+            check("LLM: контрактное время 09:30", r["kind"] == "created" and r["records"][0]["time"] == "09:30", r["text"])
             r = await llm(intent="create_meeting", text="Созвон с Олей", date="tomorrow", time="11:00", date_kind="deadline")
             check("LLM: встреча «до» — точная", r["kind"] == "created" and r["records"][0]["date_kind"] == "exact"
                   and "до " not in r["text"], r["text"])
             r = await llm(intent="create_task", text="я" * 400, date="friday")
-            check("LLM: длинный текст обрезан", r["kind"] == "created" and len(r["records"][0]["text"]) <= 300)
+            check("LLM: слишком длинный текст отклонён", r["kind"] == "not_understood" and not r["records"])
+            chat._llm_down_until = 0.0
 
             # Пока LLM думает, остальные запросы не ждут
-            def slow(text_):
+            def slow(text_, *, context=None):
                 time.sleep(1)
-                return brain.IntentSchema(intent="unknown")
+                return brain.Result(intent="unknown", confidence=0.0, layer="llm")
             brain.parse_user_input = slow
 
             async def health_during_llm():
@@ -119,9 +126,9 @@ async def main():
             check("LLM не стопорит сервер", wait < 0.3, round(wait, 3))
             # Яндекс лёг: после первого сбоя минуту его не ждём
             calls = []
-            def down(text_):
+            def down(text_, *, context=None):
                 calls.append(text_)
-                raise brain.openai.APIConnectionError(request=httpx.Request("POST", "https://llm"))
+                raise brain.Unavailable("provider_failed")
             brain.parse_user_input = down
             chat._llm_down_until = 0.0
             r1, r2 = (await say("бубубу раз")).json(), (await say("бубубу два")).json()
