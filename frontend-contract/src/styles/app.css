@@ -425,6 +425,34 @@
 .modal__text { margin-top: var(--sp-3); font-size: var(--fs-body); line-height: var(--lh-body); color: var(--c-text-2); }
 .modal__buttons { margin-top: var(--sp-11); display: flex; justify-content: flex-end; gap: var(--sp-3); }
 
+/* Импорт и выгрузка: большое поле JSON, предпросмотр «добавлю N, изменю M, удалю K» */
+.transfer { width: 720px; max-width: 100%; max-height: calc(100dvh - 32px); overflow: auto; padding: var(--sp-12); border-radius: 16px; background: var(--c-surface); box-shadow: var(--shadow-float); display: flex; flex-direction: column; gap: var(--sp-4); }
+.transfer__title { font-size: var(--fs-body); font-weight: 600; color: var(--c-text); }
+.transfer__hint { font-size: var(--fs-meta); line-height: var(--lh-body); color: var(--c-text-2); }
+.transfer__row { display: flex; flex-wrap: wrap; gap: var(--sp-3); }
+.transfer__field { width: 100%; min-height: 240px; resize: vertical; padding: var(--sp-4); border: 1px solid var(--c-line); border-radius: 12px; background: var(--c-bg); color: var(--c-text); font: 400 var(--fs-meta) / 1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.transfer__field:focus { outline: 2px solid var(--c-accent); outline-offset: 1px; }
+.transfer__note { font-size: var(--fs-meta); color: var(--c-text-2); }
+.transfer__preview { display: flex; flex-direction: column; gap: var(--sp-3); }
+.transfer__sum { font-size: var(--fs-body); font-weight: 500; color: var(--c-text); }
+.transfer__sum--alarm { color: var(--c-alarm); }
+.transfer__list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; max-height: 260px; overflow: auto; }
+.transfer__item { display: grid; grid-template-columns: 76px 1fr; column-gap: var(--sp-3); padding: 8px 10px; border-radius: 10px; background: var(--c-bg); font-size: var(--fs-meta); }
+.transfer__item--delete .transfer__text { text-decoration: line-through; color: var(--c-text-2); }
+.transfer__item--error { background: var(--c-alarm-bg); }
+.transfer__action { grid-row: span 2; font-weight: 600; color: var(--c-text-2); }
+.transfer__item--add .transfer__action { color: var(--c-accent); }
+.transfer__item--error .transfer__action { color: var(--c-alarm); }
+.transfer__text { color: var(--c-text); font-size: var(--fs-body); overflow-wrap: anywhere; }
+.transfer__meta { color: var(--c-text-2); }
+.transfer__buttons { display: flex; justify-content: flex-end; gap: var(--sp-3); }
+@media (max-width: 760px) {
+  .transfer { padding: var(--sp-10); }
+  .transfer__field { min-height: 180px; }
+  .transfer__item { grid-template-columns: 1fr; }
+  .transfer__action { grid-row: auto; }
+}
+
 /* ── Экран входа (02, 1) ────────────────────────────── */
 .auth { min-height: 100dvh; background: var(--c-bg); padding: 110px var(--sp-10) var(--sp-12); display: flex; justify-content: center; }
 .auth__column { width: 400px; max-width: 100%; display: flex; flex-direction: column; }

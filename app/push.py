@@ -90,16 +90,13 @@ def record_key(record: Record) -> str:
 
 
 def payload(record: Record, snoozed: bool = False) -> str:
-    """Две строки (контракт v1.5, 4.2): фраза Стивенса и текст записи."""
-    if snoozed:
-        first = "Позвольте напомнить ещё раз."
-    elif record.type == TaskType.meeting:
-        first = f"Через {minutes_text(record.remind_minutes())} у вас встреча."
-    else:
-        first = "Позвольте напомнить."
-    body = f"{first}\n{record.text}"
+    """Заголовок — сам текст записи, без «Позвольте напомнить» (просьба Матвея 24.10).
+    У встречи ниже строка «Через 15 минут у вас встреча.», у остального текста ниже нет."""
+    body = ""
+    if record.type == TaskType.meeting and not snoozed:
+        body = f"Через {minutes_text(record.remind_minutes())} у вас встреча."
     return json.dumps({
-        "title": "Stevens", "body": body, "tag": record_key(record),
+        "title": record.text, "body": body, "tag": record_key(record),
         "record_id": record.id, "snoozed": snoozed,
     }, ensure_ascii=False)
 

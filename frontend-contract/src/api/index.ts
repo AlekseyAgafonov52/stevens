@@ -2,8 +2,9 @@
 import { apiUrl, features } from '../config/features';
 import { parseChat, parseRecord } from './schema';
 import type {
-  AuthResponse, BackendFeature, ChatRequest, ChatResponse, RecordItem, RecordPatch, User,
+  AuthResponse, BackendFeature, ChatRequest, ChatResponse, RecordItem, RecordPatch, TransferResult, User,
 } from './types';
+import { isoWithOffset } from '../lib/clock';
 import { FEATURES_HEADER } from './types';
 
 export type ApiError =
@@ -205,6 +206,20 @@ export const api = {
 
   async deleteRecord(id: number): Promise<void> {
     await request(`/api/records/${id}`, { method: 'DELETE' });
+  },
+
+  /** Импорт и выгрузка: все записи одним JSON (повтор — строкой с id «s12») */
+  async exportRecords(): Promise<string> {
+    const response = await request(`/api/transfer/export?client_time=${encodeURIComponent(isoWithOffset())}`, {});
+    return JSON.stringify(await json(response), null, 2);
+  },
+
+  /** apply: false — только предпросмотр «добавлю N, изменю M, удалю K» */
+  async importRecords(text: string, apply: boolean): Promise<TransferResult> {
+    const response = await request('/api/transfer/import', {
+      method: 'POST', timeout: 60000, body: { text, apply, client_time: isoWithOffset() },
+    });
+    return (await json(response)) as TransferResult;
   },
 
   async restoreRecord(id: number): Promise<RecordItem> {

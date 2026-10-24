@@ -13,7 +13,7 @@ from app.database import Base, engine, get_db
 from app.owner import CLIENT_ID_RE, clean_loop, ensure_sandbox, seed_sandbox
 from app import push
 from app import features
-from app.routers import auth, chat, client, records
+from app.routers import auth, chat, client, records, transfer
 from app.routers import push as push_router
 
 
@@ -75,6 +75,7 @@ app.include_router(chat.router)
 app.include_router(records.router)
 app.include_router(push_router.router)
 app.include_router(client.router)
+app.include_router(transfer.router)
 
 
 @app.get("/api/health")

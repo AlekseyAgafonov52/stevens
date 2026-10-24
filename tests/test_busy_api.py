@@ -18,7 +18,12 @@ DIALOG = [
                and first(r)["time"] == "09:00" and first(r)["end_time"] == "18:00" and first(r)["status"] is None
                and first(r)["repeat"] == {"weekdays": [0, 1, 2, 3, 4], "until": None}
                and "по будням с 09:00 до 18:00" in r["text"]),
-    ("пары по вторникам с 10 до 13:20 до июня", "created",
+    # Ещё раз то же — не дублируем
+    ("по будням работа с 9 до 18", "found", lambda r: "уже" in r["text"] and len(r["records"]) == 1),
+    # Занятость на занятость — спрашиваем, как со встречами: изменить одну или сохранить обе
+    ("пары по вторникам с 10 до 13:20 до июня", "conflict",
+     lambda r: "«Работа»" in r["text"] and labels(r)[:3] == ["Изменить новую", "Изменить «Работа»", "Сохранить обе"]),
+    ("сохрани обе", "created",
      lambda r: first(r)["type"] == "busy" and first(r)["text"] == "Пары" and first(r)["date"] == "2026-10-27"
                and first(r)["end_time"] == "13:20" and first(r)["repeat"]["until"] == "2027-05-31"),
     # Список: занятость не считается делом
@@ -52,7 +57,13 @@ DIALOG = [
      lambda r: first(r)["time"] == "11:00" and first(r)["end_time"] == "13:00"),
     # Без времени — спросим, с какого и до какого
     ("запиши занятость: учёба в понедельник", "clarify", lambda r: r["awaiting_reply"]),
-    ("с 8:30 до 14", "created",
+    ("с 8:30 до 14", "conflict", lambda r: "«Работа»" in r["text"]),
+    ("изменить новую", "clarify", lambda r: "Учёба" in r["text"] and r["awaiting_reply"]),
+    ("с 7:00 до 8:30 утра", "created",
+     lambda r: first(r)["type"] == "busy" and first(r)["date"] == "2026-10-26" and first(r)["time"] == "07:00"
+               and first(r)["end_time"] == "08:30"),
+    ("в понедельник с 8:30 до 14 занятость: учёба", "conflict", None),
+    ("оставь обе", "created",
      lambda r: first(r)["type"] == "busy" and first(r)["date"] == "2026-10-26" and first(r)["time"] == "08:30"
                and first(r)["end_time"] == "14:00"),
     # «Учёба с понедельника по пятницу с 9 до 15» — повтор по будням

@@ -13,13 +13,14 @@ import { goAuth, logout } from '../state/session';
 import { useApp } from '../state/store';
 import { Menu } from './Menu';
 import { Modal } from './Modal';
+import { TransferScreen } from './TransferScreen';
 
 export function Header() {
   const mode = useApp((s) => s.mode);
   const login = useApp((s) => s.login);
   const empty = useApp((s) => s.messages.length === 0);
   const busy = useApp((s) => s.waiting || s.recording);
-  const [dialog, setDialog] = useState<'new' | 'reset' | null>(null);
+  const [dialog, setDialog] = useState<'new' | 'reset' | 'transfer' | null>(null);
   const canInstall = useCanInstall();
   // В окне приложения справа кнопки окна и значки браузера — свои кнопки ставим слева, «Stevens» остаётся по центру окна
   const titlebar = useTitlebarMode();
@@ -37,9 +38,13 @@ export function Header() {
          onSelect: () => void (notifyOn ? disableNotify() : enableNotify()) }]
     : [];
 
+  // Импорт и выгрузка: все записи одним JSON — для обработки в другой ИИ
+  const transferItem = { label: T.menu_transfer, onSelect: () => setDialog('transfer') };
+
   const sandboxItems = [
     ...sandboxMenuExtra(T.menu_tour),
     ...notifyItem,
+    transferItem,
     { label: T.menu_reset_sandbox, onSelect: () => setDialog('reset') },
     ...installItem,
     ...(features.auth ? [{ label: T.menu_go_auth, onSelect: goAuth }] : []),
@@ -62,7 +67,7 @@ export function Header() {
       {mode === 'account' && features.auth && (
         <Menu
           heading={login ?? ''}
-          items={[...notifyItem, ...installItem, { label: T.menu_logout, onSelect: logout }]}
+          items={[...notifyItem, transferItem, ...installItem, { label: T.menu_logout, onSelect: logout }]}
           trigger={({ open, toggle }) => (
             <button type="button" className="avatar" aria-label={T.profile_label} aria-haspopup="menu" aria-expanded={open} onClick={toggle}>
               {(login ?? '?').charAt(0).toUpperCase()}
@@ -106,6 +111,7 @@ export function Header() {
           onConfirm={() => { setDialog(null); newDialog(); }}
         />
       )}
+      {dialog === 'transfer' && <TransferScreen onClose={() => setDialog(null)} />}
       {dialog === 'reset' && (
         <Modal
           title={T.reset_title}

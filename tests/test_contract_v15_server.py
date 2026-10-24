@@ -69,8 +69,10 @@ async def main():
             events = (await db.execute(select(ClientLog.event))).scalars().all()
             check("client_log пишется", "mic_failed" in events, events)
             meeting = await db.get(Record, rec["id"])
-            body = json.loads(push.payload(meeting))["body"]
-            check("пуш встречи: «Через полчаса у вас встреча.»", body == "Через полчаса у вас встреча.\nВстреча с Олегом", body)
+            data = json.loads(push.payload(meeting))
+            body = (data["title"], data["body"])
+            check("пуш встречи: заголовок — текст, ниже «Через полчаса у вас встреча.»",
+                  body == ("Встреча с Олегом", "Через полчаса у вас встреча."), body)
             check("встреча звонит за remind_before", (push.fire_at(meeting, push.zone("Europe/Moscow")).strftime("%H:%M")) == "14:30")
     print("fails:", fails)
     sys.exit(1 if fails else 0)

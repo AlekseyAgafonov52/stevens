@@ -385,6 +385,11 @@ async def process_draft(ctx: Ctx, draft: dict) -> dict:
             button_action("Нет", "confirm_no", style="secondary"),
         ])
 
+    # Занятость на занятость: такая же уже есть — не дублируем; пересекается — спрашиваем, как со встречами
+    if kind == "busy" and not draft.get("busy_ok"):
+        if answer := await busy_clash(ctx, draft):
+            return answer
+
     # Встреча попадает на занятость: «В это время у вас «Работа» (09:00–18:00)»
     if kind == "meeting" and not draft.get("keep_both") and not draft.get("busy_ok"):
         start = minutes(draft["time"])
@@ -426,6 +431,51 @@ async def process_draft(ctx: Ctx, draft: dict) -> dict:
                          buttons=buttons + [button_action("Оставить обе", "keep_both"), CANCEL])
 
     return await save(ctx, draft)
+
+
+def busy_days(ctx: Ctx, draft: dict) -> list[str]:
+    """Дни, где новая занятость встанет: один день или первая неделя повтора."""
+    first = parse_date(draft["date"])
+    if not draft.get("repeat"):
+        return [first.isoformat()]
+    until = parse_date(draft["repeat"].get("until"))
+    days = [first + timedelta(days=k) for k in range(7)]
+    return [d.isoformat() for d in days if d.weekday() in draft["repeat"]["days"] and (not until or d <= until)]
+
+
+async def busy_clash(ctx: Ctx, draft: dict) -> dict | None:
+    """«Работа по вторникам с 16:40 до 19:50» второй раз — «уже есть»; пересечение с другой занятостью — вопрос."""
+    days = busy_days(ctx, draft)
+    if not days:
+        return None
+    rows = await owner_records(ctx, Record.type == TaskType.busy, Record.date.in_(days), Record.time.is_not(None))
+    start, end = minutes(draft["time"]), minutes(draft["end_time"])
+    end = end if end > start else 24 * 60
+    same = [r for r in rows if r.text.lower() == draft["text"].lower() and r.time == draft["time"]
+            and (r.end_time or "") == draft["end_time"]]
+    if {r.date for r in same} >= set(days):
+        # Такая занятость уже есть во все эти дни — второй раз не записываем
+        ctx.conv.pending = None
+        record = sorted(same, key=moment)[0]
+        ctx.conv.focus = record.id
+        remember_shown(ctx, [record])
+        data = record.to_contract()
+        values, speech_values = ctx.record_values(data)
+        text, speech = ctx.say("busy_exists", values, speech_values)
+        return reply("found", text, speech, records=[data], total=1)
+    overlap = [r for r in rows if r not in same and span(r)[0] < end and start < span(r)[1]]
+    if not overlap:
+        return None
+    overlap = one_per_series(sorted(overlap, key=moment), ctx.now)
+    ctx.conv.pending = Pending("conflict", {**draft, "busy_clash": True})
+    first = overlap[0]
+    text, speech = ctx.say("conflict_busy_busy", {"text": first.text, "time": first.time, "end": first.end_time or ""})
+    records = [draft_record(draft, ["draft"])] + [r.to_contract(marks=["conflict"]) for r in overlap]
+    buttons = [button_action("Изменить новую", "change_new_time")]
+    if len(overlap) == 1:
+        buttons.append(button_action(f"Изменить «{first.text}»", "move_existing", first.id))
+    return reply("conflict", text, speech, records=records, awaiting=True,
+                 buttons=buttons + [button_action("Сохранить обе", "keep_both"), CANCEL])
 
 
 DENSE_MINUTES = 30  # порог плотного графика из отчёта аналитика: 12% пар встреч
@@ -1494,8 +1544,13 @@ async def focused(ctx: Ctx, p: nlu.Parse, types: set[str] | None = None) -> list
                        key=lambda r: order[r.id])
         if p.filter_type:
             found = [r for r in found if r.type.value == p.filter_type] or found
+        if found and p.ordinal is not None:
+            # «Удали первую» после списка — запись под этим номером в показанном
+            return found[p.ordinal:p.ordinal + 1]
         if found:
             return found
+    if p.ordinal:
+        return []  # «удали вторую», а показана одна запись
     record = await owned_record(ctx, ctx.conv.focus)
     if record and record.deleted_at is None and (not types or record.type.value in types):
         return [record]
@@ -1523,6 +1578,10 @@ async def answer_delete(ctx: Ctx, p: nlu.Parse) -> dict:
         if len(near) == 1 or only_series(ctx, near):
             return await delete_record(ctx, only_series(ctx, near) or near[0], p)
         return which_one(ctx, near, "delete")
+    if p.ordinal is not None and not p.keywords:
+        # «Удали пятую», а показано две — ничего не трогаем
+        text, speech = ctx.say("found_none")
+        return reply("found", text, speech, total=0)
     if not (p.keywords or p.date or p.filter_type):
         # Просто «удали» сразу после записи — её, «Вернуть» под ответом
         focus = await owned_record(ctx, ctx.conv.focus)
@@ -2314,7 +2373,10 @@ async def handle_action(ctx: Ctx, action_id: str, record_id: int | None) -> dict
         return await keep_anyway(ctx, pending.draft)
     if action_id == "change_new_time" and pending and pending.kind == "conflict":
         ctx.conv.pending = Pending("new_time", {**pending.draft, "time": None, "end_time": None, "busy_clash": False})
-        text, speech = ctx.say("conflict_new_time")
+        if pending.draft["type"] == "busy":
+            text, speech = ctx.say("conflict_new_time_busy", {"text": pending.draft["text"]})
+        else:
+            text, speech = ctx.say("conflict_new_time")
         return reply("clarify", text, speech, awaiting=True, buttons=[CANCEL])
     if action_id == "move_existing" and pending and pending.kind == "conflict":
         # «Перенести существующую»: спрашиваем новое время для неё, новую встречу держим
@@ -2469,12 +2531,12 @@ UNDO_ACTIONS = ("undo", "restore", "restore_all")
 UNDO_RE = re.compile(r"^(?:отмени(?:ть)?(?:\s+(?:это|последнее|вс[её]))?|отмена|верни(?:те)?(?:\s+(?:обратно|назад|как\s+было"
                      r"|вс[её]|это|е[её]|его|их))*)[\s.!]*$", re.I)
 # «Другое время», «давай другое время» на конфликт встреч — как кнопка «Другое время для новой»
-OTHER_TIME_RE = re.compile(r"^(?:(?:да|давай|ну|тогда)[\s,]+)*(?:друго[ей]|ино[ей]|поменяй|смени|измени)(?:\s+(?:время|час))?"
-                           r"(?:\s+(?:для\s+)?новой)?[\s.!]*$", re.I)
+OTHER_TIME_RE = re.compile(r"^(?:(?:да|давай|ну|тогда)[\s,]+)*(?:друго[ей]|ино[ей]|поменя(?:й|ть)|смени(?:ть)?|измени(?:ть)?)(?:\s+(?:время|час))?"
+                           r"(?:\s+(?:для\s+)?нов(?:ой|ую|ое|ую\s+занятость))?[\s.!]*$", re.I)
 # «Оставь обе» на конфликт встреч
 ANYWAY_RE = re.compile(r"^(?:(?:да|ну|ок|ладно)[\s,]+)*(?:вс[её]\s+равно|да|ок|ладно|записывай|запиши|ставь|поставь|ничего)"
                        r"(?:[\s,]+(?:записывай|запиши|ставь|поставь|страшного))?[\s.!]*$", re.I)
-KEEP_BOTH_RE = re.compile(r"^(?:(?:да|ну)[\s,]+)?(?:оставь|оставляй|оставить|пусть\s+будут|сохрани)?\s*(?:обе|оба|обе\s+встречи|вместе)\b", re.I)
+KEEP_BOTH_RE = re.compile(r"^(?:(?:да|ну)[\s,]+)?(?:оставь|оставляй|оставить|пусть\s+будут|сохрани(?:ть)?)?\s*(?:обе|оба|обе\s+встречи|вместе)\b", re.I)
 # «А теперь на 12», «лучше в субботу» — перенос записи, о которой шла речь
 FOLLOW_MOVE_RE = re.compile(r"^(?:(?:а|ну|ой|нет|не)[\s,]+)*(?:(?:лучше|тогда|теперь|давай|можно|пусть)[\s,]+)+(?:будет\s+)?"
                             r"(?=(?:на|в|во|завтра|послезавтра|сегодня)\b)", re.I)

@@ -84,8 +84,9 @@ function chime(): void {
 
 const keyOf = (record: RecordItem) => `${record.id}@${record.date}T${record.time}`;
 
-/** Системное уведомление через service worker: так оно не пропадает и склеивается с пушем */
-async function systemNotify(body: string, tag: string, recordId: number): Promise<void> {
+/** Системное уведомление через service worker: так оно не пропадает и склеивается с пушем.
+ *  Заголовок — сам текст записи, без «Позвольте напомнить»; у встречи ниже — через сколько */
+async function systemNotify(title: string, body: string, tag: string, recordId: number): Promise<void> {
   const options = {
     body, tag, icon: '/icon-192.png', badge: '/icon-192.png', requireInteraction: true, renotify: true,
     data: { recordId },
@@ -95,7 +96,7 @@ async function systemNotify(body: string, tag: string, recordId: number): Promis
   try {
     const registration = await navigator.serviceWorker?.getRegistration();
     if (registration) {
-      await registration.showNotification('Stevens', options);
+      await registration.showNotification(title, options);
       return;
     }
   } catch {
@@ -103,7 +104,7 @@ async function systemNotify(body: string, tag: string, recordId: number): Promis
   }
   try {
     // Без service worker кнопок не бывает — только клик
-    const n = new Notification('Stevens', { ...options, actions: undefined } as NotificationOptions);
+    const n = new Notification(title, { ...options, actions: undefined } as NotificationOptions);
     n.onclick = () => { window.focus(); n.close(); };
   } catch {
     /* браузер не дал показать */
@@ -185,7 +186,9 @@ function fire(record: RecordItem, key: string): void {
   if (document.visibilityState === 'visible') showNotifyCard(record);
   else {
     remindInFeed([record], title); // вернётся на вкладку — увидит в ленте
-    if (notifyGranted() && record.id !== null) void systemNotify(`${title}\n${record.text}`, key, record.id);
+    if (notifyGranted() && record.id !== null) {
+      void systemNotify(record.text, record.type === 'meeting' ? title : '', key, record.id);
+    }
   }
 }
 
@@ -220,7 +223,7 @@ function snoozeHere(id: number): void {
       if (document.visibilityState === 'visible') showNotifyCard(record, true);
       else {
         remindInFeed([record], T.remind_again);
-        if (notifyGranted()) void systemNotify(`${T.remind_again}\n${record.text}`, keyOf(record), id);
+        if (notifyGranted()) void systemNotify(record.text, '', keyOf(record), id);
       }
     });
   }, SNOOZE_MS);

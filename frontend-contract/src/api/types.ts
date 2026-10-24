@@ -204,6 +204,32 @@ export interface RecordResponse {
 
 // DELETE /api/records/{id} → 204 (мягкое удаление)
 
+// ── Импорт и выгрузка: GET /api/transfer/export, POST /api/transfer/import ──
+
+/** Строка выгрузки: запись (id — число) или повтор (id «s12», repeat, from). Новая — без id */
+export interface TransferItem {
+  id?: number | string | null;
+  type: RecordType;
+  text: string;
+  date?: LocalDate | null;
+  time?: LocalTime | null;
+  end_time?: LocalTime | null;
+  status?: 'open' | 'done';
+  repeat?: { weekdays: number[]; until: LocalDate | null };
+  from?: LocalDate;
+}
+
+/** Ответ импорта: что сделаю (apply: false) или сделал (apply: true); строки с ошибками пропускаются */
+export interface TransferResult {
+  applied: boolean;
+  add: number;
+  update: number;
+  delete: number;
+  unchanged: number;
+  errors: { index: number; text: string | null; error: string }[];
+  items: { action: 'add' | 'update' | 'delete'; record: TransferItem; before?: TransferItem }[];
+}
+
 /** Заголовок POST /api/chat со включёнными допами, которым нужен бэк. Не слать, если список пуст */
 export type BackendFeature = 'd2' | 'd3' | 'd10';
 export const FEATURES_HEADER = 'X-Stevens-Features';

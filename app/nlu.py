@@ -19,6 +19,7 @@ E = "[её]"  # «ё» и «е» пишут вперемешку
 WEEKDAYS = {
     "понедельник": 0, "вторник": 1, "сред": 2, "четверг": 3, "пятниц": 4, "суббот": 5, "воскресень": 6,
 }
+WEEKDAY_SHORT = ["пн", "вт", "ср", "чт", "пт", "сб", "вс"]
 WEEKDAY_RE = r"(понедельник\w?|вторник\w?|сред[ауеы]|четверг\w?|пятниц[ауеы]|суббот[ауеы]|воскресень[еяю])"
 MONTH_RE = r"(январ[яь]|феврал[яь]|март[а]?|апрел[яь]|ма[яй]|июн[яь]|июл[яь]|август[а]?|сентябр[яь]|октябр[яь]|ноябр[яь]|декабр[яь])"
 MONTH_PREP_RE = r"(январе|феврале|марте|апреле|мае|июне|июле|августе|сентябре|октябре|ноябре|декабре)"
@@ -53,6 +54,7 @@ STOPWORDS = {
     "сдвинь", "подвинь", "поменяй", "измени", "отредактируй", "отредактируйте", "редактируй", "отредактировать", "выполненными", "время", "дату", "позже", "раньше", "выполненной", "готово",
     "убери", "убрать", "сотри", "стереть", "очисти", "удалите", "всех", "дни", "дней", "день", "дел", "время",
     "записей", "ней", "нему", "неё", "него", "этой", "этому", "из", "переименуй", "назови", "сделай",
+    "занятость", "занятости", "занятостей", "занятостью",
     "заметку", "заметка", "заметки", "заметок", "заметках", "идею", "идея", "идеи", "идей", "мысль", "мысли",
 }
 
@@ -110,6 +112,7 @@ class Parse:
     time_guess: str | None = None  # create: «утром» без часа — время поставили сами (day_part)
     part_word: str | None = None  # create: «утро» / «день» / «вечер» для day_part_set
     doubt: list[dict] = field(default_factory=list)  # create: почему разбор неуверенный — спросим «Верно понял?»
+    ordinal: int | None = None  # delete / complete / move: «удали первую» после списка — индекс показанной (−1 — последняя)
     end_time: str | None = None  # «с 9 до 18»: до скольки (у занятости, у встречи — если сказали)
 
 
@@ -505,6 +508,17 @@ def _parse_date(text: str, now: datetime, time: str | None) -> _DateInfo:
             start += timedelta(days=7)
             label = "на следующих выходных"
         found(m, period=Period(max(start, today), start + timedelta(days=1), label, label))
+    # «В ближайшие 10 дней», «на следующие три дня», «в ближайшие две недели», «в ближайшие дни» — от сегодня
+    m = re.search(rf"\b(?:на|в|за)\s+(?:ближайш|следующ)(?:ие|их)\s+(?:({_NUM})\s+)?(дн(?:я|ей|и)|недел(?:и|ь|ю))\b", text, I)
+    if m and not info.period:
+        count = int(_number(m.group(1))) if m.group(1) else (7 if m.group(2).lower().startswith("дн") else 2)
+        days = count * (7 if m.group(2).lower().startswith("недел") else 1)
+        if 1 <= days <= 92:
+            end = today + timedelta(days=days - 1)
+            word = "день" if days % 10 == 1 and days % 100 != 11 else \
+                "дня" if days % 10 in (2, 3, 4) and days % 100 not in (12, 13, 14) else "дней"
+            label = f"в ближайшие {days} {word}"
+            found(m, period=Period(today, end, label, label))
 
     # Конкретный день
     if not info.date:
@@ -513,9 +527,10 @@ def _parse_date(text: str, now: datetime, time: str | None) -> _DateInfo:
             shift = {"позавчера": -2, "вчера": -1, "сегодня": 0, "завтра": 1, "послезавтра": 2}[m.group(1).lower()]
             found(m, today + timedelta(days=shift))
     if not info.date:
-        m = re.search(rf"\b(?:в|во|на)\s+(прошл(?:ый|ую|ое)|следующ(?:ий|ую|ее)|эт(?:от|у|о))?\s*{WEEKDAY_RE}\b", text, I)
+        # «Во вторник», «в следующую пятницу», сокращённо «во вт», «в пт»
+        m = re.search(rf"\b(?:в|во|на)\s+(прошл(?:ый|ую|ое)|следующ(?:ий|ую|ее)|эт(?:от|у|о))?\s*(?:{WEEKDAY_RE}|(пн|вт|ср|чт|пт|сб|вс))\b", text, I)
         if m:
-            target = _weekday_index(m.group(2))
+            target = _weekday_index(m.group(2)) if m.group(2) else WEEKDAY_SHORT.index(m.group(3).lower())
             which = (m.group(1) or "").lower()
             if which.startswith("прошл"):
                 delta = (today.weekday() - target) % 7 or 7
@@ -527,6 +542,14 @@ def _parse_date(text: str, now: datetime, time: str | None) -> _DateInfo:
                 # Сегодняшний день недели, но время уже прошло — значит, через неделю
                 if day == today and time and time <= now.strftime("%H:%M"):
                     day += timedelta(days=7)
+            # «В четверг 29 октября» — число важнее дня недели, и оба слова убираем из текста
+            exact = re.match(rf"\s*,?\s*(\d{{1,2}})\s+{MONTH_RE}\b", text[m.end():], I)
+            if exact:
+                try:
+                    day = _near_year(date(today.year, _month_index(exact.group(2)) + 1, int(exact.group(1))), today)
+                    info.spans.append((m.end(), m.end() + exact.end()))
+                except ValueError:
+                    pass
             found(m, day)
     if not info.date:
         m = re.search(rf"\b(?:на\s+)?(\d{{1,2}})\s+{MONTH_RE}(?:\s+(\d{{4}}))?\b", text, I)
@@ -809,6 +832,19 @@ NEXT_RE = re.compile(r"\b(?:ближайш|следующ)\w*\s+(?:\w+\s+)?(?:в
 REPEATS_LIST_RE = re.compile(r"^(?:покажи|какие|список|мои|все|что\s+за)\b(?:\s+(?:у\s+меня|мои|все))*\s+(?:повтор\w*|регулярн\w*)"
                              r"|^что\s+(?:у\s+меня\s+)?(?:повторя\w*|регулярно)", I)
 UNDATED_RE = re.compile(r"\bбез\s+(?:срока|сроков|даты|дат|дедлайна)\b", I)
+# «Удали первую», «перенеси вторую встречу», «отметь третью» — по номеру из только что показанного списка
+ORDINAL_RE = re.compile(r"\b(перв(?:ую|ый|ое|ая|ой)|втор(?:ую|ой|ое|ая)|трет(?:ью|ья|ье|ий)|четв[её]рт(?:ую|ый|ое|ая)"
+                        r"|пят(?:ую|ый|ое|ая))\b", I)
+
+
+def ordinal_of(text: str) -> tuple[int, tuple[int, int]] | None:
+    m = ORDINAL_RE.search(text)
+    if not m:
+        return None
+    word = m.group(1).lower()
+    return next(i for i, stem in enumerate(("перв", "втор", "трет", "четв", "пят")) if word.startswith(stem)), m.span()
+
+
 TYPE_BY_STEM = {"задач": "task", "напомин": "reminder", "встреч": "meeting"}
 SHIFT_RE = re.compile(r"\bна\s+(полчаса|(\d+)?\s*час\w*|(\d+)\s*минут\w*)\s+(позже|раньше)\b", I)
 ALL_RE = re.compile(r"\b(?:вс[её]|всех)\b", I)
@@ -1254,9 +1290,13 @@ def parse(raw: str, now: datetime) -> Parse:
             counts = {"обе": 2, "оба": 2, "обеих": 2, "обоих": 2, "две": 2, "два": 2, "три": 3, "четыре": 4, "пять": 5}
             result.group_count = next((counts[w] for w in group[0].lower().split() if w in counts), None)
             spans.append(group.span())
+        if (order := ordinal_of(_cut(text, spans))) and not result.group:
+            result.ordinal = order[0]
+            spans.append(order[1])
         rest = _cut(text, spans)
         result.keywords, result.required = search_keywords(rest, result.filter_type)
-        result.ref = bool(REF_RE.search(rest)) or bool(DONE_RE.search(lower)) or result.group
+        result.ref = bool(REF_RE.search(rest)) or bool(DONE_RE.search(lower)) or result.group \
+            or (result.ordinal is not None and not result.keywords)
         result.bulk = bool(BULK_RE.search(lower)) and not result.group
         if not all_days:
             result.date = info.date
@@ -1284,6 +1324,9 @@ def parse(raw: str, now: datetime) -> Parse:
                 h = int(hour.group(1))
                 time = f"{h + 12 if 1 <= h <= 7 else h:02d}:00"
                 spans.append(hour.span())
+        if order := ordinal_of(_cut(text, spans)):
+            result.ordinal = order[0]
+            spans.append(order[1])
         result.keywords, result.required = search_keywords(_cut(text, spans), result.filter_type)
         result.ref = bool(REF_RE.search(lower)) or not result.keywords
         result.date, result.time = info.date, time
@@ -1411,7 +1454,8 @@ def parse(raw: str, now: datetime) -> Parse:
     is_meeting = bool(re.search(MEETING_WORD_RE, lower))
     has_verb = bool(CREATE_VERB_RE.search(lower))
     has_need = bool(re.search(r"\b(нужно|надо|необходимо|не\s+забыть|должен|должна|должны|пора)\b", lower))
-    is_task_word = bool(re.search(r"^(?:поставь|запиши|добавь|создай)\s+задач", lower))
+    # «Задача: диплом», «сделай задачу: диплом», «задача почитать книгу», «новая задача — отчёт»
+    is_task_word = bool(re.search(r"^(?:(?:поставь|запиши|добавь|создай|сделай|заведи)\s+)?(?:нов\w+\s+)?задач[уа]?\b", lower))
     if text.rstrip().endswith("?") and not (has_verb or has_need or is_meeting):
         return result  # вопрос без «напомни/запиши» — не создаём задачу «Сколько дел ?»
     # «Купить хлеб», «позвонить в банк» — голое дело без срока, как в списке покупок
@@ -1445,7 +1489,9 @@ def parse(raw: str, now: datetime) -> Parse:
 
     body = _cut(text, info.spans + time_spans)
     body = re.sub(r"^\s*(?:пожалуйста\s+)?(?:напомни(?:те)?|поставь|запиши|добавь|создай|запланируй|назначь|внеси|заведи)(?:\s+мне)?\b", " ", body, flags=I)
-    body = re.sub(r"^\s*(?:новую\s+|новое\s+)?(?:задачу|задача|напоминание)\b", " ", body, flags=I)
+    if is_task_word:
+        body = re.sub(r"^\s*сделай\b", " ", body, flags=I)
+    body = re.sub(r"^\s*(?:новую\s+|новое\s+|новая\s+)?(?:задачу|задача|задачи|напоминание)\b", " ", body, flags=I)
     body = re.sub(r"\b(?:у\s+меня|мне|нужно|надо|необходимо|не\s+забыть|пожалуйста)\b", " ", body, flags=I)
     body = strip_fillers(body)
     body = re.sub(r"\b(?:утром|вечером|днём|днем)\b", " ", body, flags=I)
