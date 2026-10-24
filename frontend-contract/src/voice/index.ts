@@ -75,7 +75,16 @@ const ERRORS: Record<string, VoiceError> = {
 /** Строки в консоли браузера (F12) — по ним видно, почему не слышит */
 const log = (...args: unknown[]) => console.info('[Stevens · микрофон]', ...args);
 
-const isSafari = () => typeof navigator !== 'undefined' && /^((?!chrome|chromium|android|crios|fxios|edg).)*safari/i.test(navigator.userAgent);
+/**
+ * Safari и всё на айфоне: там любой браузер — тот же WebKit. Приложение с экрана «Домой» (PWA) не пишет
+ * «Safari» в userAgent, поэтому айфон и айпад узнаём отдельно (айпад притворяется Mac, но у него есть касания)
+ */
+const isSafari = () => {
+  if (typeof navigator === 'undefined') return false;
+  const ua = navigator.userAgent;
+  if (/iPhone|iPad|iPod/i.test(ua) || (/Macintosh/i.test(ua) && navigator.maxTouchPoints > 1)) return true;
+  return /^((?!chrome|chromium|android|crios|fxios|edg).)*safari/i.test(ua);
+};
 
 function ctor(): RecognitionCtor | null {
   const w = window as unknown as { SpeechRecognition?: RecognitionCtor; webkitSpeechRecognition?: RecognitionCtor };
@@ -110,13 +119,17 @@ if (typeof navigator !== 'undefined' && navigator.permissions?.query) {
     })
     .catch(() => undefined);
 }
+/** Фоновая запись подряд закрылась сразу после запуска, ничего не услышав */
+let quickEnds = 0;
+const QUICK_END_MS = 1500;
+const QUICK_END_LIMIT = 4;
 /** Фоновая запись, которая ещё ждёт имя */
 let armedRec: Recognition | null = null;
 let armedEnded: Promise<void> | null = null;
 let wantArmed = false;
 let rearmTimer: ReturnType<typeof setTimeout> | undefined;
 /** Фраза, которую Стивенс сейчас говорит вслух, и есть ли в ней имя */
-let echoHasName = false;
+let echoNames = 0;
 let echoHeard = false;
 /** Пока он говорит, фоновая запись что-то услышала — это его голос, после фразы начинаем запись заново */
 let echoOn = false;
@@ -185,6 +198,10 @@ function piecesOf(event: RecognitionEvent): string[] {
   return pieces;
 }
 
+function countNames(text: string): number {
+  return text.match(new RegExp(WAKE_WORD.source, 'gi'))?.length ?? 0;
+}
+
 /** В каком куске имя: всё, что было до этого куска (его же озвучка, чужая речь), во фразу не попадает */
 function wakePiece(pieces: string[]): number {
   for (let i = 0; i < pieces.length; i += 1) {
@@ -227,6 +244,10 @@ function arm(inGesture = false): void {
   let woke = false;
   /** С какого куска распознанного начинается фраза после имени */
   let wakeFrom = 0;
+  /** Сколько имён до того, что его позвало (его же фраза с именем в том же куске) */
+  let skipNames = 0;
+  const startedAt = Date.now();
+  let heardAny = false;
   let resolveEnded: () => void = () => undefined;
   armedEnded = new Promise((resolve) => { resolveEnded = resolve; });
 
@@ -238,18 +259,21 @@ function arm(inGesture = false): void {
 
   rec.onresult = (event) => {
     const pieces = piecesOf(event);
+    if (pieces.some(Boolean)) heardAny = true;
     if (!woke) {
       if (echoOn && pieces.some(Boolean)) echoAny = true;
       const hit = WAKE_WORD.exec(pieces.join(' '));
       if (!hit) return;
-      if (echoHasName) {
-        // Скорее всего, это он сам себя услышал из динамиков
+      // Имён в услышанном не больше, чем в его фразе, — скорее всего, он сам себя услышал из динамиков.
+      // Больше — значит, его перебил человек: «Стивс» срабатывает, даже если в его фразе тоже есть имя
+      if (echoOn && countNames(pieces.join(' ')) <= echoNames) {
         echoHeard = true;
         return;
       }
       // Имя услышано: эта запись становится обычной
       woke = true;
       wakeFrom = Math.max(0, wakePiece(pieces));
+      skipNames = Math.max(0, countNames(pieces.slice(wakeFrom).join(' ')) - 1);
       armedRec = null;
       emit('armed', false);
       recognition = rec;
@@ -269,8 +293,9 @@ function arm(inGesture = false): void {
     }
     // Браузер может переписать уже распознанное и потерять имя — тогда берём от того же куска, а не весь текст
     const tail = pieces.slice(wakeFrom).join(' ');
-    const hit = WAKE_WORD.exec(tail);
-    const shown = (hit ? tail.slice(hit.index + hit[0].length) : tail).replace(/\s+/g, ' ').trim();
+    const hits = [...tail.matchAll(new RegExp(WAKE_WORD.source, 'gi'))];
+    const hit = hits[Math.min(skipNames, hits.length - 1)];
+    const shown = (hit ? tail.slice((hit.index ?? 0) + hit[0].length) : tail).replace(/\s+/g, ' ').trim();
     if (event.results[event.results.length - 1]?.isFinal && isCancel(shown)) {
       log('отмена голосом');
       cancelled = true;
@@ -314,8 +339,15 @@ function arm(inGesture = false): void {
     }
     clearTimeout(rearmTimer);
     if (!wantArmed) return;
-    if (refusedOutsideGesture) armOnNextGesture();
-    else rearmTimer = setTimeout(arm, 400);
+    // Браузер раз за разом сразу закрывает запись (так бывает в Safari и в приложении на айфоне) —
+    // перезапускаем всё реже, а после нескольких раз ждём касания: иначе страница зависает
+    quickEnds = !woke && !heardAny && Date.now() - startedAt < QUICK_END_MS ? quickEnds + 1 : 0;
+    if (quickEnds >= QUICK_END_LIMIT) {
+      log('запись сразу закрывается — жду касания');
+      quickEnds = 0;
+      armOnNextGesture();
+    } else if (refusedOutsideGesture) armOnNextGesture();
+    else rearmTimer = setTimeout(arm, 400 * 2 ** quickEnds);
   };
   let refusedOutsideGesture = false;
   // Фоновая запись запустилась — микрофон разрешён, автослушание (Д13) после ответа можно включать
@@ -541,7 +573,7 @@ export const voice = {
   /** Что Стивенс говорит вслух (null — замолчал). Его голос из динамиков не должен звать его самого */
   setEcho(text: string | null): void {
     const wasHeard = echoHeard || echoAny;
-    echoHasName = !!text && WAKE_WORD.test(text);
+    echoNames = text ? countNames(text) : 0;
     echoHeard = false;
     echoOn = !!text;
     if (text) return;

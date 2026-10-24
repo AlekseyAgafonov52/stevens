@@ -84,6 +84,30 @@ test('своё имя из динамиков не зовёт Стивенса, 
   vi.useRealTimers();
 });
 
+test('его фраза с именем: «Стивс» поверх неё всё равно перебивает', async () => {
+  vi.useFakeTimers();
+  const events: string[] = [];
+  const off = voice.on('wake', () => events.push('wake'));
+  voice.setArmed(true);
+  vi.advanceTimersByTime(500);
+  const rec = FakeRec.last!;
+  voice.setEcho('Слушаю. Стивенс к вашим услугам, что записать?');
+  rec.say('слушаю стивенс к вашим услугам');
+  expect(events).toEqual([]);
+  const finals: string[] = [];
+  const offFinal = voice.on('final', (t) => finals.push(t));
+  rec.say('слушаю стивенс к вашим услугам Стивс, завтра в 10 созвон');
+  expect(events).toEqual(['wake']);
+  vi.advanceTimersByTime(2000);
+  expect(finals).toEqual(['завтра в 10 созвон']);
+  off();
+  offFinal();
+  voice.setEcho(null);
+  voice.setArmed(false);
+  await vi.advanceTimersByTimeAsync(700);
+  vi.useRealTimers();
+});
+
 test('пока Стивенс говорит фразу без имени, «Стивс» зовёт его', () => {
   vi.useFakeTimers();
   const events: string[] = [];

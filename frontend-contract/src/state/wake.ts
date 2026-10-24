@@ -1,7 +1,8 @@
 /**
  * Вызов по имени «Стивенс» без кнопки микрофона. По умолчанию выключен, выбор хранится в браузере.
  * Слушаем фоном, только когда Stevens свободен: не пишем голос, не ждём ответ, вкладка открыта.
- * Пока он говорит вслух, тоже слушаем: «Стивс» обрывает озвучку и включает запись (кроме Safari).
+ * Пока он говорит вслух, тоже слушаем: «Стивс» обрывает озвучку и включает запись (кроме Safari),
+ * даже при выключенном вызове по имени, если микрофон уже разрешён.
  * Сам себя он не позовёт: имя из его же фразы не ловим (voice.setEcho).
  */
 import { storage } from '../storage';
@@ -16,7 +17,9 @@ function update(inGesture = false): void {
   const s = store.get();
   const free = s.screen === 'app' && !s.waiting && !s.recording && (!isSpeaking() || voice.canBargeIn())
     && (typeof document === 'undefined' || document.visibilityState === 'visible');
-  voice.setArmed(wakeStore.get().enabled && free, inGesture);
+  // Перебить по имени можно и с выключенным вызовом: пока он говорит, а микрофон уже разрешён
+  const bargeIn = isSpeaking() && voice.hasPermission();
+  voice.setArmed((wakeStore.get().enabled || bargeIn) && free, inGesture);
 }
 
 export function setWakeWord(on: boolean): void {
