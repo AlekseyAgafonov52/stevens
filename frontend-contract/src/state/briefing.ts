@@ -34,15 +34,26 @@ function markSeen(): void {
 
 let checking = false;
 
+/** Чьи дела считаем: песочница или аккаунт. Сменился — старое число чужое */
+function ownerKey(): string | null {
+  const s = store.get();
+  if (s.screen !== 'app' || s.server !== 'ok') return null;
+  return s.mode === 'account' ? `a:${s.userId ?? ''}` : 'sandbox';
+}
+
 /** Был долгий перерыв — смотрим, есть ли дела на сегодня */
 async function checkOffer(awaySince: number | null): Promise<void> {
   if (checking || (awaySince !== null && Date.now() - awaySince < AWAY_MS)) return;
   checking = true;
+  const owner = ownerKey();
   try {
     const day = today();
     const records = await api.records(day, day);
-    const count = records.filter((r) => r.status !== 'done' && !r.marks.includes('deleted')).length;
-    if (count > 0) briefingStore.set({ offer: { count } });
+    // Считаем как сервер в брифинге: без выполненных, занятости и заметок
+    const count = records.filter((r) => r.status !== 'done' && !r.marks.includes('deleted')
+      && r.type !== 'busy' && r.type !== 'note').length;
+    // Пока ждали ответ, вошли в другой аккаунт — это число уже не его
+    if (count > 0 && ownerKey() === owner) briefingStore.set({ offer: { count } });
   } catch {
     /* без предложения */
   } finally {
@@ -62,11 +73,18 @@ export function initBriefing(): void {
   // Время прошлого визита берём до того, как отметим нынешний
   const previous = storage.lastSeen();
   let started = false;
+  let owner: string | null = null;
   store.subscribe(() => {
-    const s = store.get();
-    if (started || s.screen !== 'app' || s.server !== 'ok') return;
+    const key = ownerKey();
+    if (key === owner || (key === null && store.get().screen === 'app')) return;
+    // Вышли или зашли под другим: плашка с прошлыми делами уходит, считаем заново
+    const first = owner === null && !started;
+    owner = key;
+    briefingStore.set({ offer: null });
+    if (key === null) return;
+    void checkOffer(first ? previous : null);
+    if (started) return;
     started = true;
-    void checkOffer(previous);
     markSeen();
     setInterval(() => document.visibilityState === 'visible' && markSeen(), SEEN_EVERY_MS);
   });
