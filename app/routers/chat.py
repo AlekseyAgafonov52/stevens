@@ -2396,6 +2396,8 @@ def answers_time(pending: Pending, raw: str, now: datetime, p: nlu.Parse | None 
         waiting = not pending.draft.get("time")
     if not waiting or nlu.CREATE_VERB_RE.search(raw.strip().lower()):
         return False
+    if p and p.intent in ("list", "search", "free", "person", "undated", "notes", "repeats"):
+        return False  # «Какие у меня дела завтра» посреди вопроса — это вопрос, а не ответ «завтра»
     if p and p.intent == "create" and p.text and INFINITIVE_RE.search(p.text) and (p.date or p.time):
         return False
     # «Завтра в 7 вечера кино с Петей» посреди вопроса — новое дело со своим днём, временем и смыслом
@@ -2411,9 +2413,16 @@ SHOW_RE = re.compile(r"^(?:(?:стив\w*|stevens?)[\s,]+)?(?:покажи(?:\s+
                      r"|посмотрю|посмотрим)[\s.!]*$", re.I)
 
 
+# «Какие у меня…», «скажи…», «во сколько…» посреди уточнения — новый вопрос, черновик бросаем
+QUESTION_RE = re.compile(r"^(?:(?:стив\w*|stevens?|а|ну|и)[\s,]+)*(?:какие|какая|какой|каким|что\s+у\s+меня|покажи|скажи|расскажи"
+                         r"|сколько|во\s+сколько|когда\s+(?:я|у\s+меня)|есть\s+ли)\b", re.I)
+
+
 def is_new_request(p: nlu.Parse, raw: str) -> bool:
     if p.only_when:
         return False
+    if QUESTION_RE.match(raw.strip()):
+        return True
     if p.intent in ("list", "search", "help", "off_topic", "delete", "complete", "thanks", "move", "edit", "note", "notes",
                     "undated", "repeats"):
         return True

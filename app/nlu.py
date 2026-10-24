@@ -466,15 +466,15 @@ def _parse_date(text: str, now: datetime, time: str | None) -> _DateInfo:
             pass
 
     # Периоды: неделя, месяц
-    m = re.search(r"\b(?:на|в)\s+(?:эт(?:ой|у)|текущ(?:ей|ую))\s+недел[еюи]\b", text, I)
+    m = re.search(r"\b(?:на|в|за)\s+(?:эт(?:ой|у)|текущ(?:ей|ую))\s+недел[еюи]\b", text, I)
     if m:
         s, e = week_bounds(today)
         found(m, period=Period(s, e, "на этой неделе", "на этой неделе"))
-    m = re.search(r"\b(?:на|в)\s+следующ(?:ей|ую)\s+недел[еюи]\b", text, I)
+    m = re.search(r"\b(?:на|в|за)\s+следующ(?:ей|ую)\s+недел[еюи]\b", text, I)
     if m:
         s, e = week_bounds(today + timedelta(days=7))
         found(m, period=Period(s, e, "на следующей неделе", "на следующей неделе"))
-    m = re.search(r"\b(?:на|в)\s+прошл(?:ой|ую)\s+недел[еюи]\b", text, I)
+    m = re.search(r"\b(?:на|в|за)\s+прошл(?:ой|ую)\s+недел[еюи]\b", text, I)
     if m:
         s, e = week_bounds(today - timedelta(days=7))
         found(m, period=Period(s, e, "на прошлой неделе", "на прошлой неделе"))
@@ -768,7 +768,7 @@ BULK_RE = re.compile(r"(\bвс[её]\b|\bвсех\b|^(?:пожалуйста\s+)
 ALL_DAYS_RE = re.compile(r"\b(?:за\s+)?(?:все\s+дни|вс[её]\s+время|всю\s+историю)\b", I)
 COMPLETE_RE = re.compile(rf"(\bотметь\b.*\bвыполнен|\bя\s+(?:уже\s+)?(?:сделал|сделала|выполнил|выполнила|закончил|закончила)\b|^(?:сделал|сделала|выполнил|выполнила)\b|\bотметь\b.*\bсделан|\s(?:—\s*|-\s*)?(?:сделал|сделала|выполнил|выполнила|сделано|выполнено|готово)[\s.!]*$)", I)
 SEARCH_RE = re.compile(rf"(\bнайди\b|\bнайти\b|\bпоищи\b|\bищи\b|^когда\b(?!-)|\bкогда\s+(?:у\s+меня\s+)?(?:был|была|было|будет)\b|\bставил)", I)
-LIST_RE = re.compile(rf"(что\s+у\s+меня|какие\s+(?:у\s+меня\s+)?(?:планы|дела|задачи|встречи|напоминания)|^покажи|что\s+(?:я\s+)?запланировано|есть\s+ли\s+у\s+меня|^что\s+(?:в|во|на)\s|^сколько\s+(?:у\s+меня\s+)?(?:дел|задач|встреч|напоминаний|записей)|^что\s+я\s+(?:делал|делала|делаю|буду\s+делать)|^что\s+(?:(?:мне|ещё|еще|у\s+меня)\s+)*осталось|^что\s+(?:сегодня|завтра|послезавтра)\b|что\s+(?:было|будет)|мо[её]\s+расписание|\bпланы\s+на\b|чем\s+я\s+занят)", I)
+LIST_RE = re.compile(rf"(что\s+у\s+меня|какие\s+(?:(?:у\s+меня|сегодня|завтра|послезавтра|ещё|еще)\s+)*(?:планы|дела|задачи|встречи|напоминания)|^покажи|что\s+(?:я\s+)?запланировано|есть\s+ли\s+у\s+меня|^что\s+(?:в|во|на)\s|^сколько\s+(?:у\s+меня\s+)?(?:дел|задач|встреч|напоминаний|записей)|^что\s+я\s+(?:делал|делала|делаю|буду\s+делать)|^что\s+(?:(?:мне|ещё|еще|у\s+меня)\s+)*осталось|^что\s+(?:сегодня|завтра|послезавтра)\b|что\s+(?:было|будет)|мо[её]\s+расписание|\bпланы\s+на\b|чем\s+я\s+занят)", I)
 OFFTOPIC_RE = re.compile(r"(погод|анекдот|шутк|курс\s+(?:доллар|евро|валют)|новост|рецепт|кто\s+так|переведи|столиц|сколько\s+будет|расскажи\s+(?:о|про)\s+себе|как\s+дела|фильм|музык|игр[ау]|стих)", I)
 CREATE_VERB_RE = re.compile(r"^(?:пожалуйста\s+)?(напомни(?:те)?(?:\s+мне)?|поставь|запиши|добавь|создай|запланируй|назначь|внеси|заведи)\b", I)
 DONE_RE = re.compile(r"^(?:готово|сделано|выполнено|сделал|сделала)[\s.!]*$", I)
@@ -796,6 +796,9 @@ NOTE_NEW_RE = re.compile(
     r"(?:(?:\s*[:,—-]\s*|\s+)(?:(?:что|о\s+том,?\s+что|про)\s+)?(?P<body>\S.*))?[\s.!?:]*$",
     I)
 # «Покажи заметки», «мои идеи», «что у меня в заметках», «заметки про кофе»
+# «Скажи занятость на сегодня», «во сколько я завтра занят», «какая у меня занятость» — вопрос, а не новая занятость
+BUSY_ASK_RE = re.compile(r"\b(?:скажи|расскажи|покажи|какая|какой|какие|когда|во\s+сколько|до\s+скольки|с\s+скольки)\b"
+                         r"[^.!?]{0,30}?\bзанят(?:ость|ости|а|о|ы)?\b", I)
 NOTES_LIST_RE = re.compile(
     r"^(?:(?:покажи|открой|выведи|прочитай|прочти|зачитай|перечисли|какие|список|мои|все)\b.*?\b"
     r"|что\s+(?:у\s+меня\s+)?(?:есть\s+)?в\s+|)"
@@ -1356,7 +1359,8 @@ def parse(raw: str, now: datetime) -> Parse:
         result.keywords = [k for k in keys if k.startswith("@") or k in result.required]  # «с Иваном» — да, «ближайшая» — нет
         return result
 
-    if SEARCH_RE.search(lower) and not CREATE_VERB_RE.search(lower):
+    busy_ask = bool(BUSY_ASK_RE.search(lower)) and not CREATE_VERB_RE.search(lower)
+    if SEARCH_RE.search(lower) and not CREATE_VERB_RE.search(lower) and not busy_ask:
         result.intent = "search"
         result.filter_type = _filter_type(lower)
         if re.search(r"\bкогда\b(?!-)", lower):
@@ -1370,7 +1374,7 @@ def parse(raw: str, now: datetime) -> Parse:
             result.period = _day_period(info.date, now.date())
         return result
 
-    if LIST_RE.search(lower) and not CREATE_VERB_RE.search(lower):
+    if (LIST_RE.search(lower) and not CREATE_VERB_RE.search(lower)) or busy_ask:
         result.intent = "list"
         result.filter_type = _filter_type(lower)
         if re.search(r"есть\s+ли", lower):
