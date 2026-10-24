@@ -14,7 +14,7 @@ export type TourStatus = 'off' | 'offer' | 'running' | 'done';
 
 /**
  * Шаги обучения (контракт v1.5, Ф23): фича шага, флажок и какими ответами закрываются подсказки —
- * последний ответ закрывает шаг. Шаг 15 («Уведомление») и 16 («Календарь») закрывает сам фронт:
+ * последний ответ закрывает шаг. Шаг 16 («Уведомление») и 17 («Календарь») закрывает сам фронт:
  * «Посмотреть» на карточке уведомления и перенос перетаскиванием в календаре.
  * Шаг выключенной на сервере фичи (нет в GET /api/health) не показывается.
  */
@@ -31,6 +31,7 @@ const RULES: StepRule[] = [
   { feature: 'f12', on: true, expect: ['found', 'updated', 'deleted', 'created'] },
   { feature: 'f14', on: true, expect: ['confirm', 'created'] },
   { feature: 'f8', on: true, expect: ['found'] },
+  { feature: 'f5', on: true, expect: ['created'] },
   { feature: 'f16', on: true, expect: ['clarify'] },
   { feature: 'f19', on: true, expect: ['person'] },
   { feature: 'f24', on: true, expect: ['created', 'found'] },
