@@ -40,6 +40,9 @@ export const storage = {
   setLastSeen: (at: number) => write('last_seen', String(at)),
   tourSeen: () => read('tour_seen') === '1',
   setTourSeen: () => write('tour_seen', '1'),
+  /** Кому из зарегистрировавшихся на этом устройстве ещё предложить обучение (id пользователя) */
+  tourOffer: () => read('tour_offer'),
+  setTourOffer: (userId: number | null) => write('tour_offer', userId === null ? null : String(userId)),
   briefingDay: () => read('briefing_day'),
   setBriefingDay: (day: string) => write('briefing_day', day),
   notifyDeclined: () => read('notify_declined') === '1',
@@ -56,6 +59,9 @@ export const storage = {
   setNotifyFired: (keys: string[]) => write('notify_fired', JSON.stringify(keys.slice(-50))),
   wakeWord: () => read('wake_word') === 'on',
   setWakeWord: (on: boolean) => write('wake_word', on ? 'on' : null),
+  /** Плашку «Вызов по имени» уже показали сами после первой голосовой просьбы */
+  wakeTipSeen: () => read('wake_tip') === '1',
+  setWakeTipSeen: () => write('wake_tip', '1'),
   clientId: () => read('client_id'),
   setClientId: (id: string) => write('client_id', id),
   mode: () => (read('mode') === 'sandbox' ? 'sandbox' : null),

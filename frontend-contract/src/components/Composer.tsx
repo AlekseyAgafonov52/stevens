@@ -9,6 +9,7 @@ import { emitActivity } from '../state/events';
 import { cancelRecording, recordingStore, startRecording, stopRecording } from '../state/recording';
 import { store, useApp } from '../state/store';
 import { setWakeWord, wakeStore } from '../state/wake';
+import { storage } from '../storage';
 import { voice } from '../voice';
 
 const LIMIT = 300;
@@ -74,9 +75,16 @@ function RecordingRow() {
  * (дышит, пока слушает фоном). По нажатию — плашка с объяснением и переключателем.
  */
 function WakeDot() {
-  const { enabled, armed } = useSyncExternalStore(wakeStore.subscribe, wakeStore.get);
+  const { enabled, armed, tip } = useSyncExternalStore(wakeStore.subscribe, wakeStore.get);
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLSpanElement>(null);
+  // Один раз сами: после первой голосовой просьбы, пока Стивенс думает. Закрывается любым нажатием мимо
+  useEffect(() => {
+    if (!tip) return;
+    storage.setWakeTipSeen();
+    wakeStore.set({ tip: false });
+    setOpen(true);
+  }, [tip]);
   useEffect(() => {
     if (!open) return;
     const onDown = (e: MouseEvent) => {

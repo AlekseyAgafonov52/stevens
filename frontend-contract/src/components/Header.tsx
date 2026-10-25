@@ -4,7 +4,7 @@ import { useState, useSyncExternalStore } from 'react';
 import { features } from '../config/features';
 import { serverHas } from '../config/server';
 import { T } from '../content/texts';
-import { HeaderRightStart, sandboxMenuExtra } from '../extensions/points';
+import { HeaderRightStart, tourMenuItem } from '../extensions/points';
 import { install, installHintKey, isInstalled, useCanInstall, useMedia, useTitlebarMode } from '../lib/install';
 import { newDialog, resetSandbox, setHint } from '../state/chat';
 import { emitActivity } from '../state/events';
@@ -42,7 +42,7 @@ export function Header() {
   const transferItem = { label: T.menu_transfer, onSelect: () => setDialog('transfer') };
 
   const sandboxItems = [
-    ...sandboxMenuExtra(T.menu_tour),
+    ...tourMenuItem(T.menu_tour),
     ...notifyItem,
     transferItem,
     { label: T.menu_reset_sandbox, onSelect: () => setDialog('reset') },
@@ -67,7 +67,7 @@ export function Header() {
       {mode === 'account' && features.auth && (
         <Menu
           heading={login ?? ''}
-          items={[...notifyItem, transferItem, ...installItem, { label: T.menu_logout, onSelect: logout }]}
+          items={[...tourMenuItem(T.menu_tour), ...notifyItem, transferItem, ...installItem, { label: T.menu_logout, onSelect: logout }]}
           trigger={({ open, toggle }) => (
             <button type="button" className="avatar" aria-label={T.profile_label} aria-haspopup="menu" aria-expanded={open} onClick={toggle}>
               {(login ?? '?').charAt(0).toUpperCase()}

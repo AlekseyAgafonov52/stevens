@@ -243,7 +243,10 @@
 @media (hover: hover) {
   .pill--primary:not(:disabled):hover, .pill--secondary:not(:disabled):hover { background: var(--c-bubble); }
 }
-@media (max-width: 760px) { .pill { white-space: normal; text-align: left; } }
+@media (max-width: 760px) {
+  /* Длинная подпись переносится — пилюля растёт по высоте, текст не вылезает за рамку */
+  .pill { white-space: normal; text-align: left; height: auto; min-height: var(--pill-h); padding-block: var(--sp-2); }
+}
 
 /* ── Низ: статус и строка ввода (02, 2.4–2.6) ───────── */
 /* На iPhone со скруглённым экраном (радиус углов ≈ 55) поле стоит на 26 от низа и боков:
@@ -313,7 +316,7 @@
 @keyframes wake-breathe { 0%, 100% { opacity: 0.45; } 50% { opacity: 1; } }
 @media (prefers-reduced-motion: reduce) { .wake__dot--armed { animation: none; } }
 .wake__pop {
-  position: absolute; bottom: calc(100% + 6px); left: -14px; z-index: 20;
+  position: absolute; bottom: calc(100% + 6px); right: -14px; z-index: 20; /* микрофон справа — плашка влево от него */
   width: min(260px, calc(100vw - 48px));
   display: flex; flex-direction: column; gap: var(--sp-3);
   padding: var(--sp-5); border-radius: var(--r-card);

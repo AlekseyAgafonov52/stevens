@@ -2,11 +2,14 @@
 import type { ChatResponse, RecordItem } from '../../api/types';
 import { serverHas, type ServerFeature } from '../../config/server';
 import { TOUR_STEPS } from '../../content/texts';
-import { declineBriefing } from '../../state/briefing';
+import { briefingStore, declineBriefing } from '../../state/briefing';
 import { pressButton, resetSandbox, send } from '../../state/chat';
 import { emitActivity, onAssistantResponse, onUiActivity } from '../../state/events';
 import { notifyStore, showNotifyCard, viewNotifyCard } from '../../state/notify';
+import { enterTourSandbox, returnToAccount } from '../../state/session';
 import { createStore, store } from '../../state/store';
+import { T } from '../../content/texts';
+import { uuid } from '../../lib/uuid';
 import { storage } from '../../storage';
 
 type Kind = ChatResponse['kind'];
@@ -51,7 +54,13 @@ export function tourSteps(): TourStep[] {
 
 const STEP_DONE_MS = 1400;
 
-export const tourStore = createStore({ status: 'off' as TourStatus, step: 0, sub: 0, stepDone: false, again: false });
+/** account — предложение после регистрации; back — обучение запущено из аккаунта, по окончании вернём */
+export const tourStore = createStore({
+  status: 'off' as TourStatus, step: 0, sub: 0, stepDone: false, again: false, account: false, back: false,
+});
+
+/** Аккаунт, из которого ушли в обучение на демо-данных */
+let back: { login: string | null; userId: number | null } | null = null;
 
 let doneTimer: ReturnType<typeof setTimeout> | undefined;
 /** Напоминание из шага «Напоминание» — его же показываем в примере уведомления */
@@ -92,24 +101,54 @@ function showExample(): void {
 
 export async function startTour(): Promise<void> {
   storage.setTourSeen();
+  storage.setTourOffer(null);
   clearTimeout(doneTimer);
   declineBriefing();
+  const s = store.get();
+  // Из аккаунта — на демо-данные песочницы, свои записи человека обучение не трогает
+  if (s.mode === 'account' && !back) {
+    back = { login: s.login, userId: s.userId };
+    tourStore.set({ status: 'running', step: 0, sub: 0, stepDone: false, back: true });
+    enterTourSandbox();
+  }
   // С чистых демо-данных: иначе встречи из прошлого прохода сбили бы шаги про совпадение и правку
   await resetSandbox();
   exampleRecord = null;
-  tourStore.set({ status: 'running', step: 0, sub: 0, stepDone: false });
+  tourStore.set({ status: 'running', step: 0, sub: 0, stepDone: false, back: !!back });
 }
 
 export function declineTour(): void {
   storage.setTourSeen();
+  const account = tourStore.get().account;
+  storage.setTourOffer(null);
   dismissedFor = store.get().conversationId;
   entry = null;
-  tourStore.set({ status: 'off' });
+  tourStore.set({ status: 'off', account: false });
+  // После регистрации предлагаем один раз — подсказываем, где обучение искать потом
+  if (account) sayLater();
+}
+
+function sayLater(): void {
+  const id = uuid();
+  store.set((s) => ({
+    messages: [...s.messages, {
+      kind: 'answer', id, restored: false, pressed: null, voice: false, edited: {}, flash: null,
+      response: {
+        message_id: id, kind: 'tour-later', text: T.tour_later, speech: null, records: [], nearest: null,
+        total: null, awaiting_reply: false, buttons: [],
+      },
+    }],
+  }));
 }
 
 export function closeTour(): void {
   clearTimeout(doneTimer);
-  tourStore.set({ status: 'off', stepDone: false });
+  tourStore.set({ status: 'off', stepDone: false, back: false });
+  if (back) {
+    const { login, userId } = back;
+    back = null;
+    returnToAccount(login, userId);
+  }
 }
 
 export function skipStep(): void {
@@ -177,11 +216,22 @@ let entry: { conversationId: string; users: number } | null = null;
 function maybeOffer(): void {
   const s = store.get();
   const status = tourStore.get().status;
+  if (s.mode === 'account' && s.screen === 'app') {
+    // Только что зарегистрировался — предлагаем один раз, пока ничего не отправил
+    const offer = storage.tourOffer() === String(s.userId);
+    const sent = s.messages.some((m) => m.kind === 'user');
+    if (offer && sent) storage.setTourOffer(null);
+    if (status === 'off' && offer && !sent) tourStore.set({ status: 'offer', again: false, account: true });
+    else if (status === 'offer' && (!offer || sent)) tourStore.set({ status: 'off', account: false });
+    return;
+  }
   if (s.mode !== 'sandbox') {
     // Вышли из песочницы — обучение прячем
     if (status !== 'off') closeTour();
     return;
   }
+  // Обучение из аккаунта: предложение песочницы не показываем
+  if (back) return;
   const users = s.messages.filter((m) => m.kind === 'user').length;
   // Вход в приложение (и перезагрузка) или новый диалог — отсчёт сообщений заново
   if (s.screen !== 'app') entry = null;
@@ -202,6 +252,10 @@ export function init(): void {
   });
   onUiActivity((kind) => {
     if (kind === 'notify-viewed' || kind === 'calendar-moved') onResponse(kind);
+  });
+  // Во время обучения плашку брифинга не показываем: после перехода в песочницу она бы посчиталась заново
+  briefingStore.subscribe(() => {
+    if (tourStore.get().status === 'running' && briefingStore.get().offer) declineBriefing();
   });
   store.subscribe(maybeOffer);
   maybeOffer();

@@ -7,11 +7,18 @@
  */
 import { storage } from '../storage';
 import { voice } from '../voice';
-import { setHint } from './chat';
 import { isSpeaking, onSpeech, spokenText } from './events';
+import { showMicProblem } from './micHelp';
 import { createStore, store } from './store';
 
-export const wakeStore = createStore({ enabled: false, armed: false });
+/** tip: после первой голосовой просьбы сами один раз открываем плашку у точки — чтобы узнали о функции */
+export const wakeStore = createStore({ enabled: false, armed: false, tip: false });
+
+/** Первая голосовая просьба ушла: Стивенс думает — самое время показать вызов по имени */
+export function offerWakeTip(): void {
+  if (wakeStore.get().enabled || storage.wakeTipSeen()) return;
+  wakeStore.set({ tip: true });
+}
 
 function update(inGesture = false): void {
   const s = store.get();
@@ -24,7 +31,7 @@ function update(inGesture = false): void {
 
 export function setWakeWord(on: boolean): void {
   if (on && !voice.isSupported()) {
-    setHint('voice_unsupported');
+    showMicProblem('unsupported');
     return;
   }
   storage.setWakeWord(on);
@@ -44,7 +51,7 @@ export function initWakeWord(): void {
   voice.on('wakeDenied', () => {
     storage.setWakeWord(false);
     wakeStore.set({ enabled: false, armed: false });
-    setHint('voice_denied');
+    showMicProblem('denied');
   });
   if (typeof document !== 'undefined') document.addEventListener('visibilitychange', () => update());
   update();

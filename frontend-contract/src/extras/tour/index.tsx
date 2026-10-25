@@ -26,7 +26,7 @@ export function TourBar() {
     return (
       <div className="tour" role="group" aria-label={T.tour_label}>
         <div className="tour__title">{t.again ? T.tour_offer_again_title : T.tour_offer_title}</div>
-        <div className="tour__text">{fill(T.tour_offer_text, { N: steps.length })}</div>
+        <div className="tour__text">{fill(t.account ? T.tour_offer_account_text : T.tour_offer_text, { N: steps.length })}</div>
         <div className="tour__actions">
           <Pill variant="primary" onClick={press(() => void startTour())}>{T.tour_offer_yes}</Pill>
           <Pill variant="secondary" onClick={press(declineTour)}>{T.tour_offer_no}</Pill>
@@ -42,8 +42,14 @@ export function TourBar() {
         <div className="tour__text">{T.tour_done_text}</div>
         <div className="tour__text">{T.tour_done_more}</div>
         <div className="tour__actions">
-          <Pill variant="primary" onClick={press(() => { closeTour(); void resetSandbox(); })}>{T.tour_done_reset}</Pill>
-          <Pill variant="secondary" onClick={press(closeTour)}>{T.tour_done_close}</Pill>
+          {t.back ? (
+            <Pill variant="primary" onClick={press(closeTour)}>{T.tour_done_back}</Pill>
+          ) : (
+            <>
+              <Pill variant="primary" onClick={press(() => { closeTour(); void resetSandbox(); })}>{T.tour_done_reset}</Pill>
+              <Pill variant="secondary" onClick={press(closeTour)}>{T.tour_done_close}</Pill>
+            </>
+          )}
         </div>
       </div>
     );

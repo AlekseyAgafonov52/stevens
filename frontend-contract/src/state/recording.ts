@@ -1,11 +1,12 @@
 /** Запись голоса для строки ввода — 03-behavior.md, раздел 6. */
 import { api } from '../api';
-import { T } from '../content/texts';
 import { voice, type VoiceError } from '../voice';
 import { applyCorrections } from '../voice/edit';
 import { send, setHint } from './chat';
 import { emitActivity } from './events';
+import { showMicProblem, type MicProblem } from './micHelp';
 import { createStore, store } from './store';
+import { offerWakeTip } from './wake';
 
 /** Быстро меняющееся — отдельно, чтобы не перерисовывать всё приложение */
 export const recordingStore = createStore({ transcript: '', level: 0, startedAt: 0 });
@@ -18,24 +19,35 @@ let auto = false;
 let heard = false;
 let autoTimer: ReturnType<typeof setTimeout> | undefined;
 
-const ERROR_HINT: Record<VoiceError, keyof typeof T> = {
-  denied: 'voice_denied',
-  'no-mic': 'voice_no_mic',
-  'no-speech': 'voice_no_speech',
-  failed: 'voice_error',
-  service: 'voice_service',
+/** Почему не слышу — сообщением в ленте; «не расслышал» по-прежнему строкой статуса */
+const ERROR_PROBLEM: Record<Exclude<VoiceError, 'no-speech'>, MicProblem> = {
+  denied: 'denied',
+  'no-mic': 'no_mic',
+  failed: 'failed',
+  service: 'service',
+  network: 'network',
 };
+
+/** Запись идёт, а ни одного слова нет — столько ждём и честно говорим, что не слышим */
+const DEAF_MS = 5000;
+/** Громкость выше — в микрофон точно говорят (как SPEECH_LEVEL в voice) */
+const SOUND_LEVEL = 0.12;
+let fromWake = false;
+let deafTimer: ReturnType<typeof setTimeout> | undefined;
+let levelSeen = false;
+let maxLevel = 0;
 
 export function startRecording(options: { auto?: boolean } = {}): void {
   const state = store.get();
   if (state.waiting || state.recording) return;
   if (!voice.isSupported()) {
     api.log('mic_failed', 'unsupported');
-    setHint('voice_unsupported');
+    showMicProblem('unsupported');
     return;
   }
   prefix = state.input.trim();
   auto = !!options.auto;
+  fromWake = false;
   heard = false;
   setHint(null);
   void voice.start();
@@ -55,6 +67,7 @@ export function cancelRecording(): void {
 voice.on('wake', () => {
   prefix = store.get().input.trim();
   auto = false;
+  fromWake = true;
   heard = false;
   setHint(null);
   // После recording-start, иначе он погасит кивок персонажа
@@ -72,10 +85,23 @@ voice.on('state', (state) => {
       autoTimer = setTimeout(() => {
         if (!heard) cancelRecording(); // Д13: тихо выключаемся, без «Не расслышал»
       }, AUTO_SILENCE_MS);
+    } else if (!fromWake && !voice.isServer()) {
+      // Нажали микрофон, а браузер молчит: не делаем вид, что слушаем
+      levelSeen = false;
+      maxLevel = 0;
+      clearTimeout(deafTimer);
+      deafTimer = setTimeout(() => {
+        if (heard || !store.get().recording) return;
+        const problem: MicProblem = !levelSeen ? 'quiet' : maxLevel >= SOUND_LEVEL ? 'no_words' : maxLevel < 0.01 ? 'silent' : 'quiet';
+        api.log('mic_failed', problem);
+        cancelRecording();
+        showMicProblem(problem);
+      }, DEAF_MS);
     }
   }
   if (state === 'idle') {
     clearTimeout(autoTimer);
+    clearTimeout(deafTimer);
     if (store.get().recording) {
       store.set({ recording: false });
       emitActivity('recording-stop');
@@ -89,7 +115,11 @@ voice.on('interim', (text) => {
   recordingStore.set({ transcript: applyCorrections([prefix, text].filter(Boolean).join(' ')) });
 });
 
-voice.on('level', (level) => recordingStore.set({ level }));
+voice.on('level', (level) => {
+  levelSeen = true;
+  maxLevel = Math.max(maxLevel, level);
+  recordingStore.set({ level });
+});
 
 /** «Нет», «не хочу» в ответ на «Показать задачи без срока?» */
 const REFUSE_RE = /^(?:нет|неа|не\s+хочу|не\s+надо|не\s+нужно|не\s+сейчас|не\s+стоит|потом|позже|обойдусь|хватит)(?:[\s,.!]+(?:спасибо|не\s+надо|потом))*[\s.!]*$/i;
@@ -115,6 +145,7 @@ voice.on('final', (text) => {
   if (!prefix && refusedOffer(full)) return;
   // raw_text — что распознал браузер до поправок ослышки: только для журнала (Ф4)
   if (!send(full, 'voice', { rawText: raw })) store.set({ input: full });
+  else offerWakeTip();
 });
 
 voice.on('error', (error) => {
@@ -122,7 +153,8 @@ voice.on('error', (error) => {
   if (error !== 'no-speech') api.log('mic_failed', error); // Ф0: любой отказ микрофона — в журнал
   // Д13: сам включился — сам и молчит об ошибках (Safari может не дать слушать без нажатия)
   if (auto) return;
-  setHint(ERROR_HINT[error]);
+  if (error === 'no-speech') setHint('voice_no_speech');
+  else showMicProblem(ERROR_PROBLEM[error]);
 });
 
 if (typeof document !== 'undefined') {

@@ -92,7 +92,7 @@ export function BottomTop() {
   return TourBar ? wrap(<TourBar />) : null;
 }
 
-/** Д15: «Пройти обучение» в меню песочницы */
-export function sandboxMenuExtra(label: string): { label: string; onSelect: () => void }[] {
+/** Д15: «Пройти обучение» в меню песочницы и аккаунта */
+export function tourMenuItem(label: string): { label: string; onSelect: () => void }[] {
   return features.d15_tour && serverHas('f23') ? [{ label, onSelect: () => void import('../extras/tour/state').then((m) => m.startTour()) }] : [];
 }

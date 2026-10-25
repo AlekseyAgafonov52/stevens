@@ -124,7 +124,19 @@ export async function authenticate(kind: 'login' | 'register', login: string, pa
   storage.setLogin(result.user.login);
   storage.setUserId(result.user.id);
   storage.setMode(null);
+  // Новому пользователю один раз предлагаем обучение
+  if (kind === 'register') storage.setTourOffer(result.user.id);
   enterApp('account', result.user.login, result.user.id);
+}
+
+/** Обучение из аккаунта идёт на демо-данных песочницы: аккаунт на устройстве остаётся */
+export function enterTourSandbox(): void {
+  enterApp('sandbox');
+}
+
+/** Обучение закончилось — обратно к своим записям */
+export function returnToAccount(login: string | null, userId: number | null): void {
+  enterApp('account', login, userId);
 }
 
 export function chooseSandbox(): void {

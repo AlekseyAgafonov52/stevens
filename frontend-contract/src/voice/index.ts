@@ -18,7 +18,7 @@ import { api } from '../api';
 import { serverHas } from '../config/server';
 import { isCancel } from './edit';
 
-export type VoiceError = 'denied' | 'no-mic' | 'no-speech' | 'failed' | 'service';
+export type VoiceError = 'denied' | 'no-mic' | 'no-speech' | 'failed' | 'service' | 'network';
 export type VoiceState = 'idle' | 'asking' | 'recording';
 
 type Events = {
@@ -70,6 +70,8 @@ const ERRORS: Record<string, VoiceError> = {
   // Safari: распознавание недоступно (выключена Диктовка или Siri, нет разрешения на распознавание речи)
   'service-not-allowed': 'service',
   'language-not-supported': 'service',
+  // Chrome: серверы распознавания Google не ответили
+  network: 'network',
 };
 
 /** Строки в консоли браузера (F12) — по ним видно, почему не слышит */
@@ -79,7 +81,7 @@ const log = (...args: unknown[]) => console.info('[Stevens · микрофон]'
  * Safari и всё на айфоне: там любой браузер — тот же WebKit. Приложение с экрана «Домой» (PWA) не пишет
  * «Safari» в userAgent, поэтому айфон и айпад узнаём отдельно (айпад притворяется Mac, но у него есть касания)
  */
-const isSafari = () => {
+export const isSafari = () => {
   if (typeof navigator === 'undefined') return false;
   const ua = navigator.userAgent;
   if (/iPhone|iPad|iPod/i.test(ua) || (/Macintosh/i.test(ua) && navigator.maxTouchPoints > 1)) return true;
@@ -402,7 +404,7 @@ async function startServer(reason: string): Promise<void> {
     }
     void api.stt(new Blob(chunks, { type: rec.mimeType || type || 'audio/webm' }))
       .then((text) => (text.trim() ? emit('final', text.trim()) : emit('error', 'no-speech')))
-      .catch(() => emit('error', 'failed'));
+      .catch(() => emit('error', 'network')); // сервер не распознал — как «служба не отвечает»
   };
   const off = voice.on('level', (level) => {
     if (serverRec !== rec) { off(); return; }
@@ -432,6 +434,11 @@ export const voice = {
   isSupported(): boolean {
     if (typeof window === 'undefined') return false;
     return (ctor() !== null && !!navigator.mediaDevices?.getUserMedia) || serverSttReady();
+  },
+
+  /** Пишем для распознавания на сервере: слова приходят только в конце, по ходу их нет */
+  isServer(): boolean {
+    return serverRec !== null;
   },
 
   /** Запись идёт (браузерная или серверная) */
