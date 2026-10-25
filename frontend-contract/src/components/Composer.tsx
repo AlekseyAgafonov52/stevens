@@ -135,7 +135,8 @@ export function Composer() {
     el.style.height = `${Math.min(el.scrollHeight, line * MAX_LINES + padding)}px`;
   }, [input, recording]);
 
-  const canSend = input.trim().length > 0 && !waiting;
+  const hasText = input.trim().length > 0;
+  const canSend = hasText && !waiting;
 
   const submit = () => {
     if (!canSend) return;
@@ -178,17 +179,20 @@ export function Composer() {
                 <span className={`counter ${length >= LIMIT ? 'counter--limit' : ''}`}>{fill(T.char_counter, { count: length })}</span>
               )}
             </div>
-            <button type="button" className={`icon-btn ${canSend ? 'icon-btn--dark' : 'icon-btn--off'}`} aria-label={T.btn_send}
-              disabled={!canSend} onClick={submit}>
-              <ArrowUp size={18} strokeWidth={1.75} aria-hidden="true" />
-            </button>
-            <span className="mic-wrap">
-              <button type="button" className="icon-btn icon-btn--dark" aria-label={T.btn_mic} disabled={waiting}
-                onClick={() => { emitActivity('button-press'); startRecording(); }}>
-                <Mic size={18} strokeWidth={1.5} aria-hidden="true" />
+            {hasText ? (
+              <button type="button" className={`icon-btn ${canSend ? 'icon-btn--dark' : 'icon-btn--off'}`} aria-label={T.btn_send}
+                disabled={!canSend} onClick={submit}>
+                <ArrowUp size={18} strokeWidth={1.75} aria-hidden="true" />
               </button>
-              {serverHas('f20') && <WakeDot />}
-            </span>
+            ) : (
+              <span className="mic-wrap">
+                <button type="button" className="icon-btn icon-btn--dark" aria-label={T.btn_mic} disabled={waiting}
+                  onClick={() => { emitActivity('button-press'); startRecording(); }}>
+                  <Mic size={18} strokeWidth={1.5} aria-hidden="true" />
+                </button>
+                {serverHas('f20') && <WakeDot />}
+              </span>
+            )}
           </>
         )}
       </div>

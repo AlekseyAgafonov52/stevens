@@ -2743,6 +2743,28 @@ async def set_remind_before(ctx: Ctx, record: Record, value: int) -> dict:
     return reply("updated", text, speech, records=[record.to_contract(marks=["new"])])
 
 
+async def cancel_focused_occurrence(ctx: Ctx, raw: str) -> dict | None:
+    """A date-specific cancellation refers only to the focused series, never to all that day's records."""
+    match = re.fullmatch(r"(?P<day>.+?)\s+(?:заняти[еяй]|урок(?:а|ов)?|встреч(?:а|и)?)\s+не\s+будет[.!?]*", raw, re.I)
+    if match is None:
+        return None
+    ctx.trace["intent"] = "delete"
+    if "d2" not in ctx.features or not features.on("f15") or not features.on("f12"):
+        return examples("not_understood", "not_understood", ctx, EXAMPLES)
+    _, _, _, info = nlu.parse_when(match["day"], ctx.now)
+    if info.date is None:
+        return reply("clarify", *ctx.say("clarify_generic"), awaiting=True, buttons=[CANCEL])
+    focus = await owned_record(ctx, ctx.conv.focus)
+    if not focus or focus.series_id is None or focus.deleted_at is not None:
+        return reply("clarify", *ctx.say("clarify_generic"), awaiting=True, buttons=[CANCEL])
+    rows = await owner_records(ctx, Record.series_id == focus.series_id, Record.date == info.date.isoformat())
+    if not rows:
+        return reply("found", *ctx.say("found_none"), total=0)
+    if len(rows) != 1:
+        return which_one(ctx, rows, "delete_occurrence")
+    return await delete_one(ctx, rows[0], "deleted_occurrence")
+
+
 async def respond(ctx: Ctx, payload: ChatRequest) -> dict:
     ctx.found, ctx.conv.found = ctx.conv.found, []
     choices, ctx.conv.choices = ctx.conv.choices, None
@@ -2755,6 +2777,8 @@ async def respond(ctx: Ctx, payload: ChatRequest) -> dict:
     raw = payload.text.strip()
     ctx.raw = raw
     pending = ctx.conv.pending
+    if pending is None and not choices and (cancelled := await cancel_focused_occurrence(ctx, raw)):
+        return cancelled
     if choices and raw:
         rows = await records_by_ids(ctx, choices["ids"])
         if (pick := pick_choice(raw, rows, ctx.now)) and (answer := await handle_action(ctx, choices["action"], pick.id)):
@@ -2875,9 +2899,20 @@ async def respond(ctx: Ctx, payload: ChatRequest) -> dict:
         if moved.intent == "move" and (moved.date or moved.time or moved.shift) and not moved.keywords:
             ctx.trace["intent"] = "move"
             return await answer_move(ctx, moved)
-    if p.intent == "unknown" and llm_enabled():
+    refine = nlu.needs_llm_review(p)
+    if refine and not any(d.get("why") == "unclear" for d in p.doubt):
+        p.doubt.append({"why": "unclear"})
+    if (p.intent == "unknown" or refine) and llm_enabled():
         context = await ai_context(ctx, payload, asked)
-        p = await llm_parse(raw, ctx.now, context=context, trace=ctx.trace)
+        candidate = await llm_parse(raw, ctx.now, context=context, trace=ctx.trace)
+        result = ctx.trace.get("llm_result") or {}
+        confidence = result.get("confidence", 0)
+        accepted = candidate.intent != "unknown" and (not refine or confidence > 0.5)
+        ctx.trace["llm_used"] = accepted
+        if accepted:
+            p = candidate
+        else:
+            ctx.trace.pop("_llm_items", None)
         ctx.trace.update(intent=p.intent)
 
     # Ждали «да» или «нет», а ответ не поняли — вопрос не теряем, переспрашиваем

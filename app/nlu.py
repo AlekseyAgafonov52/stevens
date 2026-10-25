@@ -1,7 +1,7 @@
 """Разбор фразы без LLM: правила для русского языка.
 
-Работает всегда и без ключей Yandex. Если правила не поняли фразу, а ключи
-заданы, чат спрашивает LLM (brain.py) — см. app/routers/chat.py.
+Работает всегда и без ключей Yandex. Непонятный или явно неполный разбор
+может уточняться через LLM (brain.py) — см. app/routers/chat.py.
 Даты считаются от «сегодня» пользователя (client_time), а не от часов сервера.
 """
 from __future__ import annotations
@@ -118,8 +118,8 @@ class Parse:
 
 # ── Время ─────────────────────────────────────────────
 
-TIME_HM = re.compile(r"(?:\bв\s+|\bна\s+|^|\s)(\d{1,2})[:.](\d{2})\b", I)
-TIME_H = re.compile(r"\bв\s+(\d{1,2})(?:\s*(?:час(?:а|ов)?|ч\.?))?(?:\s+(утра|дня|вечера|ночи))?(?=\s|$|[,.!?])"
+TIME_HM = re.compile(r"(?:\b(?:в|на|к|ко)\s+|^|\s)(\d{1,2})[:.](\d{2})\b", I)
+TIME_H = re.compile(rf"\b(?:в|к|ко)\s+(\d{{1,2}})(?!\d|\s*[:.]\d|\s*(?:{MONTH_RE[1:-1]}|числ|класс|страниц|пункт|кабинет|процент|руб|кг|литр))(?:\s*(?:час(?:а|ов)?|ч\.?))?(?:\s+(утра|дня|вечера|ночи))?(?=\s|$|[,.!?])"
                     r"|\bна\s+(\d{1,2})(?:\s*(?:час(?:а|ов)?|ч\.?))?\s+(утра|дня|вечера|ночи)(?=\s|$|[,.!?])", I)
 TIME_WORDS = re.compile(r"\b(утром|вечером|днём|днем)\b", I)
 
@@ -198,7 +198,7 @@ def _parse_time(text: str) -> tuple[str | None, bool, list[tuple[int, int]]]:
         return f"{h:02d}:{mm:02d}", ambiguous, spans
     # «05.01 в 10» — это дата и время, а не 05:01
     valid = [x for x in TIME_HM.finditer(text) if int(x.group(1)) < 24 and int(x.group(2)) < 60]
-    bare_dot = [x for x in valid if "." in x.group(0) and not re.match(r"\s*(?:в|на)\s", x.group(0), I)]
+    bare_dot = [x for x in valid if "." in x.group(0) and not re.match(r"\s*(?:в|на|к|ко)\s", x.group(0), I)]
     if bare_dot and (len(valid) > len(bare_dot) or TIME_H.search(text)):
         valid = [x for x in valid if x not in bare_dot]
     m = valid[0] if valid else None
@@ -887,6 +887,13 @@ ASK_VERBS = (
 
 def strip_lead(text: str) -> str:
     rest = LEAD_RE.sub("", text)
+    # Remove only anchored request framing, not these words inside a task title.
+    while True:
+        cleaned = re.sub(r"^(?:будь(?:те)?\s+добр[аы]?|помоги(?:те)?(?:\s+мне)?\s+не\s+забыть|мне\s+бы)\b[\s,:!—-]*",
+                         "", rest, flags=I)
+        if cleaned == rest:
+            break
+        rest = LEAD_RE.sub("", cleaned)
     wanted = WANT_RE.match(rest)
     if wanted:
         rest = rest[wanted.end():]
@@ -979,7 +986,7 @@ UNTIL_RES = (
     ("month", re.compile(rf"\bдо\s+{MONTH_RE}\b", I)),
     ("season", re.compile(r"\bдо\s+(весны|лета|осени|зимы)\b", I)),
     ("span", re.compile(r"\b(?:на|в\s+течение)\s+(?:(\d+|один|одну|два|две|три|четыре|пять|шесть)\s+)?"
-                        r"(недел[юиь]\w*|месяц\w*|полгода|год\w*)\b", I)),
+                        r"(недел[юиь]\w*|месяц\w*|полгода|год\w*)\b(?:\s+впер[её]д\b)?", I)),
 )
 
 
@@ -1207,8 +1214,36 @@ def _doubts(result: "Parse", now: datetime) -> None:
     result.text = capitalize(body) if body else None
 
 
+def needs_llm_review(result: Parse) -> bool:
+    """Review incomplete creations, without sending clear rule matches to the provider."""
+    if result.intent != "create" or result.type not in ("task", "meeting", "reminder"):
+        return False
+    return (any(d.get("why") == "unclear" for d in result.doubt)
+            or re.search(r"\b(?:в|к|ко|на)\s+\d{1,2}(?:[:.]\d{2})?\b|^(?:будь(?:те)?\s+добр[аы]?|помоги(?:те)?|организуй(?:те)?)\b|[,;]\s*организуй(?:те)?\b",
+                         result.text or "", I) is not None)
+
+
 def parse(raw: str, now: datetime) -> Parse:
     text, typos = fix_typos(strip_lead(" ".join(raw.strip().split())))
+    # A forgotten event is background; the explicit reminder clause supplies its schedule.
+    forgotten = re.fullmatch(
+        r"(?:(?:я|мы)\s+)?(?:(?:позавчера|вчера|сегодня)\s+)?"
+        r"(?P<verb>забыл[аи]?|забыли|не\s+успел[аи]?|не\s+сделал[аи]?)\s+"
+        r"(?:(?:позавчера|вчера|сегодня)\s+)?(?P<action>[^,;]+?)(?:[,;]\s*|\s+)"
+        r"(?P<request>напомни(?:те)?\b.+)", text, I)
+    if forgotten:
+        reminder = parse(forgotten["request"], now)
+        if reminder.intent == "create" and reminder.type == "reminder":
+            if not reminder.text or reminder.text.lower().strip(" .!?") in ("сделать", "это", "об этом", "этом"):
+                action = parse(f"напомни {forgotten['action']}", now)
+                if action.text:
+                    title = action.text
+                    if re.match(r"не\s+сделал", forgotten["verb"], I) and not title.lower().startswith("сделать "):
+                        title = "Сделать " + title[:1].lower() + title[1:]
+                    request = re.sub(r"\s+(?:сделать|об\s+этом|это)[ .!?]*$", "", forgotten["request"], flags=I)
+                    reminder = parse(f"{request.rstrip(' .!?')} {title}", now)
+            reminder.doubt = typos + reminder.doubt
+            return reminder
     if repeated := _with_repeat(text, now):
         return repeated
     result = Parse()
@@ -1492,10 +1527,11 @@ def parse(raw: str, now: datetime) -> Parse:
         result.date, result.date_kind, result.vague_period = info.period.end, "deadline", False
 
     body = _cut(text, info.spans + time_spans)
+    body = re.sub(r"[,;]\s*организуй(?:те)?\s+это\s+как\s+встречу[\s.!]*$", "", body, flags=I)
     body = re.sub(r"^\s*(?:пожалуйста\s+)?(?:напомни(?:те)?|поставь|запиши|добавь|создай|запланируй|назначь|внеси|заведи)(?:\s+мне)?\b", " ", body, flags=I)
     if is_task_word:
         body = re.sub(r"^\s*сделай\b", " ", body, flags=I)
-    body = re.sub(r"^\s*(?:новую\s+|новое\s+|новая\s+)?(?:задачу|задача|задачи|напоминание)\b", " ", body, flags=I)
+    body = re.sub(r"^\s*(?:новую\s+|новое\s+|новая\s+)?(?:задачу|задача|задачи|напоминани[еяй])\b", " ", body, flags=I)
     body = re.sub(r"\b(?:у\s+меня|мне|нужно|надо|необходимо|не\s+забыть|пожалуйста)\b", " ", body, flags=I)
     body = strip_fillers(body)
     body = re.sub(r"\b(?:утром|вечером|днём|днем)\b", " ", body, flags=I)
