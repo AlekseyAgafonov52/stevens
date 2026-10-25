@@ -39,30 +39,30 @@ async def client_log(body: ClientEvent, owner: Owner = Depends(get_owner)):
     return Response(status_code=204)
 
 
-@router.post("/stt")
-async def stt(request: Request, owner: Owner = Depends(get_owner)):
-    """Аудио одной фразы → {"text": "…"} через Yandex SpeechKit. Нет ключа или сервис упал — 503."""
-    kind = (request.headers.get("content-type") or "").split(";")[0].strip().lower()
-    if kind not in STT_TYPES:
-        return JSONResponse(status_code=415, content={"error": "unsupported_audio"})
-    audio = await request.body()
-    if len(audio) > STT_MAX_BYTES:
-        return JSONResponse(status_code=413, content={"error": "audio_too_long"})
-    if not features.on("stt"):
-        return JSONResponse(status_code=503, content={"error": "stt_unavailable"})
-    if not audio:
-        return {"text": ""}
-    try:
-        audio = await ogg_opus(audio, kind)
-    except AudioError as error:
-        return JSONResponse(status_code=error.status, content={"error": error.code})
-    params = {"lang": "ru-RU", "format": "oggopus"}
-    try:
-        async with httpx.AsyncClient(timeout=12) as client:
-            answer = await client.post(STT_URL, params=params, content=audio,
-                                       headers={"Authorization": f"Api-Key {os.getenv('YANDEX_API_KEY')}"})
-        answer.raise_for_status()
-        return {"text": (answer.json().get("result") or "").strip()}
-    except Exception as error:  # noqa: BLE001
-        print(f"stt error: {type(error).__name__}")
-        return JSONResponse(status_code=503, content={"error": "stt_unavailable"})
+# @router.post("/stt")
+# async def stt(request: Request, owner: Owner = Depends(get_owner)):
+#     """Аудио одной фразы → {"text": "…"} через Yandex SpeechKit. Нет ключа или сервис упал — 503."""
+#     kind = (request.headers.get("content-type") or "").split(";")[0].strip().lower()
+#     if kind not in STT_TYPES:
+#         return JSONResponse(status_code=415, content={"error": "unsupported_audio"})
+#     audio = await request.body()
+#     if len(audio) > STT_MAX_BYTES:
+#         return JSONResponse(status_code=413, content={"error": "audio_too_long"})
+#     if not features.on("stt"):
+#         return JSONResponse(status_code=503, content={"error": "stt_unavailable"})
+#     if not audio:
+#         return {"text": ""}
+#     try:
+#         audio = await ogg_opus(audio, kind)
+#     except AudioError as error:
+#         return JSONResponse(status_code=error.status, content={"error": error.code})
+#     params = {"lang": "ru-RU", "format": "oggopus"}
+#     try:
+#         async with httpx.AsyncClient(timeout=12) as client:
+#             answer = await client.post(STT_URL, params=params, content=audio,
+#                                        headers={"Authorization": f"Api-Key {os.getenv('YANDEX_API_KEY')}"})
+#         answer.raise_for_status()
+#         return {"text": (answer.json().get("result") or "").strip()}
+#     except Exception as error:  # noqa: BLE001
+#         print(f"stt error: {type(error).__name__}")
+#         return JSONResponse(status_code=503, content={"error": "stt_unavailable"})

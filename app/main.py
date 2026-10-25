@@ -17,6 +17,7 @@ from app import features
 from app.routers import auth, chat, client, imports, records, transfer
 from app.routers import push as push_router
 from app.logic.request_limits import RequestLimits
+from app.voice.stt import router as stt_router
 
 
 @asynccontextmanager
@@ -83,6 +84,7 @@ app.include_router(records.router)
 app.include_router(push_router.router)
 app.include_router(client.router)
 app.include_router(transfer.router)
+app.include_router(stt_router)
 
 
 @app.get("/api/health")
