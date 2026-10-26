@@ -50,6 +50,14 @@ async def list_records(
     return {"records": [r.to_contract() for r in sorted(rows, key=order_key)]}
 
 
+@router.get("/{record_id}")
+async def get_record(record_id: int, owner: Owner = Depends(get_owner), db: AsyncSession = Depends(get_db)):
+    record = await owned(db, owner, record_id)
+    if not record or record.deleted_at is not None:
+        return not_found()
+    return {"record": record.to_contract()}
+
+
 @router.patch("/{record_id}")
 async def patch_record(
     record_id: int,

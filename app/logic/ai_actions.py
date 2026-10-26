@@ -111,7 +111,7 @@ async def propose(ctx: Ctx, result: Result, selected: list[Record] | None = None
         values: dict = {}
         change = result.change
         if result.intent == "complete":
-            if record.type not in (TaskType.task, TaskType.reminder):
+            if record.type not in (TaskType.task, TaskType.reminder, TaskType.meeting):
                 return chat.meeting_not_done(ctx, [record]) if record.type == TaskType.meeting else chat.reply(
                     "clarify", *ctx.say("completed_busy_no"), buttons=[chat.CANCEL])
             values["status"] = "done"

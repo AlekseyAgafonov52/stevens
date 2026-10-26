@@ -149,8 +149,9 @@ async def main():
             old_id = "old-" + uuid.uuid4().hex[:12]
             await c.get(MONTH, headers={"X-Client-Id": old_id})
             await c.post("/api/chat", headers={"X-Client-Id": old_id}, json={
-                "conversation_id": "o", "text": "каждый вторник в 10 планёрка", "client_time": CLOCK})
-            await c.get(MONTH)  # общая
+                "conversation_id": str(uuid.uuid4()), "text": "каждый вторник в 10 планёрка", "client_time": CLOCK,
+                "source": "text", "timezone": "Europe/Moscow"})
+            await c.get(MONTH, headers={"X-Client-Id": "shared-demo"})  # явный режим обязателен по v1.6
             async with AsyncSessionLocal() as db:
                 await db.execute(text("update sandboxes set seen_at = now() - interval '40 days' "
                                       "where client_id in (:o, 'shared-demo')"), {"o": old_id})

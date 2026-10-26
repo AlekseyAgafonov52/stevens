@@ -135,6 +135,7 @@ export const T = {
   remind_one: 'Позвольте напомнить.',
   remind_meeting: 'Через 15 минут у вас встреча.',
   remind_again: 'Позвольте напомнить ещё раз.',
+  remind_overdue: 'Срок прошёл. Отметьте событие выполненным, когда закончите.',
   notify_yes: 'Да',
   notify_no: 'Не надо',
   notify_view: 'Посмотреть',

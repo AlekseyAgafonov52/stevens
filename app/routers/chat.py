@@ -1528,10 +1528,8 @@ def meeting_not_done(ctx: Ctx, meetings: list[Record]) -> dict:
 
 
 async def complete_one(ctx: Ctx, record: Record) -> dict:
-    if record.type == TaskType.meeting:
-        return meeting_not_done(ctx, [record])
-    if record.type == TaskType.busy:
-        text, speech = ctx.say("completed_busy_no", {"text": record.text})
+    if record.type in (TaskType.busy, TaskType.note):
+        text, speech = ctx.say("completed_note_no" if record.type == TaskType.note else "completed_busy_no", {"text": record.text})
         return reply("clarify", text, speech, records=[record.to_contract()])
     record.status = TaskStatus.done
     await ctx.db.commit()
@@ -1543,9 +1541,10 @@ async def complete_one(ctx: Ctx, record: Record) -> dict:
 
 
 async def complete_all(ctx: Ctx, p: nlu.Parse) -> dict:
-    """«Отметь всё на сегодня выполненным» — открытые задачи и напоминания дня или периода; встречи не трогаем."""
+    """Complete scheduled tasks, reminders and meetings in the requested period."""
     period = p.period or nlu._day_period(p.date or ctx.today, ctx.today)
-    rows = await owner_records(ctx, Record.type.in_([TaskType.task, TaskType.reminder]), Record.status != TaskStatus.done,
+    kinds = [TaskType(p.filter_type)] if p.filter_type in ("task", "reminder", "meeting") else [TaskType.task, TaskType.reminder, TaskType.meeting]
+    rows = await owner_records(ctx, Record.type.in_(kinds), Record.status.is_distinct_from(TaskStatus.done),
                                Record.date >= period.start.isoformat(), Record.date <= period.end.isoformat())
     if not rows:
         text, speech = ctx.say("completed_many_none", {"period": period.label})
@@ -1742,11 +1741,8 @@ async def answer_group(ctx: Ctx, p: nlu.Parse, action: str) -> dict:
                          awaiting=True, buttons=[button_action("Да, удалить все", "confirm_yes"),
                                                  button_action("Нет", "cancel", style="secondary")])
         return await bulk_delete(ctx, pending)
-    open_rows = [r for r in rows if r.type != TaskType.meeting and r.status != TaskStatus.done]
+    open_rows = [r for r in rows if r.type in (TaskType.task, TaskType.reminder, TaskType.meeting) and r.status != TaskStatus.done]
     if not open_rows:
-        meetings = [r for r in rows if r.type == TaskType.meeting]
-        if meetings:
-            return meeting_not_done(ctx, meetings)
         text, speech = ctx.say("completed_many_none", {"period": "среди них"})
         return reply("found", text, speech, total=0)
     if len(open_rows) == 1:
@@ -1764,25 +1760,18 @@ async def answer_complete(ctx: Ctx, p: nlu.Parse) -> dict:
         return await answer_group(ctx, p, "complete")
     if p.bulk and not p.keywords:
         return await complete_all(ctx, p)
-    if p.filter_type == "meeting":
-        if p.keywords or p.date:
-            meetings = [r for r in await find(ctx, p) if is_future(r, ctx.now)]
-        else:
-            focus = await owned_record(ctx, ctx.conv.focus)
-            meetings = [focus] if focus and focus.deleted_at is None and focus.type == TaskType.meeting else []
-        return meeting_not_done(ctx, nearest_first(meetings, ctx.now)[:1] if single(ctx, meetings) else meetings)
     if near := await focused(ctx, p):
         open_near = [r for r in near if r.status != TaskStatus.done] or near
         return await complete_one(ctx, open_near[0]) if len(open_near) == 1 else which_one(ctx, open_near, "complete")
     if not (p.keywords or p.date or p.filter_type):
         text, speech = ctx.say("clarify_generic")
         return reply("clarify", text, speech, awaiting=True, buttons=[CANCEL])
-    found = await find(ctx, p, types={"task", "reminder"})
+    found = await find(ctx, p, types={"task", "reminder", "meeting"})
     open_ones = [r for r in found if r.status != TaskStatus.done] or found
     if not open_ones:
         others = await find(ctx, nlu.Parse(keywords=p.keywords, date=p.date), types={"meeting", "busy"})
         if meetings := [r for r in others if r.type == TaskType.meeting]:
-            return meeting_not_done(ctx, meetings)
+            return await complete_one(ctx, meetings[0]) if len(meetings) == 1 else which_one(ctx, meetings, "complete")
         if others:
             return await complete_one(ctx, others[0])  # занятость: «не отмечается, можно удалить»
         text, speech = ctx.say("found_none")

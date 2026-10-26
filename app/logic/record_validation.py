@@ -35,7 +35,7 @@ def apply_patch(record: Record, body: dict) -> str | None:
         return "invalid_time"
     status = body.get("status")
     if "status" in body:
-        if status not in ("open", "done") or record.type in (TaskType.meeting, TaskType.note, TaskType.busy):
+        if status not in ("open", "done") or record.type in (TaskType.note, TaskType.busy):
             return "invalid_status"
 
     remind = body.get("remind_before")

@@ -22,7 +22,7 @@ import { emitActivity, onAssistantResponse, onRecordsChanged } from './events';
 import { setHint } from './chat';
 import { createStore, lastAnswerId, store } from './store';
 
-type PushMessage = { type?: string; recordId?: number; snoozed?: boolean };
+type PushMessage = { type?: string; recordId?: number; snoozed?: boolean; overdue?: boolean };
 
 export type NotifyCard = { record: RecordItem; title: string; tag: string };
 
@@ -194,26 +194,28 @@ function fire(record: RecordItem, key: string): void {
 }
 
 async function findRecord(id: number): Promise<RecordItem | null> {
-  const now = Date.now();
   try {
-    const records = await api.records(isoDay(new Date(now - 24 * 60 * 60 * 1000)), isoDay(new Date(now + 24 * 60 * 60 * 1000)));
-    return records.find((r) => r.id === id) ?? null;
+    return await api.record(id);
   } catch {
     return null;
   }
 }
 
 /** «Посмотреть» в пуше: Стивенс присылает запись в чат (если только что не прислал её сам) */
-async function showRecord(id: number, ring = false): Promise<void> {
+async function showRecord(id: number, ring = false, overdue = false): Promise<void> {
   const record = await findRecord(id);
   if (!record) return;
   const last = store.get().messages.at(-1);
-  if (last?.kind === 'answer' && last.response.kind === 'reminder' && last.response.records.some((r) => r.id === id)) return;
+  if (!ring && last?.kind === 'answer' && last.response.kind === 'reminder' && last.response.records.some((r) => r.id === id)) return;
   const key = keyOf(record);
   const fired = storage.notifyFired();
   if (!fired.includes(key)) storage.setNotifyFired([...fired, key]);
-  if (ring) showNotifyCard(record, true);
-  else remindInFeed([record], titleOf(record, false));
+  if ((ring || overdue) && record.status === 'done') return;
+  if (ring) {
+    showNotifyCard(record, true);
+    if (overdue && notifyStore.get().card) notifyStore.set({ card: { record, title: T.remind_overdue, tag: key } });
+  }
+  else remindInFeed([record], overdue ? T.remind_overdue : titleOf(record, false));
 }
 
 /** «Через 10 минут», когда пуша с сервера нет: откладывает сама вкладка */
@@ -375,6 +377,15 @@ export async function disableNotify(): Promise<void> {
   }
 }
 
+export async function handlePushMessage(data: PushMessage): Promise<void> {
+  const id = typeof data.recordId === 'number' ? data.recordId : null;
+  if (data.type === 'stevens-reminder' && data.overdue && id !== null) await showRecord(id, true, true);
+  else if (data.type === 'stevens-reminder' && data.snoozed && id !== null) await showRecord(id, true);
+  else if (data.type === 'stevens-reminder') await remindMissed(Date.now() - 15 * 60 * 1000, false);
+  else if (data.type === 'stevens-open' && id !== null) await showRecord(id, false, !!data.overdue);
+  else if (data.type === 'stevens-snooze' && id !== null) snoozeHere(id);
+}
+
 export function initNotify(): void {
   refreshOn();
   // Время прошлого визита — до того, как его отметит брифинг
@@ -412,19 +423,16 @@ export function initNotify(): void {
   setInterval(() => void reschedule(), RESCAN_MS);
   // Пуш пришёл, когда человек на вкладке: пуша не было, показываем сообщение (если таймер его ещё не показал)
   navigator.serviceWorker?.addEventListener('message', (event: MessageEvent<PushMessage>) => {
-    const data = event.data ?? {};
-    const id = typeof data.recordId === 'number' ? data.recordId : null;
-    if (data.type === 'stevens-reminder' && data.snoozed && id !== null) void showRecord(id, true);
-    else if (data.type === 'stevens-reminder') void remindMissed(Date.now() - 15 * 60 * 1000, false);
-    else if (data.type === 'stevens-open' && id !== null) void showRecord(id);
-    else if (data.type === 'stevens-snooze' && id !== null) snoozeHere(id);
+    void handlePushMessage(event.data ?? {});
   });
   // Приложение открыли кнопкой «Посмотреть» из пуша: /?remind=<номер записи>
   const remindParam = typeof location !== 'undefined' ? new URLSearchParams(location.search).get('remind') : null;
+  const remindOverdue = typeof location !== 'undefined' && new URLSearchParams(location.search).get('overdue') === '1';
   let remindId = remindParam && /^\d+$/.test(remindParam) ? Number(remindParam) : null;
   if (remindParam !== null) {
     const url = new URL(location.href);
     url.searchParams.delete('remind');
+    url.searchParams.delete('overdue');
     history.replaceState(history.state, '', url);
   }
   let booted = false;
@@ -436,7 +444,7 @@ export function initNotify(): void {
       booted = true;
       const id = remindId;
       remindId = null;
-      void remindMissed(previous).then(() => (id === null ? undefined : showRecord(id)));
+      void remindMissed(previous).then(() => (id === null ? undefined : showRecord(id, false, remindOverdue)));
     }
     // Вошли в аккаунт или вернулись в песочницу — пуши и таймеры переезжают к новому владельцу
     if (owner !== `${mode}:${userId}`) {

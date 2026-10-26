@@ -210,6 +210,13 @@ export const api = {
     return record;
   },
 
+  async record(id: number): Promise<RecordItem> {
+    const response = await request(`/api/records/${id}`, {});
+    const record = parseRecord(((await json(response)) as { record?: unknown }).record);
+    if (!record) throw new ApiFailure({ type: 'server' });
+    return record;
+  },
+
   async deleteRecord(id: number): Promise<void> {
     await request(`/api/records/${id}`, { method: 'DELETE' });
   },

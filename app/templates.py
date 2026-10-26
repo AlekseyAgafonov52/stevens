@@ -13,6 +13,8 @@ from app.textfmt import capitalize, plural
 
 # ID → (варианты text, озвучка или None)
 TEMPLATES: dict[str, tuple[list[str], str | None]] = {
+    "push_overdue": (["Срок прошёл. Отметьте событие выполненным, когда закончите."], None),
+    "completed_note_no": (["Выполненными отмечаются задачи, напоминания и встречи. У заметки нет статуса выполнения."], None),
     "confirm_ai_delete": (["Удалить выбранные записи?"], None),
     "confirm_ai_complete": (["Отметить выбранные записи выполненными?"], None),
     "confirm_ai_change": (["Изменить выбранные записи, как показано в черновиках?"], None),

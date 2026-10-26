@@ -272,7 +272,7 @@ function DayList({ canComplete, canDelete }: { canComplete: boolean; canDelete: 
               />
             );
           }
-          const checkable = record.type === 'task' || record.type === 'reminder' || record.type === null;
+          const checkable = record.type === 'task' || record.type === 'reminder' || record.type === 'meeting' || record.type === null;
           const leading = !canComplete ? undefined : checkable ? (
             <button
               type="button"

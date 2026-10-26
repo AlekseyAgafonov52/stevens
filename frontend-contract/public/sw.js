@@ -29,33 +29,33 @@ self.addEventListener('push', (event) => {
     self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((list) => {
       const visible = list.filter((c) => c.visibilityState === 'visible');
       if (visible.length) {
-        visible.forEach((c) => c.postMessage({ type: 'stevens-reminder', tag: data.tag, recordId, snoozed: !!data.snoozed }));
+        visible.forEach((c) => c.postMessage({ type: 'stevens-reminder', tag: data.tag, recordId, snoozed: !!data.snoozed, overdue: !!data.overdue }));
       }
       // Каждый Web Push должен показать уведомление, в том числе при открытом окне:
       // Safari отзывает разрешение за невидимые push-события.
       return self.registration.showNotification(data.title || 'Stevens', {
         body: data.body || '',
         tag: data.tag,
-        renotify: !!data.snoozed,
+        renotify: !!data.snoozed || !!data.overdue,
         icon: '/icon-192.png',
         badge: '/icon-192.png',
         requireInteraction: true,
         actions: recordId === null ? [] : ACTIONS,
-        data: { recordId },
+        data: { recordId, overdue: !!data.overdue },
       });
     }),
   );
 });
 
 /** Открыть вкладку и попросить Стивенса показать запись в чате */
-function openRecord(recordId) {
+function openRecord(recordId, overdue = false) {
   return self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((list) => {
     const open = list.find((c) => 'focus' in c);
     if (open) {
-      if (recordId !== null) open.postMessage({ type: 'stevens-open', recordId });
+      if (recordId !== null) open.postMessage({ type: 'stevens-open', recordId, overdue });
       return open.focus();
     }
-    return self.clients.openWindow(recordId === null ? '/' : `/?remind=${recordId}`);
+    return self.clients.openWindow(recordId === null ? '/' : `/?remind=${recordId}${overdue ? '&overdue=1' : ''}`);
   });
 }
 
@@ -84,5 +84,5 @@ self.addEventListener('notificationclick', (event) => {
     event.waitUntil(snooze(recordId));
     return;
   }
-  event.waitUntil(openRecord(recordId));
+  event.waitUntil(openRecord(recordId, !!event.notification.data?.overdue));
 });
