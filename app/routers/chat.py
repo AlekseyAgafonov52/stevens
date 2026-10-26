@@ -1489,7 +1489,8 @@ async def answer_person(ctx: Ctx, p: nlu.Parse) -> dict:
 
 def which_one(ctx: Ctx, candidates: list[Record], action_id: str) -> dict:
     ctx.conv.pending = None
-    chosen = nearest_first(one_per_series(candidates, ctx.now), ctx.now)[:WHICH_LIMIT]
+    distinct = candidates if action_id == "delete_occurrence" else one_per_series(candidates, ctx.now)
+    chosen = nearest_first(distinct, ctx.now)[:WHICH_LIMIT]
     text, speech = ctx.say("which_one")
     ctx.conv.choices = {"action": action_id, "ids": [r.id for r in chosen]}
     buttons = []
@@ -1704,6 +1705,15 @@ async def answer_series_delete(ctx: Ctx, pending: Pending, raw: str) -> dict | N
     if not record or record.deleted_at:
         return None
     if SERIES_ONE_REPLY_RE.search(raw):
+        _, _, _, info = nlu.parse_when(raw, ctx.now)
+        if info.date:
+            rows = await owner_records(ctx, Record.series_id == record.series_id,
+                                       Record.date == info.date.isoformat())
+            if not rows:
+                return reply("found", *ctx.say("found_none"), total=0)
+            if len(rows) > 1:
+                return which_one(ctx, rows, "delete_occurrence")
+            return await delete_one(ctx, rows[0], "deleted_occurrence")
         return await delete_one(ctx, record, "deleted_occurrence")
     if SERIES_ALL_REPLY_RE.search(raw):
         return await delete_series(ctx, record)
@@ -2775,13 +2785,26 @@ async def cancel_focused_occurrence(ctx: Ctx, raw: str) -> dict | None:
     if "d2" not in ctx.features or not features.on("f15") or not features.on("f12"):
         return examples("not_understood", "not_understood", ctx, EXAMPLES)
     _, _, _, info = nlu.parse_when(match["day"], ctx.now)
-    if info.date is None:
+    if info.date is None and info.period is None:
         return reply("clarify", *ctx.say("clarify_generic"), awaiting=True, buttons=[CANCEL])
     focus = await owned_record(ctx, ctx.conv.focus)
     if not focus or focus.series_id is None or focus.deleted_at is not None:
         return reply("clarify", *ctx.say("clarify_generic"), awaiting=True, buttons=[CANCEL])
-    rows = await owner_records(ctx, Record.series_id == focus.series_id, Record.date == info.date.isoformat())
-    if not rows and re.fullmatch(r"через\s+(?:(?:\d+|[а-яё]+)\s+)?недел[юиь]", match["day"], re.I):
+    if info.period:
+        rows = await owner_records(ctx, Record.series_id == focus.series_id,
+                                   Record.date >= info.period.start.isoformat(),
+                                   Record.date <= info.period.end.isoformat())
+    else:
+        rows = await owner_records(ctx, Record.series_id == focus.series_id, Record.date == info.date.isoformat())
+        # A bare weekday names a day, not a particular series. Do not silently
+        # choose the most recently created lesson when several are scheduled.
+        if re.fullmatch(rf"(?:в\s+|во\s+)?{nlu.WEEKDAY_RE}", match["day"], re.I):
+            candidates = await owner_records(ctx, Record.series_id.is_not(None),
+                                            Record.date == info.date.isoformat(),
+                                            Record.type != TaskType.busy)
+            if len({r.series_id for r in candidates}) > 1:
+                return which_one(ctx, candidates, "delete_occurrence")
+    if not rows and info.date and re.fullmatch(r"через\s+(?:(?:\d+|[а-яё]+)\s+)?недел[юиь]", match["day"], re.I):
         # A relative week need not land on the series weekday. Offer the
         # occurrence in that week for confirmation rather than deleting silently.
         start, end = week_bounds(info.date)
@@ -2798,6 +2821,50 @@ async def cancel_focused_occurrence(ctx: Ctx, raw: str) -> dict | None:
     return await delete_one(ctx, rows[0], "deleted_occurrence")
 
 
+async def correct_series_weekdays(ctx: Ctx, raw: str) -> dict | None:
+    correction = re.match(r"^(?:нет[\s,]+)?лучше\s+", raw, re.I)
+    if not correction:
+        return None
+    rest = raw[correction.end():]
+    repeat = nlu.parse_repeat(rest, ctx.now)
+    if not repeat or nlu._cut(rest, repeat.spans).strip(" ,.!?"):
+        return None
+    if not features.on("f12") or not features.on("f15"):
+        return examples("not_understood", "not_understood", ctx, EXAMPLES)
+    focus = await owned_record(ctx, ctx.conv.focus)
+    if not focus or not focus.series_id or focus.deleted_at:
+        return reply("clarify", *ctx.say("clarify_generic"), awaiting=True, buttons=[CANCEL])
+    from app.models import Series
+    rule = await ctx.db.get(Series, focus.series_id)
+    if not rule or rule.ended:
+        return reply("clarify", *ctx.say("clarify_generic"), awaiting=True, buttons=[CANCEL])
+    first = nlu.first_day(repeat.days, ctx.today, ctx.now, rule.time)
+    last = min(parse_date(rule.filled_until), parse_date(rule.until) or date.max)
+    dates = series.days_between(first, last, repeat.days)
+    if not dates:
+        return reply("clarify", *ctx.say("clarify_generic"), awaiting=True, buttons=[CANCEL])
+    rows = await series.upcoming(ctx.db, ctx.owner, rule.id, ctx.today)
+    rule.weekdays = ",".join(map(str, repeat.days))
+    stamp = datetime.now(timezone.utc)
+    changed = []
+    for index, day in enumerate(dates):
+        if index < len(rows):
+            row = rows[index]
+            row.date, row.repeat = day.isoformat(), rule.repeat()
+        else:
+            row = series.occurrence(ctx.owner, rule, day, stamp)
+            ctx.db.add(row)
+        changed.append(row)
+    for row in rows[len(dates):]:
+        row.deleted_at = stamp
+    await ctx.db.commit()
+    ctx.conv.focus = changed[0].id
+    data = changed[0].to_contract(marks=["new"])
+    values, speech_values = ctx.record_values(data)
+    return reply("updated", *ctx.say("fixed", values, speech_values),
+                 records=[data], total=len(changed))
+
+
 async def respond(ctx: Ctx, payload: ChatRequest) -> dict:
     ctx.found, ctx.conv.found = ctx.conv.found, []
     choices, ctx.conv.choices = ctx.conv.choices, None
@@ -2810,6 +2877,8 @@ async def respond(ctx: Ctx, payload: ChatRequest) -> dict:
     raw = payload.text.strip()
     ctx.raw = raw
     pending = ctx.conv.pending
+    if pending is None and not choices and (corrected := await correct_series_weekdays(ctx, raw)):
+        return corrected
     if pending is None and not choices and (cancelled := await cancel_focused_occurrence(ctx, raw)):
         return cancelled
     if choices and raw:

@@ -149,6 +149,122 @@ class BulkDeleteCalendarTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(restored["total"], 2)
         self.assertEqual(len(await self.calendar()), 2)
 
+    async def tutor(self, subject="математике"):
+        result = await self.say(f"Напомни репетитор по {subject} каждую среду в 13 на месяц")
+        self.assertEqual(result["kind"], "created", result)
+        return result
+
+    async def test_cancel_next_week_occurrence(self):
+        await self.tutor()
+        result = await self.say("На следующей неделе занятия не будет")
+        self.assertEqual(result["kind"], "deleted", result)
+        self.assertEqual(result["records"][0]["date"], "2026-11-04")
+        self.assertEqual(len(await self.calendar()), 4)
+
+    async def test_two_series_same_day_require_choice(self):
+        await self.tutor()
+        await self.tutor("физике")
+        result = await self.say("В среду занятия не будет")
+        self.assertEqual(result["kind"], "clarify", result)
+        self.assertEqual(len(result["records"]), 2)
+        self.assertEqual(len(await self.calendar()), 10)
+
+    async def test_two_clarifications_preserve_weekly_title(self):
+        self.assertEqual((await self.say("Напомни каждую неделю про математику"))["kind"], "clarify")
+        self.assertEqual((await self.say("По средам"))["kind"], "clarify")
+        result = await self.say("В 13")
+        self.assertEqual(result["kind"], "created", result)
+        row = result["records"][0]
+        self.assertEqual((row["text"], row["time"], row["repeat"]["weekdays"]), ("Математику", "13:00", [2]))
+
+    async def test_correct_created_series_weekday(self):
+        await self.tutor()
+        result = await self.say("Нет, лучше по пятницам")
+        self.assertEqual(result["kind"], "updated", result)
+        rows = await self.calendar()
+        self.assertTrue(rows)
+        self.assertTrue(all(date.fromisoformat(r["date"]).weekday() == 4 and r["time"] == "13:00"
+                            and r["repeat"]["until"] == "2026-11-25" for r in rows), rows)
+
+    async def test_elapsed_time_starts_next_week(self):
+        self.ctx.now = datetime(2026, 10, 28, 14)
+        result = await self.tutor()
+        self.assertEqual(result["records"][0]["date"], "2026-11-04")
+
+    async def test_cancel_bulk_tomorrow(self):
+        a = self.add_record(TaskType.task)
+        b = self.add_record(TaskType.reminder)
+        a.date = b.date = "2026-10-27"
+        self.session.commit()
+        self.assertEqual((await self.say("Удали все задачи на завтра"))["kind"], "confirm")
+        self.assertEqual((await self.say("Нет"))["kind"], "cancelled")
+        self.assertEqual(len(await self.calendar()), 2)
+
+    async def test_duplicate_confirmation_does_not_delete_new_records(self):
+        self.add_record(TaskType.task)
+        self.add_record(TaskType.task)
+        await self.say("Удали все задачи")
+        await self.say("Да, удалить все", {"id": "confirm_yes"})
+        new = self.add_record(TaskType.task)
+        result = await self.say("Да, удалить все", {"id": "confirm_yes"})
+        self.assertIsNone(new.deleted_at, result)
+        self.assertEqual([r["id"] for r in await self.calendar()], [new.id])
+
+    async def test_deleted_occurrence_stays_deleted_after_reloads(self):
+        await self.tutor()
+        result = await self.say("11 ноября занятий не будет")
+        self.assertEqual(result["kind"], "deleted", result)
+        deleted_id = result["records"][0]["id"]
+        for _ in range(3):
+            self.session.expire_all()
+            self.assertNotIn(deleted_id, [r["id"] for r in await self.calendar()])
+
+    async def test_restore_series_reenables_extension(self):
+        await self.say("Напомни репетитор каждую среду в 13")
+        await self.say("Удали репетитора вообще")
+        repeat = self.session.query(Series).one()
+        self.assertTrue(repeat.ended)
+        await self.say("Вернуть все", {"id": "restore_all"})
+        self.assertFalse(repeat.ended)
+        from app import series
+        old_edge = repeat.filled_until
+        await series.extend(self.db, self.owner, date(2027, 10, 26))
+        self.assertGreater(repeat.filled_until, old_edge)
+
+    async def test_series_delete_reply_selects_named_date(self):
+        await self.tutor()
+        self.assertEqual((await self.say("Удали репетитора"))["kind"], "clarify")
+        result = await self.say("Только 11 ноября")
+        self.assertEqual(result["kind"], "deleted", result)
+        self.assertEqual(result["records"][0]["date"], "2026-11-11")
+
+    async def test_period_with_multiple_occurrences_offers_each_date(self):
+        created = await self.say("Напомни репетитор по средам и пятницам в 13 на месяц")
+        self.assertEqual(created["kind"], "created", created)
+        count = len(await self.calendar())
+        result = await self.say("На следующей неделе занятия не будет")
+        self.assertEqual(result["kind"], "clarify", result)
+        self.assertEqual({r["date"] for r in result["records"]}, {"2026-11-04", "2026-11-06"})
+        chosen = result["buttons"][1]["send"]["action"]
+        deleted = await self.say("Выбрать", chosen)
+        self.assertEqual(deleted["records"][0]["date"], "2026-11-06")
+        self.assertEqual(len(await self.calendar()), count - 1)
+
+    async def test_named_date_outside_series_does_not_delete_nearest(self):
+        await self.tutor()
+        await self.say("Удали репетитора")
+        result = await self.say("Только 12 ноября")
+        self.assertEqual((result["kind"], result["total"]), ("found", 0))
+        self.assertEqual(len(await self.calendar()), 5)
+
+    async def test_corrected_weekday_persists_after_calendar_reload(self):
+        await self.tutor()
+        await self.say("Нет, лучше по пятницам")
+        self.session.expire_all()
+        self.assertEqual(self.session.query(Series).one().weekdays, "4")
+        self.assertEqual({r["date"] for r in await self.calendar()},
+                         {"2026-10-30", "2026-11-06", "2026-11-13", "2026-11-20"})
+
 
 if __name__ == "__main__":
     unittest.main()
