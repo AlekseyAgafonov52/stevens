@@ -1,4 +1,4 @@
-"""Включённые фичи (контракт v1.5, раздел 1.1): их список отдаёт GET /api/health.
+"""Включённые фичи (контракт v1.6, раздел 1.1): их список отдаёт GET /api/health.
 
 STEVENS_FEATURES — список через запятую («f2,f3,f5»); не задан — всё, что сервер умеет.
 `stt` (распознавание на сервере) — только когда есть ключ Yandex Cloud.
@@ -6,7 +6,7 @@ STEVENS_FEATURES — список через запятую («f2,f3,f5»); не
 """
 import os
 
-READY = [f"f{n}" for n in range(26)]  # Ф0…Ф25: сервер умеет всё, Ф25 — занятость
+READY = [f"f{n}" for n in range(27)]  # Ф0…Ф26, including atomic import/export
 
 
 def stt_ready() -> bool:

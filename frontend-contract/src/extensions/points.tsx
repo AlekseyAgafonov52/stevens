@@ -41,12 +41,14 @@ export function HeaderRightStart() {
 /** Д6 / Ф13: панель календаря справа */
 export function LayoutSidePanel() {
   const on = useServer('f13');
-  return CalendarPanel && on ? wrap(<CalendarPanel canComplete={features.d3_complete} canDelete={features.d2_delete} />) : null;
+  const editing = useServer('f12');
+  return CalendarPanel && on ? wrap(<CalendarPanel canComplete={features.d3_complete && editing} canDelete={features.d2_delete && editing} />) : null;
 }
 
 /** Д10: «Исправить» первой в ряду кнопок ответа created с одной записью; активна только у последнего */
 export function AnswerExtraButtons({ message, isLast }: { message: AnswerMessage; isLast: boolean }) {
-  if (!EditButton) return null;
+  const on = useServer('f12');
+  if (!EditButton || !on) return null;
   const { response } = message;
   if (response.kind !== 'created' || response.records.length !== 1 || response.records[0].id === null) return null;
   if (response.records[0].marks.includes('deleted')) return null;
@@ -79,17 +81,20 @@ export function RecordCardState({ record }: { record: RecordItem }) {
 
 /** Д14: персонаж на строке ввода */
 export function InputBarOverlay() {
-  return MascotPerch ? wrap(<MascotPerch />) : null;
+  const on = useServer('f22');
+  return MascotPerch && on ? wrap(<MascotPerch />) : null;
 }
 
 /** Д14: персонаж справа от «Stevens» на экране входа */
 export function LoginTitleAside() {
-  return MascotTitle ? wrap(<MascotTitle />) : null;
+  const on = useServer('f22');
+  return MascotTitle && on ? wrap(<MascotTitle />) : null;
 }
 
 /** Д15: обучение в песочнице — над строкой статуса */
 export function BottomTop() {
-  return TourBar ? wrap(<TourBar />) : null;
+  const on = useServer('f23');
+  return TourBar && on ? wrap(<TourBar />) : null;
 }
 
 /** Д15: «Пройти обучение» в меню песочницы и аккаунта */

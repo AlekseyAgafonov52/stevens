@@ -1,6 +1,7 @@
 /** Лента — 02-screens.md, 2.2–2.3; прокрутка — 03-behavior.md, раздел 9. */
 import { ArrowDown, CircleAlert, Mic, RotateCw } from 'lucide-react';
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { serverFeatures } from '../config/server';
 import { T } from '../content/texts';
 import { feedBottomInsetClass, waitingWithDots } from '../extensions/flags';
 import { useBriefingOffer } from '../state/briefing';
@@ -17,6 +18,7 @@ const DOTS_AFTER = 300;
 const SLOW_AFTER = 8000;
 
 function Thinking({ message }: { message: PendingMessage }) {
+  useSyncExternalStore(serverFeatures.subscribe, serverFeatures.get);
   const server = useApp((s) => s.server);
   const [stage, setStage] = useState<'none' | 'dots' | 'slow'>('none');
   useEffect(() => {
@@ -98,6 +100,7 @@ function StartScreen() {
 }
 
 export function Feed() {
+  useSyncExternalStore(serverFeatures.subscribe, serverFeatures.get);
   const messages = useApp((s) => s.messages);
   const unseen = useApp((s) => s.unseen);
   const ref = useRef<HTMLDivElement>(null);

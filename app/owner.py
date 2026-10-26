@@ -167,6 +167,8 @@ async def get_owner(
     db: AsyncSession = Depends(get_db),
 ) -> Owner:
     token = bearer(authorization)
+    if authorization is not None and not token:
+        raise HTTPException(status_code=401, detail={"error": "invalid_token"})
     if token:
         account = await account_by_token(db, token)
         if not account:
@@ -178,5 +180,4 @@ async def get_owner(
             raise HTTPException(status_code=422, detail={"error": "invalid_client_id"})
         await ensure_sandbox(db, client_id)
         return Owner(sandbox_id=client_id)
-    await ensure_sandbox(db, SHARED_SANDBOX)
-    return Owner(sandbox_id=SHARED_SANDBOX)
+    raise HTTPException(status_code=422, detail={"error": "mode_required"})

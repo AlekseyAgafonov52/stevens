@@ -3,10 +3,13 @@ import logging
 import os
 
 import httpx
-from fastapi import APIRouter, HTTPException, File, UploadFile
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
+from starlette.datastructures import UploadFile
 
 from app.voice.audio import AudioError, ogg_opus
+from app import features
+from app.owner import Owner, get_owner
 
 logger = logging.getLogger(__name__)
 
@@ -18,17 +21,29 @@ STT_MAX_BYTES = 1024 * 1024
 
 @router.post("/api/stt")
 async def transcribe(
-    file: UploadFile = File(..., description="Аудио (ogg/webm, до 1 МБ)"),
+    request: Request,
+    owner: Owner = Depends(get_owner),
 ):
-    content_type = (file.content_type or "").split(";")[0].strip().lower()
+    content_type = request.headers.get("content-type", "").split(";")[0].strip().lower()
+    # Retain compatibility with older clients; v1.6 sends raw audio as the body.
+    if content_type == "multipart/form-data":
+        form = await request.form()
+        file = form.get("file")
+        if not isinstance(file, UploadFile):
+            return JSONResponse(status_code=422, content={"error": "invalid_request"})
+        content_type = (file.content_type or "").split(";")[0].strip().lower()
+        audio = await file.read(STT_MAX_BYTES + 1)
+    else:
+        audio = await request.body()
     if content_type not in ("audio/ogg", "audio/webm"):
         return JSONResponse(status_code=415, content={"error": "unsupported_audio"})
     
-    audio = await file.read()
     if len(audio) > STT_MAX_BYTES:
         return JSONResponse(status_code=413, content={"error": "audio_too_long"})
     if not audio:
         return {"text": ""}
+    if not features.on("stt"):
+        return JSONResponse(status_code=503, content={"error": "stt_unavailable"})
     
     try:
         audio = await ogg_opus(audio, content_type)

@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parent
 OUT = ROOT / os.environ.get("AUDIT_OUT_DIR", "audit-results")
 OUT.mkdir(parents=True, exist_ok=True)
 env = os.environ.copy()
-env.update(DATABASE_URL="postgresql+asyncpg://postgres:audit_local_only@127.0.0.1:55439/stevens_audit",
+env.update(DATABASE_URL=os.environ.get("AUDIT_DATABASE_URL", "postgresql+asyncpg://postgres:audit_local_only@127.0.0.1:55439/stevens_audit"),
            YANDEX_API_KEY="", YANDEX_FOLDER_ID="", PYTHONIOENCODING="utf-8", STEVENS_RATE_LIMIT="0")
 bootstrap = "import dotenv,runpy,sys; dotenv.load_dotenv=lambda *a,**k:False; sys.argv=sys.argv[1:]; runpy.run_path(sys.argv[0],run_name='__main__')"
 paths = sorted((ROOT / "tests").glob("test_*.py"))

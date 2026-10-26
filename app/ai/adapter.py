@@ -4,20 +4,23 @@ from datetime import date
 from app import nlu
 from app.ai.schema import Result
 
-SUPPORTED = {"create", "list", "search", "help", "thanks", "off_topic", "unknown"}
-CREATE_TYPES = {"task", "meeting", "reminder"}
+SUPPORTED = {"create", "note", "list", "search", "person", "notes", "undated", "repeats", "free",
+             "reply", "cancel", "greeting", "help", "thanks", "off_topic", "unknown"}
+CREATE_TYPES = {"task", "meeting", "reminder", "note", "busy"}
 
 
 def supported(result: Result) -> bool:
-    """Refactoring must not enable new mutating commands through the LLM."""
+    """Mutations use the separate snapshot-bound confirmation flow, never this adapter."""
     return (result.intent in SUPPORTED and
             (result.intent != "create" or all(item.type in CREATE_TYPES for item in result.items)))
 
 
 def to_parses(result: Result, today: date) -> list[nlu.Parse]:
+    if result.layer == "rules" and result._rule_parses:
+        return result._rule_parses
     if not supported(result) or result.confidence < 0.5:
         return [nlu.Parse()]
-    if result.intent == "create":
+    if result.intent in ("create", "note") and result.items:
         parses = []
         for item in result.items:
             value = nlu.Parse(
@@ -53,6 +56,17 @@ def to_parses(result: Result, today: date) -> list[nlu.Parse]:
         value.ask, value.tense = query.ask, query.tense
         value.filter_type = query.type or value.filter_type
         value.date = date.fromisoformat(query.date) if query.date else None
+        value.person = query.person
+    if result.free:
+        free = result.free
+        value.free_mode = {"slots": "windows", "at": "windows"}.get(free.mode, free.mode)
+        value.date = date.fromisoformat(free.date) if free.date else None
+        value.time, value.duration, value.window, value.weekends = free.time, free.duration_min, free.duration_min, free.weekends
+        if free.period:
+            value.period = nlu.describe_period(date.fromisoformat(free.period.start), date.fromisoformat(free.period.end), today)
+    if result.reply:
+        value.date = date.fromisoformat(result.reply.date) if result.reply.date else None
+        value.time, value.text = result.reply.time, result.reply.text
     return [value]
 
 

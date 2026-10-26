@@ -79,7 +79,7 @@ async def report(days: int) -> None:
 async def export(days: int) -> None:
     async with engine.connect() as conn:
         result = await conn.execute(text(
-            "SELECT at, who, conversation_id, source, text, raw_text, action, waiting, intent, llm, kind, template, "
+            "SELECT at, who, conversation_id, source, text, raw_text, action, waiting, intent, llm, layer, confidence, doubts, parsed, llm_ms, kind, template, "
             "reply, records, ms, error FROM chat_log WHERE at > now() - make_interval(days => :days) ORDER BY at"),
             {"days": days})
         out = csv.writer(sys.stdout)

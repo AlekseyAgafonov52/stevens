@@ -16,11 +16,11 @@ labels = lambda r: [b["label"] for b in r["buttons"]]
 DIALOG = [
     ("работа по вторникам с 16:40 до 19:50", "created", lambda r: first(r)["type"] == "busy"),
     # Второй раз то же — не дублируем
-    ("работа по вторникам с 16:40 до 19:50", "found", lambda r: "уже" in r["text"] and len(r["records"]) == 1),
+    ("работа по вторникам с 16:40 до 19:50", "created", lambda r: "уже" in r["text"] and len(r["records"]) == 1),
     ("работа по четвергам с 15:50 до 19:50", "created", None),
     # Пересечение занятостей — как у встреч
     ("во вторник с 18 до 21 занят: курсы", "conflict",
-     lambda r: "«Работа»" in r["text"] and labels(r)[:3] == ["Изменить новую", "Изменить «Работа»", "Сохранить обе"]),
+     lambda r: "«Работа»" in r["text"] and labels(r)[:3] == ["Другое время для новой", "Изменить существующую", "Оставить обе"]),
     ("сохранить обе", "created", lambda r: first(r)["text"] == "Курсы" and first(r)["time"] == "18:00"),
     ("в четверг 29 октября с 19 до 20 занятость: йога", "conflict", lambda r: texts(r)[0] == "Йога"),
     ("изменить новую", "clarify", lambda r: "Йога" in r["text"]),

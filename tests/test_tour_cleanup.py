@@ -1,9 +1,11 @@
 """Tour cleanup deletes only the addressed sandbox, without reseeding it."""
 from datetime import date
 import unittest
+from typing import cast
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import series
 from app.database import Base
@@ -19,7 +21,7 @@ class TourCleanupTests(unittest.IsolatedAsyncioTestCase):
         self.engine = create_engine("sqlite://")
         Base.metadata.create_all(self.engine)
         self.session = Session(self.engine, expire_on_commit=False)
-        self.db = AsyncSessionBridge(self.session)
+        self.db = cast(AsyncSession, AsyncSessionBridge(self.session))
         self.session.add_all([Sandbox(client_id="tour-sandbox"), Sandbox(client_id="other-sandbox"),
                               Account(id=7, login="owner", login_lower="owner", password_hash="unused")])
         self.session.flush()

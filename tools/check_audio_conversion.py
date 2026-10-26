@@ -14,7 +14,7 @@ os.environ.update(YANDEX_API_KEY="synthetic-test", YANDEX_FOLDER_ID="synthetic-t
 import httpx
 from starlette.requests import Request
 from app.voice.audio import AudioError, ogg_opus
-from app.routers.client import stt
+from app.voice.stt import transcribe as stt
 from app.owner import Owner
 
 
@@ -45,7 +45,7 @@ async def main():
         original_client = httpx.AsyncClient
         def upstream(request):
             assert request.url.params["format"] == "oggopus"
-            assert request.url.params.get("folderId") is None
+            assert request.url.params.get("folderId") == "synthetic-test"
             assert request.content.startswith(b"OggS")
             observed.append(True)
             return httpx.Response(200, json={"result": "Проверено"})
@@ -54,7 +54,7 @@ async def main():
         async def receive():
             return {"type": "http.request", "body": webm, "more_body": False}
         request = Request({"type": "http", "method": "POST", "path": "/api/stt", "headers": [(b"content-type", b"audio/webm")]}, receive)
-        with patch("app.routers.client.httpx.AsyncClient", client):
+        with patch("app.voice.stt.httpx.AsyncClient", client):
             assert await stt(request, owner=Owner(sandbox_id="audio-check")) == {"text": "Проверено"}
         assert observed == [True]
     print("Audio conversion and STT transport: passed (real WebM -> mono Ogg Opus; invalid/long rejected; no external API).")

@@ -1,6 +1,7 @@
 /** Точки расширения без разметки — 09-extensions.md, раздел 2. Флаги проверяются только здесь и в points.tsx. */
 import type { RecordItem } from '../api/types';
 import { features } from '../config/features';
+import { serverHas } from '../config/server';
 
 /** Состояние «Удалено» (Д2 или Д10): вид приглушённой карточки */
 export function recordCardDeleted(record: RecordItem): boolean {
@@ -9,12 +10,12 @@ export function recordCardDeleted(record: RecordItem): boolean {
 
 /** Д14: вместо точек ждёт персонаж — только текст через 8 с */
 export function waitingWithDots(): boolean {
-  return !features.d14_mascot;
+  return !features.d14_mascot || !serverHas('f22');
 }
 
 /** Д14: запас ленты снизу */
 export function feedBottomInsetClass(): string {
-  return features.d14_mascot ? 'feed--with-mascot' : '';
+  return features.d14_mascot && serverHas('f22') ? 'feed--with-mascot' : '';
 }
 
 /** Допы без своего места на экране: Д12 озвучка, Д13 автослушание, CSS персонажа; Д15 — подписка на ответы */

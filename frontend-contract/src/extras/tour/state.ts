@@ -36,7 +36,7 @@ const RULES: StepRule[] = [
   { feature: 'f12', on: true, expect: ['found', 'updated', 'deleted', 'created'] },
   { feature: 'f14', on: true, expect: ['confirm', 'created'] },
   { feature: 'f8', on: true, expect: ['found'] },
-  { feature: 'f5', on: true, expect: ['created'] },
+  { feature: 'f25', on: true, expect: ['created'] },
   { feature: 'f16', on: true, expect: ['clarify'] },
   { feature: 'f19', on: true, expect: ['person'] },
   { feature: 'f24', on: true, expect: ['created', 'found'] },

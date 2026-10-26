@@ -38,6 +38,34 @@ services:
       postgres:
         condition: service_healthy
 
+  backup:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      PGHOST: postgres
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      PGDATABASE: taskapp
+    volumes:
+      - voice_assistant_backups:/backups
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command:
+      - /bin/sh
+      - -c
+      - |
+        while true; do
+          target="/backups/stevens-$$(date -u +%Y%m%dT%H%M%SZ).dump"
+          if pg_dump --format=custom --file="$$target.tmp"; then
+            mv "$$target.tmp" "$$target"
+            echo "Backup completed: $$target"
+          else
+            echo "Backup failed; retrying on the next interval" >&2
+          fi
+          sleep 86400
+        done
+
   frontend-contract:
     build:
       context: ./frontend-contract
@@ -52,3 +80,4 @@ services:
 
 volumes:
   voice_assistant_pg_data:
+  voice_assistant_backups:

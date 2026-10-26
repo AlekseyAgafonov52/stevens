@@ -2,7 +2,7 @@
 import { ChevronDown, Plus } from 'lucide-react';
 import { useState, useSyncExternalStore } from 'react';
 import { features } from '../config/features';
-import { serverHas } from '../config/server';
+import { serverFeatures, serverHas } from '../config/server';
 import { T } from '../content/texts';
 import { HeaderRightStart, tourMenuItem } from '../extensions/points';
 import { install, installHintKey, isInstalled, useCanInstall, useMedia, useTitlebarMode } from '../lib/install';
@@ -16,6 +16,7 @@ import { Modal } from './Modal';
 import { TransferScreen } from './TransferScreen';
 
 export function Header() {
+  useSyncExternalStore(serverFeatures.subscribe, serverFeatures.get);
   const mode = useApp((s) => s.mode);
   const login = useApp((s) => s.login);
   const empty = useApp((s) => s.messages.length === 0);
@@ -27,7 +28,7 @@ export function Header() {
   // На телефоне справа тесно: календарь уходит влево к «Новому диалогу», иначе «Stevens» съезжает с центра
   const phone = useMedia('(max-width: 760px)');
   // Браузер не дал установить кнопкой — пункт всё равно есть и подсказывает, как установить через меню браузера
-  const installItem = isInstalled()
+  const installItem = isInstalled() || !serverHas('f21')
     ? []
     : [{ label: T.menu_install, onSelect: () => (canInstall ? void install() : setHint(installHintKey())) }];
 
@@ -39,12 +40,12 @@ export function Header() {
     : [];
 
   // Импорт и выгрузка: все записи одним JSON — для обработки в другой ИИ
-  const transferItem = { label: T.menu_transfer, onSelect: () => setDialog('transfer') };
+  const transferItems = serverHas('f26') ? [{ label: T.menu_transfer, onSelect: () => setDialog('transfer') }] : [];
 
   const sandboxItems = [
     ...tourMenuItem(T.menu_tour),
     ...notifyItem,
-    transferItem,
+    ...transferItems,
     { label: T.menu_reset_sandbox, onSelect: () => setDialog('reset') },
     ...installItem,
     ...(features.auth ? [{ label: T.menu_go_auth, onSelect: goAuth }] : []),
@@ -67,7 +68,7 @@ export function Header() {
       {mode === 'account' && features.auth && (
         <Menu
           heading={login ?? ''}
-          items={[...tourMenuItem(T.menu_tour), ...notifyItem, transferItem, ...installItem, { label: T.menu_logout, onSelect: logout }]}
+          items={[...tourMenuItem(T.menu_tour), ...notifyItem, ...transferItems, ...installItem, { label: T.menu_logout, onSelect: logout }]}
           trigger={({ open, toggle }) => (
             <button type="button" className="avatar" aria-label={T.profile_label} aria-haspopup="menu" aria-expanded={open} onClick={toggle}>
               {(login ?? '?').charAt(0).toUpperCase()}

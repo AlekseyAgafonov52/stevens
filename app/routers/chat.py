@@ -1,6 +1,6 @@
-"""POST /api/chat — разделы 4–8 и 15 контракта v1.4.
+"""POST /api/chat — контракт v1.6; диалог, проверки и выполнение подтверждённых действий.
 
-Разбор фразы — app/nlu.py (правила) и, если правила не поняли, LLM (brain.py).
+Единый стык разбора — app/ai/understanding.py; внутренний Parse сохранён адаптером.
 Даты, проверки, действия и тексты ответов — здесь, по шаблонам раздела 9.
 """
 from __future__ import annotations
@@ -22,10 +22,13 @@ from app import chatlog, features, nlu, push, series
 from app.database import get_db
 from app.models import REMIND_BEFORE_DEFAULT, DateKind, Record, TaskStatus, TaskType
 from app.owner import Owner, get_owner
-from app.schemas import ChatRequest
-from app.ai.schema import Awaiting as AIAwaiting, Input as AIInput
+from app.schemas import ChatPayload, ChatRequest
+from app.ai.schema import Awaiting as AIAwaiting, Input as AIInput, Result as AIResult
+from app.logic import ai_actions, ai_replies
 from app.ai.adapter import query_context, supported as ai_supported, to_parses
 from app.ai.provider import InvalidResponse, Unavailable
+from app.ai.understanding import understand
+from app.ai.search import rank as rank_records
 from app.templates import render
 from app.textfmt import (
     MONTHS_GEN, TYPE_FORMS, TYPE_GEN_PLURAL, TYPE_WORD, capitalize, client_now, date_speech, date_text, parse_date, plural,
@@ -178,7 +181,7 @@ def draft_record(draft: dict, marks: list[str]) -> dict:
     return {
         "id": None, "type": draft["type"], "text": draft["text"], "date": draft.get("date"),
         "time": draft.get("time"), "end_time": draft.get("end_time"), "date_kind": draft["date_kind"],
-        "status": None if draft["type"] in ("meeting", "busy") else "open",
+        "status": None if draft["type"] in ("meeting", "busy", "note") else "open",
         "remind_before": (draft["remind_before"] if draft.get("remind_before") is not None else REMIND_BEFORE_DEFAULT) if draft["type"] == "meeting" else None,
         "created_at": None, "marks": marks, "highlight": None,
     }
@@ -249,11 +252,7 @@ async def find(ctx: Ctx, p: nlu.Parse, types: set[str] | None = None) -> list[Re
 
 
 def by_keywords(rows: list[Record], p: nlu.Parse) -> list[Record]:
-    if p.required:
-        rows = [r for r in rows if all(nlu.record_has(record_words(r), key) for key in p.required)]
-    scored = [(matches(r, p.keywords), r) for r in rows]
-    best = [r for score, r in scored if score == len(p.keywords)]
-    return best or [r for score, r in scored if score > 0]
+    return rank_records(rows, p.keywords, p.required)
 
 
 # ── Создание: проверки раздела 8 ──────────────────────
@@ -311,6 +310,10 @@ def night_morning(ctx: Ctx, draft: dict) -> bool:
 
 
 async def process_draft(ctx: Ctx, draft: dict) -> dict:
+    if draft.get("type") == "note" and not features.on("f24"):
+        return examples("not_understood", "not_understood", ctx, EXAMPLES)
+    if (draft.get("type") == "busy" and not features.on("f25")) or (draft.get("repeat") and not features.on("f15")):
+        return examples("not_understood", "not_understood", ctx, EXAMPLES)
     if draft.get("repeat"):
         # Повтор: первый день — ближайший подходящий, сегодняшний только если время ещё впереди
         start = max(parse_date(draft.get("date")) or ctx.today, ctx.today)
@@ -358,7 +361,7 @@ async def process_draft(ctx: Ctx, draft: dict) -> dict:
             return clarify(ctx, "clarify_day", draft, days)
     if kind == "task" and has_time and not has_date:
         return clarify(ctx, "clarify_day", draft, days)
-    if kind == "task" and not has_date:
+    if kind in ("task", "note") and not has_date:
         draft["date_kind"], draft["time"] = "none", None
     elif draft.get("date_kind") == "none":
         draft["date_kind"] = "exact"
@@ -475,8 +478,8 @@ async def busy_clash(ctx: Ctx, draft: dict) -> dict | None:
         remember_shown(ctx, [record])
         data = record.to_contract()
         values, speech_values = ctx.record_values(data)
-        text, speech = ctx.say("busy_exists", values, speech_values)
-        return reply("found", text, speech, records=[data], total=1)
+        text, speech = ctx.say("busy_duplicate", values, speech_values)
+        return reply("created", text, speech, records=[data], total=1)
     overlap = [r for r in rows if r not in same and span(r)[0] < end and start < span(r)[1]]
     if not overlap:
         return None
@@ -485,11 +488,11 @@ async def busy_clash(ctx: Ctx, draft: dict) -> dict | None:
     first = overlap[0]
     text, speech = ctx.say("conflict_busy_busy", {"text": first.text, "time": first.time, "end": first.end_time or ""})
     records = [draft_record(draft, ["draft"])] + [r.to_contract(marks=["conflict"]) for r in overlap]
-    buttons = [button_action("Изменить новую", "change_new_time")]
+    buttons = [button_action("Другое время для новой", "change_new_time")]
     if len(overlap) == 1:
-        buttons.append(button_action(f"Изменить «{first.text}»", "move_existing", first.id))
+        buttons.append(button_action("Изменить существующую", "edit_existing", first.id))
     return reply("conflict", text, speech, records=records, awaiting=True,
-                 buttons=buttons + [button_action("Сохранить обе", "keep_both"), CANCEL])
+                 buttons=buttons + [button_action("Оставить обе", "keep_both"), CANCEL])
 
 
 DENSE_MINUTES = 30  # порог плотного графика из отчёта аналитика: 12% пар встреч
@@ -545,6 +548,8 @@ async def save(ctx: Ctx, draft: dict) -> dict:
     if draft.get("repeat"):
         return await save_series(ctx, draft)
     kind = draft["type"]
+    if kind == "note":
+        return await answer_note(ctx, nlu.Parse(intent="note", text=draft["text"]))
     near = await dense_neighbours(ctx, draft)
     record = ctx.owner.new_record(
         type=TaskType(kind), text=draft["text"][:300], date=draft.get("date"), time=draft.get("time"),
@@ -1119,7 +1124,7 @@ async def ai_context(ctx: Ctx, payload: ChatRequest, pending: Pending | None) ->
     awaiting = None
     if pending:
         template = (pending.draft.get("ask") or {}).get("template", "")
-        question = ("yes_no" if pending.kind in ("confirm", "multi", "conflict", "bulk_delete") else
+        question = ("yes_no" if pending.kind in ("confirm", "multi", "conflict", "bulk_delete", "ai_confirm") else
                     "series" if pending.kind == "series_delete" else
                     "person" if "person" in template else
                     "day_time" if "when" in template else
@@ -1147,9 +1152,7 @@ async def llm_parse(text: str, now: datetime, *, context: AIInput | None = None,
     started = clock.perf_counter()
     trace["llm"] = True
     try:
-        from brain import parse_user_input
-        result = await asyncio.wait_for(asyncio.to_thread(parse_user_input, text,
-            context=context or AIInput(text=text, now=now)), timeout=10)
+        result = await understand(context or AIInput(text=text, now=now), force_llm=True)
     except Exception as error:  # provider or schema failure: retain the rules fallback
         _llm_down_until = clock.time() + LLM_PAUSE
         reason = str(error) if isinstance(error, (InvalidResponse, Unavailable)) else type(error).__name__
@@ -2078,7 +2081,9 @@ async def move_one(ctx: Ctx, record: Record, changes: dict) -> dict:
         text, speech = ctx.say("clarify_date_past", values={"when": values["when"]})
         return reply("clarify", text, speech, awaiting=True, buttons=[CANCEL])
     ctx.conv.pending = None
-    if record.end_time and record.time and new_time:
+    if changes.get("end_time"):
+        record.end_time = changes["end_time"]
+    elif record.end_time and record.time and new_time:
         record.end_time = shift_end(record.time, record.end_time, new_time)  # «работу на час позже» — длина та же
     record.date, record.time = new_date, new_time
     if record.date_kind == DateKind.none:
@@ -2403,13 +2408,27 @@ async def handle_action(ctx: Ctx, action_id: str, record_id: int | None) -> dict
     pending = ctx.conv.pending
     gate = {"delete": "f12", "complete": "f12", "restore": "f12", "restore_all": "f12", "edit": "f12",
             "undo": "f5", "briefing": "f18", "move": "f17", "move_all_same": "f17", "move_all_each": "f17",
-            "delete_occurrence": "f15", "delete_series": "f15", "show_undated": "f7", "skip_undated": "f7"}.get(action_id)
+            "delete_occurrence": "f15", "delete_series": "f15", "show_undated": "f7", "skip_undated": "f7",
+            "edit_existing": "f25"}.get(action_id)
     if gate and not features.on(gate):
         return examples("not_understood", "not_understood", ctx, EXAMPLES)
+    if action_id in ("delete_occurrence", "delete_series", "edit_existing") and not features.on("f12"):
+        return examples("not_understood", "not_understood", ctx, EXAMPLES)
+    if pending and pending.kind != "ai_confirm" and action_id in ("confirm_yes", "keep_both", "change_new_time", "move_existing", "edit_existing"):
+        required = "f12" if pending.kind == "bulk_delete" else "f25" if pending.draft.get("type") == "busy" else "f5"
+        if not features.on(required) or (pending.draft.get("repeat") and not features.on("f15")):
+            return examples("not_understood", "not_understood", ctx, EXAMPLES)
     if action_id == "cancel":
         ctx.conv.pending = None
         text, speech = ctx.say("cancelled")
         return reply("cancelled", text, speech)
+    if action_id == "ai_select" and pending and pending.kind == "ai_select":
+        if record_id not in pending.draft["ids"]:
+            return reply("clarify", *ctx.say("clarify_generic"), buttons=[CANCEL])
+        record = await owned_record(ctx, record_id)
+        return await ai_actions.propose(ctx, AIResult.model_validate(pending.draft["result"]), [record] if record else [])
+    if action_id == "confirm_yes" and pending and pending.kind == "ai_confirm":
+        return await ai_actions.execute(ctx)
     if action_id == "briefing":
         return await answer_briefing(ctx)
     if action_id == "show_undated":
@@ -2447,11 +2466,14 @@ async def handle_action(ctx: Ctx, action_id: str, record_id: int | None) -> dict
         else:
             text, speech = ctx.say("conflict_new_time")
         return reply("clarify", text, speech, awaiting=True, buttons=[CANCEL])
-    if action_id == "move_existing" and pending and pending.kind == "conflict":
+    if action_id in ("move_existing", "edit_existing") and pending and pending.kind == "conflict":
         # «Перенести существующую»: спрашиваем новое время для неё, новую встречу держим
         existing = await owned_record(ctx, record_id)
         if existing:
             ctx.conv.pending = Pending("move_existing", {"record_id": existing.id, "new": pending.draft})
+            if existing.type == TaskType.busy:
+                text, speech = ctx.say("clarify_busy_existing", {"text": existing.text})
+                return reply("clarify", text, speech, records=[existing.to_contract()], awaiting=True, buttons=[CANCEL])
             text, speech = ctx.say("conflict_move_existing", {"text": existing.text})
             day = parse_date(existing.date)
             quick = []
@@ -2568,7 +2590,7 @@ def is_new_request(p: nlu.Parse, raw: str) -> bool:
 
 @router.post("/chat")
 async def chat_endpoint(
-    payload: ChatRequest,
+    payload: ChatPayload,
     background: BackgroundTasks,
     owner: Owner = Depends(get_owner),
     db: AsyncSession = Depends(get_db),
@@ -2716,7 +2738,14 @@ async def answer_move_existing(ctx: Ctx, pending: Pending, raw: str) -> dict | N
     time = p.time or nlu.reply_time(raw)[0]
     if not record or not time:
         return None
-    moved = await move_one(ctx, record, {"date": p.date.isoformat() if p.date else record.date, "time": time})
+    changes = {"date": p.date.isoformat() if p.date else record.date, "time": time}
+    if record.type == TaskType.busy:
+        interval = nlu.parse_interval(raw)
+        if not interval:
+            return reply("clarify", *ctx.say("clarify_busy_existing", {"text": record.text}),
+                         awaiting=True, buttons=[CANCEL])
+        changes.update(time=interval[0], end_time=interval[1])
+    moved = await move_one(ctx, record, changes)
     if moved["kind"] != "updated":
         if moved["kind"] == "clarify":
             ctx.conv.pending = pending  # время в прошлом — спрашиваем снова, новую встречу не теряем
@@ -2800,6 +2829,7 @@ async def cancel_named_occurrence(ctx: Ctx, raw: str) -> dict | None:
     if info.date:
         conditions.append(Record.date == info.date.isoformat())
     else:
+        assert info.period is not None
         conditions += [Record.date >= info.period.start.isoformat(),
                        Record.date <= info.period.end.isoformat()]
 
@@ -2847,6 +2877,7 @@ async def cancel_focused_occurrence(ctx: Ctx, raw: str) -> dict | None:
                                    Record.date >= info.period.start.isoformat(),
                                    Record.date <= info.period.end.isoformat())
     else:
+        assert info.date is not None
         rows = await owner_records(ctx, Record.series_id == focus.series_id, Record.date == info.date.isoformat())
         # A bare weekday names a day, not a particular series. Do not silently
         # choose the most recently created lesson when several are scheduled.
@@ -2890,13 +2921,14 @@ async def correct_series_until(ctx: Ctx, raw: str) -> dict | None:
     rule = await ctx.db.get(Series, focus.series_id)
     if not rule or rule.ended or until < ctx.today:
         return reply("clarify", *ctx.say("clarify_generic"), awaiting=True, buttons=[CANCEL])
-    rule.until = until.isoformat()
-    rule.filled_until = min(rule.filled_until, rule.until)
+    until_iso = until.isoformat()
+    rule.until = until_iso
+    rule.filled_until = min(rule.filled_until, until_iso)
     rows = await owner_records(ctx, Record.series_id == rule.id)
     stamp = datetime.now(timezone.utc)
     for row in rows:
         row.repeat = rule.repeat()
-        if row.date and row.date > rule.until:
+        if row.date and row.date > until_iso:
             row.deleted_at = stamp
     await ctx.db.flush()
     await series.extend(ctx.db, ctx.owner, ctx.today)
@@ -2935,7 +2967,7 @@ async def correct_series_weekdays(ctx: Ctx, raw: str) -> dict | None:
     if not rule or rule.ended:
         return reply("clarify", *ctx.say("clarify_generic"), awaiting=True, buttons=[CANCEL])
     first = nlu.first_day(repeat.days, ctx.today, ctx.now, rule.time)
-    last = min(parse_date(rule.filled_until), parse_date(rule.until) or date.max)
+    last = min(required_date(rule.filled_until), parse_date(rule.until) or date.max)
     dates = series.days_between(first, last, repeat.days)
     if not dates:
         return reply("clarify", *ctx.say("clarify_generic"), awaiting=True, buttons=[CANCEL])
@@ -2973,6 +3005,19 @@ async def respond(ctx: Ctx, payload: ChatRequest) -> dict:
     raw = payload.text.strip()
     ctx.raw = raw
     pending = ctx.conv.pending
+    rule_result = await understand(await ai_context(ctx, payload, pending), allow_llm=False)
+    p = to_parses(rule_result, ctx.today)[0]
+    ctx.trace.update(layer="rules", confidence=rule_result.confidence,
+                     intent=rule_result.intent,
+                     doubts=[d.model_dump(exclude_none=True) for d in rule_result.doubts],
+                     parse=rule_result.model_dump(mode="json", by_alias=True))
+    if pending and pending.kind == "ai_confirm":
+        if NO_RE.match(raw) or nlu.is_cancel_reply(raw):
+            return await handle_action(ctx, "cancel", None) or reply("cancelled", *ctx.say("cancelled"))
+        if YES_RE.match(raw):
+            return await ai_actions.execute(ctx)
+        return reply("clarify", *ctx.say("yes_no_again"), awaiting=True,
+                     buttons=[button_action("Да, верно", "confirm_yes"), button_action("Нет", "cancel", style="secondary")])
     if cancelled := await cancel_named_occurrence(ctx, raw):
         return cancelled
     if pending is None and not choices and (corrected := await correct_series_until(ctx, raw)):
@@ -3020,7 +3065,6 @@ async def respond(ctx: Ctx, payload: ChatRequest) -> dict:
             return answer
     if (fix := fix_words(raw, ctx.now)) and (answer := await answer_fix(ctx, *fix)):
         return answer
-    p = nlu.parse(raw, ctx.now)
     ctx.trace["intent"] = p.intent
 
     # Ответ на уточнение (Р-45); не ответ — новый запрос, уточнение забываем (Р-33)
@@ -3077,6 +3121,11 @@ async def respond(ctx: Ctx, payload: ChatRequest) -> dict:
             return answer
         if pending.kind == "multi_ask":
             return await ask_many(ctx, pending.draft["drafts"])
+        if p.intent == "unknown" and llm_enabled():
+            await llm_parse(raw, ctx.now, context=await ai_context(ctx, payload, pending), trace=ctx.trace)
+            result = ctx.trace.get("llm_result")
+            if result and (answer := await ai_replies.answer(ctx, pending, AIResult.model_validate(result))):
+                return answer
         if answer := ask_again(ctx, pending):
             return answer
     asked = ctx.conv.pending
@@ -3109,13 +3158,23 @@ async def respond(ctx: Ctx, payload: ChatRequest) -> dict:
         candidate = await llm_parse(raw, ctx.now, context=context, trace=ctx.trace)
         result = ctx.trace.get("llm_result") or {}
         confidence = result.get("confidence", 0)
+        if result.get("intent") in ai_actions.MUTATIONS and confidence >= 0.5:
+            ctx.trace.update(layer="llm", confidence=confidence, doubts=result.get("doubts", []),
+                             parse=result, intent=result["intent"], llm_used=True, llm_status="confirmation_required")
+            return await ai_actions.propose(ctx, AIResult.model_validate(result))
         accepted = candidate.intent != "unknown" and (not refine or confidence > 0.5)
         ctx.trace["llm_used"] = accepted
         if accepted:
             p = candidate
+            ctx.trace.update(layer="llm", confidence=confidence, doubts=result.get("doubts", []), parse=result)
         else:
             ctx.trace.pop("_llm_items", None)
         ctx.trace.update(intent=p.intent)
+
+    if p.intent == "reply" and asked:
+        result = ctx.trace.get("llm_result")
+        if result and (answer := await ai_replies.answer(ctx, asked, AIResult.model_validate(result))):
+            return answer
 
     # Ждали «да» или «нет», а ответ не поняли — вопрос не теряем, переспрашиваем
     if p.intent == "unknown" and asked and asked.kind == "conflict":
@@ -3132,6 +3191,9 @@ async def respond(ctx: Ctx, payload: ChatRequest) -> dict:
 
     if (feature := features.BY_INTENT.get(p.intent)) and not features.on(feature):
         p.intent = "unknown"  # фича выключена на сервере (STEVENS_FEATURES) — как будто её нет
+    if p.intent == "cancel":
+        ctx.conv.pending = None
+        return reply("cancelled", *ctx.say("cancelled"))
     if p.intent == "delete" and "d2" not in ctx.features:
         p.intent = "unknown"
     if p.intent == "complete" and "d3" not in ctx.features:

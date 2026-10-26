@@ -9,7 +9,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app import chatlog
+from app import chatlog, features
 from app.database import get_db
 from app.logic.record_import import build, restore, snapshot
 from app.models import Account, ChatLog, Record, Sandbox
@@ -24,6 +24,8 @@ MAX_RECORDS = 10000
 
 async def import_owner(authorization: str | None = Header(default=None), x_client_id: str | None = Header(default=None),
                        db: AsyncSession = Depends(get_db)):
+    if not features.on("f26"):
+        raise HTTPException(status_code=404, detail={"error": "feature_disabled"})
     if not authorization and not x_client_id:
         raise HTTPException(status_code=422, detail={"error": "invalid_request"})
     if authorization is not None and not bearer(authorization):

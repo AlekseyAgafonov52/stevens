@@ -30,7 +30,7 @@ async def main():
 
             def say(text, **extra):
                 return c.post("/api/chat", headers=h, json={"conversation_id": str(uuid.uuid4()), "text": text,
-                                                            "client_time": CLOCK} | extra)
+                                                            "client_time": CLOCK, "source": "text", "timezone": "Europe/Moscow"} | extra)
 
             # Новая вкладка: первые запросы разом — демо-данные один раз
             rs = await asyncio.gather(*[c.get(MONTH, headers=h) for _ in range(5)])
@@ -74,9 +74,9 @@ async def main():
 
             # Без client_time и с пустым текстом — ответ, а не 500
             r = await c.post("/api/chat", headers=h, json={"conversation_id": "x", "text": "что у меня сегодня"})
-            check("без client_time", r.status_code == 200, r.status_code)
+            check("v1.6: без client_time — 422", r.status_code == 422, r.status_code)
             r = await c.post("/api/chat", headers=h, json={"conversation_id": "x", "action": {"id": "zzz"}})
-            check("неизвестная кнопка без текста", r.status_code == 200, r.status_code)
+            check("v1.6: кнопка без обязательных полей — 422", r.status_code == 422, r.status_code)
             r = await c.post("/api/chat", headers=h, json={"conversation_id": "x" * 500, "text": "привет"})
             check("слишком длинный conversation_id", r.status_code == 422, r.status_code)
 

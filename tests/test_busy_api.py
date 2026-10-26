@@ -19,10 +19,10 @@ DIALOG = [
                and first(r)["repeat"] == {"weekdays": [0, 1, 2, 3, 4], "until": None}
                and "по будням с 09:00 до 18:00" in r["text"]),
     # Ещё раз то же — не дублируем
-    ("по будням работа с 9 до 18", "found", lambda r: "уже" in r["text"] and len(r["records"]) == 1),
+    ("по будням работа с 9 до 18", "created", lambda r: "уже" in r["text"] and len(r["records"]) == 1),
     # Занятость на занятость — спрашиваем, как со встречами: изменить одну или сохранить обе
     ("пары по вторникам с 10 до 13:20 до июня", "conflict",
-     lambda r: "«Работа»" in r["text"] and labels(r)[:3] == ["Изменить новую", "Изменить «Работа»", "Сохранить обе"]),
+     lambda r: "«Работа»" in r["text"] and labels(r)[:3] == ["Другое время для новой", "Изменить существующую", "Оставить обе"]),
     ("сохрани обе", "created",
      lambda r: first(r)["type"] == "busy" and first(r)["text"] == "Пары" and first(r)["date"] == "2026-10-27"
                and first(r)["end_time"] == "13:20" and first(r)["repeat"]["until"] == "2027-05-31"),

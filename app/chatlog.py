@@ -4,6 +4,7 @@
 Отчёт: python -m app.log_report
 """
 import hashlib
+import json
 import os
 
 from app.database import AsyncSessionLocal
@@ -28,6 +29,9 @@ async def write(owner, payload, answer: dict, trace: dict, waiting: str | None, 
                 who=who(owner), conversation_id=payload.conversation_id[:64], source=payload.source,
                 text=(payload.text or "")[:300], raw_text=(payload.raw_text or "")[:600] or None, action=payload.action.id[:32] if payload.action else None,
                 waiting=waiting, intent=trace.get("intent"), llm=bool(trace.get("llm")),
+                layer=trace.get("layer", "rules"), confidence=trace.get("confidence"),
+                doubts=json.dumps(trace.get("doubts", []), ensure_ascii=False),
+                parsed=json.dumps(trace.get("parse"), ensure_ascii=False, default=str), llm_ms=trace.get("llm_ms"),
                 kind=answer.get("kind", "")[:16], template=(trace.get("template") or "")[:48] or None,
                 reply=answer.get("text", ""), records=len(answer.get("records") or []), ms=ms,
                 error=trace.get("error"),

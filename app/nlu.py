@@ -90,7 +90,7 @@ class Parse:
     duration: int = 60          # free: сколько минут нужно
     window: int = 30            # free: окна короче этого не показываем
     free_mode: str = "windows"
-    weekends: bool = False      # free day: выходные тоже сравниваем  # free: windows (все окна) | longest (самые большие) | day | week (самый свободный)
+    weekends: bool = True       # v1.6: weekends participate unless explicitly excluded
     subject: str | None = None  # free: «Встреча с Ваней» для кнопок со временем
     person: str | None = None   # person: «Иваном» — с кем досье, в творительном падеже
     bulk: bool = False          # delete: «удали все дела на завтра» — много записей, с подтверждением
@@ -1439,7 +1439,7 @@ def parse(raw: str, now: datetime) -> Parse:
                 result.free_mode = "longest"  # «Когда я свободнее всего завтра?»
         if re.search(r"\b(?:какие|какой|в\s+какой|в\s+какие)\s+(?:день|дни)\b", lower) and not info.date:
             result.free_mode = "day"  # «Какие дни свободны на следующей неделе» — сравнение дней, а не окна понедельника
-        result.weekends = bool(re.search(r"выходн|суббот|воскрес", lower))
+        result.weekends = not bool(re.search(r"\b(?:без\s+выходных|не\s+считая\s+выходн\w*|только\s+(?:по\s+)?будн\w*)", lower))
         return result
 
     # «Что у меня с Иваном?», «Досье на Петра», «Всё про Машу на этой неделе»

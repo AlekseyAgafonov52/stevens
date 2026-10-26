@@ -1,6 +1,7 @@
 /** Д12: озвучка ответов на голосовые сообщения голосом браузера — 07-extras.md, раздел 7. */
 import { setHint } from '../../state/chat';
 import { emitSpeech, isSpeaking, onAssistantResponse, onUiActivity } from '../../state/events';
+import { serverHas } from '../../config/server';
 
 let voice: SpeechSynthesisVoice | null = null;
 /** Голоса, которые отказали (synthesis-failed бывает у Microsoft Irina в Chrome) — больше их не берём */
@@ -126,6 +127,7 @@ export function init(): void {
   };
 
   onAssistantResponse((response, request) => {
+    if (!serverHas('f9')) return;
     const briefing = request.action?.id === 'briefing';
     if (request.source !== 'voice' && !briefing) return;
     const text = response.speech ?? response.text;

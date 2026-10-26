@@ -36,6 +36,11 @@ async def lifespan(app: FastAPI):
         await conn.exec_driver_sql("ALTER TABLE series ADD COLUMN IF NOT EXISTS end_time VARCHAR(5)")
         await conn.exec_driver_sql("ALTER TABLE records ADD COLUMN IF NOT EXISTS remind_before INTEGER")
         await conn.exec_driver_sql("ALTER TABLE chat_log ADD COLUMN IF NOT EXISTS raw_text VARCHAR(600)")
+        await conn.exec_driver_sql("ALTER TABLE chat_log ADD COLUMN IF NOT EXISTS layer VARCHAR(8)")
+        await conn.exec_driver_sql("ALTER TABLE chat_log ADD COLUMN IF NOT EXISTS confidence DOUBLE PRECISION")
+        await conn.exec_driver_sql("ALTER TABLE chat_log ADD COLUMN IF NOT EXISTS doubts TEXT")
+        await conn.exec_driver_sql("ALTER TABLE chat_log ADD COLUMN IF NOT EXISTS parsed TEXT")
+        await conn.exec_driver_sql("ALTER TABLE chat_log ADD COLUMN IF NOT EXISTS llm_ms INTEGER")
         await conn.exec_driver_sql("ALTER TABLE records ADD COLUMN IF NOT EXISTS demo BOOLEAN NOT NULL DEFAULT false")
         await conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_records_series_id ON records (series_id)")
         await conn.exec_driver_sql("ALTER TABLE sandboxes ADD COLUMN IF NOT EXISTS seen_at TIMESTAMPTZ NOT NULL DEFAULT now()")
@@ -54,7 +59,7 @@ async def lifespan(app: FastAPI):
         await engine.dispose()
 
 
-app = FastAPI(title="Stevens API", version="1.5.0", lifespan=lifespan)
+app = FastAPI(title="Stevens API", version="1.6.0", lifespan=lifespan)
 app.add_middleware(RequestLimits)
 
 app.add_middleware(

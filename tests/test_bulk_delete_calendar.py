@@ -1,9 +1,11 @@
 """Exercise confirmation and calendar queries against an isolated SQLite database."""
 from datetime import date, datetime, timedelta
 import unittest
+from typing import cast
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import Base
 from app.models import DateKind, Record, Series, TaskStatus, TaskType
@@ -23,6 +25,9 @@ class AsyncSessionBridge:
 
     async def commit(self):
         self.session.commit()
+
+    async def rollback(self):
+        self.session.rollback()
 
     async def flush(self):
         self.session.flush()
@@ -45,7 +50,7 @@ class BulkDeleteCalendarTests(unittest.IsolatedAsyncioTestCase):
         self.engine = create_engine("sqlite://")
         Base.metadata.create_all(self.engine)
         self.session = Session(self.engine, expire_on_commit=False)
-        self.db = AsyncSessionBridge(self.session)
+        self.db = cast(AsyncSession, AsyncSessionBridge(self.session))
         self.owner = Owner(sandbox_id="bulk-calendar")
         self.ctx = chat.Ctx(owner=self.owner, db=self.db, conv=chat.Conversation(),
                             now=datetime(2026, 10, 26, 10), features={"d2", "d3", "d10"})
@@ -67,6 +72,7 @@ class BulkDeleteCalendarTests(unittest.IsolatedAsyncioTestCase):
     async def calendar(self):
         result = await records.list_records(from_="2026-10-01", to="2026-11-30",
                                              owner=self.owner, db=self.db)
+        assert isinstance(result, dict)
         return result["records"]
 
     async def test_text_and_button_confirmation_remove_tasks_and_reminders(self):
@@ -364,7 +370,8 @@ class BulkDeleteCalendarTests(unittest.IsolatedAsyncioTestCase):
         rows = await chat.owner_records(self.ctx)
         self.assertEqual(len(rows), 9)
         self.assertEqual(len({r.date for r in rows}), 9)
-        self.assertTrue(all(r.date <= "2026-12-25" and r.repeat_contract()["until"] == "2026-12-25" for r in rows))
+        self.assertTrue(all(r.date is not None and r.date <= "2026-12-25" and
+                            (r.repeat_contract() or {}).get("until") == "2026-12-25" for r in rows))
 
     async def test_horizon_refinement_only_changes_focused_series(self):
         await self.tutor("русскому")

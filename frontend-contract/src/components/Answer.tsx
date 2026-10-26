@@ -65,7 +65,7 @@ export function Answer({ message, isLast }: Props) {
             ? [visible.filter((r) => !pastIds.has(r)), visible.filter((r) => pastIds.has(r))].map((part, pi) =>
                 part.length > 0 && (
                   <div className={pi ? 'list-past' : 'list-ahead'} key={pi}>
-                    {pi > 0 && split && split.ahead.length > 0 && <div className="list-past__title">{T.group_past_list}</div>}
+                    {pi > 0 && <div className="list-past__title">{T.group_past_list}</div>}
                     {groupByDay(part).map((group, gi) => (
                       <div className="day-group" key={gi}>
                         <div className="day-title">{group.date ? dayTitle(group.date) : T.group_no_date}</div>

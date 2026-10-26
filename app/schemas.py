@@ -1,8 +1,10 @@
-"""Тело запроса POST /api/chat (раздел 4 контракта v1.4). Ответ собирается
-словарём в app/routers/chat.py — ровно поля раздела 5."""
+"""Public v1.6 chat request plus a lightweight internal dialogue input."""
 from typing import Literal, Optional
 
-from pydantic import BaseModel, Field
+from datetime import datetime
+from uuid import UUID
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+from pydantic import BaseModel, Field, field_validator
 
 
 class Action(BaseModel):
@@ -18,3 +20,33 @@ class ChatRequest(BaseModel):
     client_time: Optional[str] = None
     timezone: Optional[str] = None
     raw_text: Optional[str] = Field(default=None, max_length=600)  # голос до поправок ослышки — только для журнала
+
+
+class ChatPayload(ChatRequest):
+    """Public v1.6 request; internal dialogue helpers may use ChatRequest defaults."""
+    text: str = Field(max_length=300)
+    source: Literal["voice", "text", "button"] = Field(...)
+    client_time: str = Field(...)
+    timezone: str = Field(...)
+
+    @field_validator("conversation_id")
+    @classmethod
+    def valid_conversation(cls, value: str) -> str:
+        UUID(value)
+        return value
+
+    @field_validator("client_time")
+    @classmethod
+    def valid_client_time(cls, value: str) -> str:
+        if datetime.fromisoformat(value.replace("Z", "+00:00")).tzinfo is None:
+            raise ValueError("Timezone offset required")
+        return value
+
+    @field_validator("timezone")
+    @classmethod
+    def valid_timezone(cls, value: str) -> str:
+        try:
+            ZoneInfo(value)
+        except (ZoneInfoNotFoundError, ValueError) as error:
+            raise ValueError("Invalid timezone") from error
+        return value

@@ -7,7 +7,7 @@ X-Client-Id, записи с мягким удалением (15.4).
 import enum
 from datetime import datetime as dt
 
-from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Index, Integer, String, Text, func
+from sqlalchemy import Boolean, DateTime, Enum, Float, ForeignKey, Index, Integer, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
@@ -216,6 +216,11 @@ class ChatLog(Base):
     waiting: Mapped[str | None] = mapped_column(String(16), nullable=True)   # чего Stevens ждал до запроса
     intent: Mapped[str | None] = mapped_column(String(16), nullable=True)
     llm: Mapped[bool] = mapped_column(Boolean, default=False)
+    layer: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    doubts: Mapped[str | None] = mapped_column(Text, nullable=True)
+    parsed: Mapped[str | None] = mapped_column(Text, nullable=True)
+    llm_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
     kind: Mapped[str] = mapped_column(String(16), index=True)         # kind ответа
     template: Mapped[str | None] = mapped_column(String(48), nullable=True)
     reply: Mapped[str] = mapped_column(Text, default="")

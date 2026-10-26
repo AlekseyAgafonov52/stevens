@@ -28,7 +28,7 @@ class RuleTests(unittest.TestCase):
     def test_weekday_and_relative_weeks_do_not_cut_into_title(self):
         p = nlu.parse("в среду через 3 недели репетитор по математике", NOW)
         self.assertEqual(p.text, "Репетитор по математике")
-        self.assertEqual(p.date.isoformat(), "2026-11-18")
+        self.assertEqual(p.date.isoformat() if p.date else None, "2026-11-18")
 
     def test_weekly_reminder_keeps_horizon_while_waiting_for_weekday(self):
         for horizon in ["вперед на месяц", "на месяц вперёд"]:
@@ -36,7 +36,7 @@ class RuleTests(unittest.TestCase):
                 p = nlu.parse("поставь напоминание репетитор по математике каждую неделю 13.00 " + horizon, NOW)
                 self.assertEqual((p.intent, p.type, p.text, p.time),
                                  ("create", "reminder", "Репетитор по математике", "13:00"))
-                self.assertEqual(p.until.isoformat(), "2026-11-24")
+                self.assertEqual(p.until.isoformat() if p.until else None, "2026-11-24")
                 self.assertIsNone(p.repeat_days)
                 self.assertIsNone(p.date)
 
@@ -133,6 +133,7 @@ class RefinementTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(chat, "save", new=AsyncMock(return_value={"kind": "created"})) as save:
             first = await self.say("поставь напоминание репетитор по математике каждую неделю 13.00 вперед на месяц")
             self.assertEqual(first["kind"], "clarify")
+            assert self.ctx.conv.pending is not None
             self.assertEqual(self.ctx.conv.pending.draft["time"], "13:00")
             save.assert_not_awaited()
             second = await self.say("каждую среду")
@@ -147,6 +148,7 @@ class RefinementTests(unittest.IsolatedAsyncioTestCase):
         pending = chat.Pending("draft", {"type": "reminder", "text": "Репетитор", "time": "13:00",
                                          "repeat_until": "2026-11-24"})
         draft = chat.merge_reply(pending, "каждую среду на две недели", NOW)
+        assert draft is not None
         self.assertEqual(draft["repeat"], {"days": [2], "until": "2026-11-07"})
 
     async def test_occurrence_cancellation_respects_disabled_deletion(self):
@@ -156,7 +158,7 @@ class RefinementTests(unittest.IsolatedAsyncioTestCase):
         self.db.commit.assert_not_awaited()
 
     async def test_cancellation_suffix_deletes_only_matching_series_occurrence(self):
-        focus = SimpleNamespace(series_id=42, deleted_at=None)
+        focus = SimpleNamespace(series_id=42, deleted_at=None, to_contract=lambda: {})
         occurrence = SimpleNamespace(id=7)
         for suffix in ["", ", вычеркни", ", убери", ", удали", ", отмени"]:
             with self.subTest(suffix=suffix), \
@@ -169,7 +171,7 @@ class RefinementTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(len(find.call_args.args), 3)
 
     async def test_relative_week_offers_occurrence_without_deleting(self):
-        focus = SimpleNamespace(series_id=42, deleted_at=None)
+        focus = SimpleNamespace(series_id=42, deleted_at=None, to_contract=lambda: {})
         occurrence = SimpleNamespace(id=7)
         with patch.object(chat, "owned_record", new=AsyncMock(return_value=focus)), \
                 patch.object(chat, "owner_records", new=AsyncMock(side_effect=[[], [occurrence]])), \

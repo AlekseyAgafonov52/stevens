@@ -4,6 +4,7 @@
  * Не включился — ещё раз через 300 мс; снова нет — autolisten_failed в журнал и подсказка voice_error.
  */
 import { api } from '../../api';
+import { serverHas } from '../../config/server';
 import { setHint } from '../../state/chat';
 import { isSpeaking, onAssistantResponse, onSpeech, onUiActivity } from '../../state/events';
 import { startRecording } from '../../state/recording';
@@ -23,6 +24,7 @@ function cancel(): void {
 }
 
 function listen(retry = false): void {
+  if (!serverHas('f9')) return;
   waitingForSpeech = false;
   if (document.visibilityState !== 'visible') return;
   startRecording({ auto: true });

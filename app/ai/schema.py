@@ -2,7 +2,7 @@
 from datetime import date, datetime
 from typing import Annotated, Literal
 
-from pydantic import AfterValidator, BaseModel, ConfigDict, Field, model_validator
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, PrivateAttr, model_validator
 
 RecordType = Literal["task", "reminder", "meeting", "note", "busy"]
 Intent = Literal["create", "note", "list", "search", "person", "notes", "undated", "repeats",
@@ -132,6 +132,8 @@ class Doubt(Model):
 
 
 class Result(Model):
+    # Compatibility data belongs to the adapter, never to the public JSON.
+    _rule_parses: list = PrivateAttr(default_factory=list)
     intent: Intent
     items: list[Item] = Field(default_factory=list, max_length=100)
     period: Period | None = None

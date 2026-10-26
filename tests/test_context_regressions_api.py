@@ -21,7 +21,7 @@ async def main():
 
             async def say(text, *, conv=None, action=None):
                 body = {"text": text, "conversation_id": conv or conversation, "source": "text",
-                        "client_time": "2026-10-25T10:00:00+03:00"}
+                        "client_time": "2026-10-25T10:00:00+03:00", "timezone": "Europe/Moscow"}
                 if action:
                     body["action"] = action
                 response = await c.post("/api/chat", headers=headers, json=body)
