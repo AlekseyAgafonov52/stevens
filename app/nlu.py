@@ -1095,7 +1095,25 @@ def _with_repeat(text: str, now: datetime) -> Parse | None:
     """Фраза с повтором: разбираем без слов повтора и добавляем дни. None — повтор тут ни при чём."""
     rep = parse_repeat(text, now)
     if not rep:
-        return None
+        weekly = re.search(r"\b(?:каждую\s+неделю|еженедельно)\b", text, I)
+        if not weekly:
+            return None
+        until, until_span = _until(text, now.date())
+        spans = [weekly.span()]
+        if until_span:
+            spans.append(until_span)
+            # Both «на месяц вперёд» and «вперёд на месяц» describe the horizon.
+            ahead = re.search(r"\bвпер[её]д\s*$", text[:until_span[0]], I)
+            if ahead:
+                spans.append(ahead.span())
+        rest = " ".join(_cut(text, spans).split()).strip(" ,.")
+        if not rest:
+            return None
+        inner = parse(rest, now)
+        if inner.intent != "create":
+            return None
+        inner.until = until
+        return inner
     rest = " ".join(_cut(text, rep.spans).split()).strip(" ,.")
     if not rest:
         return None

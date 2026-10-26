@@ -19,6 +19,7 @@ import { pluralKey } from '../lib/dates';
 import { uuid } from '../lib/uuid';
 import { storage } from '../storage';
 import { emitActivity, onAssistantResponse, onRecordsChanged } from './events';
+import { setHint } from './chat';
 import { createStore, lastAnswerId, store } from './store';
 
 type PushMessage = { type?: string; recordId?: number; snoozed?: boolean };
@@ -230,8 +231,8 @@ function snoozeHere(id: number): void {
 }
 
 /** Подписка на пуш с сервера: нужен service worker и разрешение на уведомления */
-async function subscribePush(): Promise<void> {
-  if (!notifyOn() || !('serviceWorker' in navigator) || !('PushManager' in window)) return;
+async function subscribePush(): Promise<boolean> {
+  if (!notifyOn() || !('serviceWorker' in navigator) || !('PushManager' in window)) return false;
   try {
     const registration = await navigator.serviceWorker.register('/sw.js');
     await navigator.serviceWorker.ready;
@@ -244,8 +245,11 @@ async function subscribePush(): Promise<void> {
       });
     }
     await api.pushSubscribe(subscription.toJSON(), timezone());
-  } catch {
+    return true;
+  } catch (error) {
+    console.warn('Push subscription failed', error);
     /* без пушей: остаются уведомления, пока вкладка открыта */
+    return false;
   }
 }
 
@@ -321,14 +325,37 @@ export function declineOffer(): void {
 
 /** Галочка «Уведомления» в меню ставится: разрешение браузера → подписка на пуш */
 export async function enableNotify(): Promise<void> {
-  if (!supported()) return;
+  // iOS разрешает запрос только из установленного приложения, не из вкладки Safari.
+  const ios = /iPad|iPhone|iPod/.test(navigator.userAgent)
+    || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  const standalone = window.matchMedia?.('(display-mode: standalone)').matches
+    || (navigator as Navigator & { standalone?: boolean }).standalone === true;
+  if (ios && !standalone) {
+    setHint('install_safari');
+    return;
+  }
+  if (!supported()) {
+    console.warn('Notifications are unavailable', { secureContext: window.isSecureContext });
+    return;
+  }
   storage.clearNotifyDeclined();
-  const permission = Notification.permission === 'granted' ? 'granted' : await Notification.requestPermission();
-  if (permission === 'granted') {
-    void reschedule();
-    void subscribePush();
-  } else storage.setNotifyDeclined();
-  refreshOn();
+  try {
+    // До запроса разрешения нельзя ожидать сеть: Safari потеряет жест пользователя.
+    const permission = Notification.permission === 'granted' ? 'granted' : await Notification.requestPermission();
+    if (permission === 'granted') {
+      void reschedule();
+      const subscribed = await subscribePush();
+      if (!subscribed) setHint('err_server');
+      notifyStore.set({ on: subscribed });
+    } else {
+      storage.setNotifyDeclined();
+      refreshOn();
+    }
+  } catch (error) {
+    console.warn('Notification permission failed', error);
+    notifyStore.set({ on: false });
+    setHint('err_server');
+  }
 }
 
 /** Галочка «Уведомления» в меню снимается: POST /api/push/unsubscribe и отписка в браузере */

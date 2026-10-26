@@ -5,6 +5,7 @@ from pathlib import Path
 import sys
 import unittest
 from unittest.mock import AsyncMock, patch
+from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 os.environ.setdefault("DATABASE_URL", "postgresql+asyncpg://postgres@localhost/unused")
@@ -21,6 +22,16 @@ SECOND = "Мне бы завтра в 15 пересечься с Иваном, �
 
 
 class RuleTests(unittest.TestCase):
+    def test_weekly_reminder_keeps_horizon_while_waiting_for_weekday(self):
+        for horizon in ["вперед на месяц", "на месяц вперёд"]:
+            with self.subTest(horizon=horizon):
+                p = nlu.parse("поставь напоминание репетитор по математике каждую неделю 13.00 " + horizon, NOW)
+                self.assertEqual((p.intent, p.type, p.text, p.time),
+                                 ("create", "reminder", "Репетитор по математике", "13:00"))
+                self.assertEqual(p.until.isoformat(), "2026-11-24")
+                self.assertIsNone(p.repeat_days)
+                self.assertIsNone(p.date)
+
     def test_monthly_tutor_reminders(self):
         p = nlu.parse("Поставь напоминания на месяц вперед репетитор каждый вторник в 9.00", NOW)
         self.assertEqual((p.intent, p.type, p.text, p.time), ("create", "reminder", "Репетитор", "09:00"))
@@ -110,11 +121,64 @@ class RefinementTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual((await self.say(FIRST))["kind"], "created")
         parse.assert_not_called()
 
+    async def test_weekday_reply_completes_weekly_reminder(self):
+        with patch.object(chat, "save", new=AsyncMock(return_value={"kind": "created"})) as save:
+            first = await self.say("поставь напоминание репетитор по математике каждую неделю 13.00 вперед на месяц")
+            self.assertEqual(first["kind"], "clarify")
+            self.assertEqual(self.ctx.conv.pending.draft["time"], "13:00")
+            save.assert_not_awaited()
+            second = await self.say("каждую среду")
+        self.assertEqual(second["kind"], "created")
+        draft = save.call_args.args[1]
+        self.assertEqual(draft["text"], "Репетитор по математике")
+        self.assertEqual(draft["time"], "13:00")
+        self.assertEqual(draft["date"], "2026-10-28")
+        self.assertEqual(draft["repeat"], {"days": [2], "until": "2026-11-24"})
+
+    async def test_weekday_reply_can_supply_new_repeat_horizon(self):
+        pending = chat.Pending("draft", {"type": "reminder", "text": "Репетитор", "time": "13:00",
+                                         "repeat_until": "2026-11-24"})
+        draft = chat.merge_reply(pending, "каждую среду на две недели", NOW)
+        self.assertEqual(draft["repeat"], {"days": [2], "until": "2026-11-07"})
+
     async def test_occurrence_cancellation_respects_disabled_deletion(self):
         with patch.object(chat.features, "on", side_effect=lambda feature: feature != "f12"):
             answer = await self.say("17 ноября занятий не будет")
         self.assertEqual(answer["kind"], "not_understood")
         self.db.commit.assert_not_awaited()
+
+    async def test_cancellation_suffix_deletes_only_matching_series_occurrence(self):
+        focus = SimpleNamespace(series_id=42, deleted_at=None)
+        occurrence = SimpleNamespace(id=7)
+        for suffix in ["", ", вычеркни", ", убери", ", удали", ", отмени"]:
+            with self.subTest(suffix=suffix), \
+                    patch.object(chat, "owned_record", new=AsyncMock(return_value=focus)), \
+                    patch.object(chat, "owner_records", new=AsyncMock(return_value=[occurrence])) as find, \
+                    patch.object(chat, "delete_one", new=AsyncMock(return_value={"kind": "deleted"})) as delete:
+                answer = await self.say("17 ноября занятий не будет" + suffix)
+                self.assertEqual(answer["kind"], "deleted")
+                delete.assert_awaited_once_with(self.ctx, occurrence, "deleted_occurrence")
+                self.assertEqual(len(find.call_args.args), 3)
+
+    async def test_relative_week_offers_occurrence_without_deleting(self):
+        focus = SimpleNamespace(series_id=42, deleted_at=None)
+        occurrence = SimpleNamespace(id=7)
+        with patch.object(chat, "owned_record", new=AsyncMock(return_value=focus)), \
+                patch.object(chat, "owner_records", new=AsyncMock(side_effect=[[], [occurrence]])), \
+                patch.object(chat, "which_one", return_value={"kind": "clarify"}) as choose, \
+                patch.object(chat, "delete_one", new=AsyncMock()) as delete:
+            answer = await self.say("через 2 недели занятия не будет, вычеркни")
+        self.assertEqual(answer["kind"], "clarify")
+        choose.assert_called_once_with(self.ctx, [occurrence], "delete_occurrence")
+        delete.assert_not_awaited()
+        self.db.commit.assert_not_awaited()
+
+    async def test_cancellation_suffix_without_context_does_not_create(self):
+        with patch.object(chat, "owned_record", new=AsyncMock(return_value=None)), \
+                patch.object(chat, "save", new=AsyncMock()) as save:
+            answer = await self.say("через 2 недели занятия не будет, вычеркни")
+        self.assertEqual(answer["kind"], "clarify")
+        save.assert_not_awaited()
 
     async def test_forgotten_task_asks_time_for_tomorrow(self):
         with patch.object(chat, "free_times", new=AsyncMock(return_value=[])), \

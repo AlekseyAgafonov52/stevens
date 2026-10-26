@@ -989,6 +989,8 @@ def draft_from(p: nlu.Parse, today: date) -> dict:
         draft["doubt"] = p.doubt
     if p.repeat_days:
         draft["repeat"] = {"days": p.repeat_days, "until": p.until.isoformat() if p.until else None}
+    elif p.until:
+        draft["repeat_until"] = p.until.isoformat()
     if p.date:
         draft["date_kind"] = p.date_kind
     elif draft["type"] == "task" and p.vague_period and p.period is None:
@@ -1018,9 +1020,17 @@ def merge_reply(pending: Pending, raw: str, now: datetime) -> dict | None:
     draft = dict(pending.draft)
     if draft["type"] == "busy":
         return merge_busy(draft, raw, now)
+    repeat = nlu.parse_repeat(raw, now)
     time, ambiguous, time_spans, info = nlu.parse_when(raw, now)
-    rest = " ".join(nlu._cut(raw, info.spans + time_spans).split()).strip(" ,.!?")
+    repeat_spans = repeat.spans if repeat else []
+    rest = " ".join(nlu._cut(raw, info.spans + time_spans + repeat_spans).split()).strip(" ,.!?")
     changed = False
+    if repeat:
+        until = repeat.until.isoformat() if repeat.until else (
+            draft.get("repeat", {}).get("until") or draft.get("repeat_until"))
+        draft["repeat"] = {"days": repeat.days, "until": until}
+        draft.pop("repeat_until", None)
+        changed = True
     if info.date:
         draft["date"] = info.date.isoformat()
         draft["date_kind"] = info.kind if draft["type"] == "task" else "exact"
@@ -1789,7 +1799,9 @@ async def answer_bulk_delete(ctx: Ctx, p: nlu.Parse) -> dict:
     rows = await focused(ctx, p) if p.ref and ctx.found else []
     if not rows:
         conditions = []
-        if p.filter_type:
+        if p.filter_type == "task":
+            conditions.append(Record.type.in_([TaskType.task, TaskType.reminder]))
+        elif p.filter_type:
             conditions.append(Record.type == TaskType(p.filter_type))
         if p.period:
             conditions += [Record.date >= p.period.start.isoformat(), Record.date <= p.period.end.isoformat()]
@@ -1824,6 +1836,14 @@ async def bulk_delete(ctx: Ctx, pending: Pending) -> dict:
     stamp = datetime.now(timezone.utc)
     for record in rows:
         record.deleted_at = stamp
+    await ctx.db.flush()
+    # Stop a repeat only when none of its occurrences remain. A deletion
+    # restricted to a day or period must leave the rest of the series running.
+    series_ids = {r.series_id for r in rows if r.series_id is not None}
+    if series_ids:
+        remaining = await owner_records(ctx, Record.series_id.in_(series_ids))
+        await series.set_ended(ctx.db, ctx.owner,
+                               series_ids - {r.series_id for r in remaining}, True)
     await ctx.db.commit()
     ctx.conv.bulk_deleted = [r.id for r in rows]
     ctx.conv.focus = None
@@ -2745,7 +2765,10 @@ async def set_remind_before(ctx: Ctx, record: Record, value: int) -> dict:
 
 async def cancel_focused_occurrence(ctx: Ctx, raw: str) -> dict | None:
     """A date-specific cancellation refers only to the focused series, never to all that day's records."""
-    match = re.fullmatch(r"(?P<day>.+?)\s+(?:заняти[еяй]|урок(?:а|ов)?|встреч(?:а|и)?)\s+не\s+будет[.!?]*", raw, re.I)
+    match = re.fullmatch(
+        r"(?P<day>.+?)\s+(?:заняти[еяй]|урок(?:а|ов)?|встреч(?:а|и)?)\s+не\s+будет"
+        r"(?:\s*[,;.!—–-]?\s*(?:вычеркни(?:те)?|убери(?:те)?|удали(?:те)?|отмени(?:те)?))?[.!?]*",
+        raw.strip(), re.I)
     if match is None:
         return None
     ctx.trace["intent"] = "delete"
@@ -2758,6 +2781,16 @@ async def cancel_focused_occurrence(ctx: Ctx, raw: str) -> dict | None:
     if not focus or focus.series_id is None or focus.deleted_at is not None:
         return reply("clarify", *ctx.say("clarify_generic"), awaiting=True, buttons=[CANCEL])
     rows = await owner_records(ctx, Record.series_id == focus.series_id, Record.date == info.date.isoformat())
+    if not rows and re.fullmatch(r"через\s+(?:(?:\d+|[а-яё]+)\s+)?недел[юиь]", match["day"], re.I):
+        # A relative week need not land on the series weekday. Offer the
+        # occurrence in that week for confirmation rather than deleting silently.
+        start, end = week_bounds(info.date)
+        candidates = await owner_records(ctx, Record.series_id == focus.series_id,
+                                        Record.date >= start.isoformat(), Record.date <= end.isoformat())
+        if len(candidates) == 1:
+            return which_one(ctx, candidates, "delete_occurrence")
+        if candidates:
+            return reply("clarify", *ctx.say("clarify_generic"), awaiting=True, buttons=[CANCEL])
     if not rows:
         return reply("found", *ctx.say("found_none"), total=0)
     if len(rows) != 1:

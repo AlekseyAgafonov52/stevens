@@ -30,8 +30,9 @@ self.addEventListener('push', (event) => {
       const visible = list.filter((c) => c.visibilityState === 'visible');
       if (visible.length) {
         visible.forEach((c) => c.postMessage({ type: 'stevens-reminder', tag: data.tag, recordId, snoozed: !!data.snoozed }));
-        return undefined;
       }
+      // Каждый Web Push должен показать уведомление, в том числе при открытом окне:
+      // Safari отзывает разрешение за невидимые push-события.
       return self.registration.showNotification(data.title || 'Stevens', {
         body: data.body || '',
         tag: data.tag,
