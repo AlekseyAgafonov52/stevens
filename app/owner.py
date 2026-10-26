@@ -73,11 +73,16 @@ def demo_rows() -> list[dict]:
     return rows
 
 
-async def seed_sandbox(db: AsyncSession, client_id: str) -> None:
-    # Сброс — одна транзакция; незавершенные повторы не должны возродить удаленные записи.
+async def clear_sandbox(db: AsyncSession, client_id: str) -> None:
+    """Remove sandbox records and repeats without filling it with demo data again."""
     await db.execute(delete(PushSnooze).where(PushSnooze.sandbox_id == client_id))
     await db.execute(delete(Record).where(Record.sandbox_id == client_id))
     await db.execute(delete(Series).where(Series.sandbox_id == client_id))
+
+
+async def seed_sandbox(db: AsyncSession, client_id: str) -> None:
+    # Сброс — одна транзакция; незавершенные повторы не должны возродить удаленные записи.
+    await clear_sandbox(db, client_id)
     await db.execute(insert(Record), [{**row, "sandbox_id": client_id} for row in demo_rows()])
 
 

@@ -14,7 +14,7 @@ import { sessionExpired } from '../../state/session';
 import { store, useApp } from '../../state/store';
 import { EditForm } from '../edit/EditForm';
 import { DragGhost, MoveNotice, startDrag, takeSuppressedClick, useDrag } from './move';
-import { calendar, load, shiftMonth } from './state';
+import { calendar, invalidate, load, shiftMonth } from './state';
 import { busyDates, conflictIds, countByDate, dayLabel, dotsFor, gridDays, sortDay } from './month';
 import './calendar.css';
 
@@ -45,6 +45,7 @@ onAssistantResponse((response) => {
   if (RELOAD_KINDS.has(response.kind) && store.get().calendarOpen) void load();
 });
 onRecordsChanged(() => {
+  invalidate();
   if (store.get().calendarOpen) void load();
 });
 

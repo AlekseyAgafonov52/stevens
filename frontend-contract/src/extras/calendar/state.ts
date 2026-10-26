@@ -4,7 +4,7 @@ import type { RecordItem } from '../../api/types';
 import { now } from '../../lib/clock';
 import { isoDate } from '../../lib/dates';
 import { sessionExpired } from '../../state/session';
-import { createStore } from '../../state/store';
+import { createStore, store } from '../../state/store';
 import { gridRange } from './month';
 
 const today = () => now();
@@ -19,6 +19,21 @@ export const calendar = createStore({
 });
 
 let loadToken = 0;
+export function invalidate(): void {
+  loadToken += 1;
+  calendar.set({ records: [], loading: true, failed: false });
+}
+
+let owner = `${store.get().mode}:${store.get().userId}`;
+store.subscribe(() => {
+  const s = store.get();
+  const nextOwner = `${s.mode}:${s.userId}`;
+  if (owner === nextOwner) return;
+  owner = nextOwner;
+  invalidate();
+  if (s.screen === 'app' && s.calendarOpen) void load();
+});
+
 export async function load(): Promise<void> {
   const { year, month } = calendar.get();
   const token = ++loadToken;
@@ -28,6 +43,7 @@ export async function load(): Promise<void> {
     const records = await api.records(from, to);
     if (token === loadToken) calendar.set({ records, loading: false });
   } catch (error) {
+    if (token !== loadToken) return;
     if (error instanceof ApiFailure && error.error.type === 'unauthorized') {
       sessionExpired();
       return;

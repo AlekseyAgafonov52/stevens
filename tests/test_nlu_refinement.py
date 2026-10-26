@@ -22,6 +22,14 @@ SECOND = "Мне бы завтра в 15 пересечься с Иваном, �
 
 
 class RuleTests(unittest.TestCase):
+    def test_cut_merges_duplicate_and_overlapping_spans(self):
+        self.assertEqual(nlu._cut("abcdef", [(0, 2), (0, 2), (1, 3)]).strip(), "def")
+
+    def test_weekday_and_relative_weeks_do_not_cut_into_title(self):
+        p = nlu.parse("в среду через 3 недели репетитор по математике", NOW)
+        self.assertEqual(p.text, "Репетитор по математике")
+        self.assertEqual(p.date.isoformat(), "2026-11-18")
+
     def test_weekly_reminder_keeps_horizon_while_waiting_for_weekday(self):
         for horizon in ["вперед на месяц", "на месяц вперёд"]:
             with self.subTest(horizon=horizon):

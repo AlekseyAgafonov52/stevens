@@ -3,7 +3,6 @@ import { Check } from 'lucide-react';
 import { useSyncExternalStore } from 'react';
 import { Pill } from '../../components/Pill';
 import { T, fill } from '../../content/texts';
-import { resetSandbox } from '../../state/chat';
 import { emitActivity } from '../../state/events';
 import { useApp } from '../../state/store';
 import { closeTour, declineTour, hintReady, skipStep, startTour, tourStore, tourSteps, sendHint } from './state';
@@ -15,7 +14,7 @@ const press = (fn: () => void) => () => { emitActivity('button-press'); fn(); };
 
 export function TourBar() {
   const t = useSyncExternalStore(tourStore.subscribe, tourStore.get);
-  const busy = useApp((s) => s.waiting || s.recording);
+  const busy = useApp((s) => s.waiting || s.recording) || t.cleaning;
   // Перерисовка при новом ответе: кнопка-подсказка активна, только когда нужная кнопка есть под ответом
   useApp((s) => s.messages.length);
   // «Посмотреть» в шаге «Уведомление» активна, пока карточка на экране
@@ -28,7 +27,7 @@ export function TourBar() {
         <div className="tour__title">{t.again ? T.tour_offer_again_title : T.tour_offer_title}</div>
         <div className="tour__text">{fill(t.account ? T.tour_offer_account_text : T.tour_offer_text, { N: steps.length })}</div>
         <div className="tour__actions">
-          <Pill variant="primary" onClick={press(() => void startTour())}>{T.tour_offer_yes}</Pill>
+          <Pill variant="primary" disabled={busy} onClick={press(() => void startTour())}>{T.tour_offer_yes}</Pill>
           <Pill variant="secondary" onClick={press(declineTour)}>{T.tour_offer_no}</Pill>
         </div>
       </div>
@@ -43,11 +42,11 @@ export function TourBar() {
         <div className="tour__text">{T.tour_done_more}</div>
         <div className="tour__actions">
           {t.back ? (
-            <Pill variant="primary" onClick={press(closeTour)}>{T.tour_done_back}</Pill>
+            <Pill variant="primary" disabled={busy} onClick={press(closeTour)}>{T.tour_done_back}</Pill>
           ) : (
             <>
-              <Pill variant="primary" onClick={press(() => { closeTour(); void resetSandbox(); })}>{T.tour_done_reset}</Pill>
-              <Pill variant="secondary" onClick={press(closeTour)}>{T.tour_done_close}</Pill>
+              <Pill variant="primary" disabled={busy} onClick={press(closeTour)}>{T.tour_done_reset}</Pill>
+              <Pill variant="secondary" disabled={busy} onClick={press(closeTour)}>{T.tour_done_close}</Pill>
             </>
           )}
         </div>
@@ -90,8 +89,8 @@ export function TourBar() {
             </Pill>
           </div>
           <div className="tour__actions">
-            <Pill variant="secondary" onClick={press(skipStep)}>{T.tour_skip}</Pill>
-            <Pill variant="secondary" onClick={press(closeTour)}>{T.tour_exit}</Pill>
+            <Pill variant="secondary" disabled={busy} onClick={press(skipStep)}>{T.tour_skip}</Pill>
+            <Pill variant="secondary" disabled={busy} onClick={press(closeTour)}>{T.tour_exit}</Pill>
           </div>
         </>
       )}

@@ -265,6 +265,117 @@ class BulkDeleteCalendarTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual({r["date"] for r in await self.calendar()},
                          {"2026-10-30", "2026-11-06", "2026-11-13", "2026-11-20"})
 
+    async def test_named_russian_tutor_cancellation_ignores_math_focus(self):
+        await self.tutor("русскому")
+        await self.tutor("математике")
+        result = await self.say("репетитора по русскому в среду не будет")
+        self.assertEqual(result["kind"], "deleted", result)
+        self.assertEqual(result["records"][0]["text"], "Репетитор по русскому")
+        self.assertEqual(result["records"][0]["date"], "2026-10-28")
+        rows = await self.calendar()
+        self.assertEqual(len(rows), 9)
+        self.assertEqual(len([r for r in rows if r["text"] == "Репетитор по математике"]), 5)
+
+    async def test_named_tutor_relative_weeks_offers_actual_lesson(self):
+        await self.tutor()
+        await self.tutor("русскому")
+        self.ctx.conv = chat.Conversation()
+        result = await self.say("репетитора по математике через 3 недели не будет")
+        self.assertEqual(result["kind"], "clarify", result)
+        self.assertEqual([r["date"] for r in result["records"]], ["2026-11-18"])
+        self.assertEqual(len(await self.calendar()), 10)
+        result = await self.say("Выбрать", result["buttons"][0]["send"]["action"])
+        self.assertEqual(result["kind"], "deleted", result)
+        self.assertEqual(result["records"][0]["text"], "Репетитор по математике")
+        self.assertEqual(len(await self.calendar()), 9)
+
+    async def test_named_tutor_weekday_with_relative_weeks_and_delete_suffix(self):
+        await self.tutor()
+        await self.tutor("русскому")
+        result = await self.say("в среду через 3 недели репетитора по математике не будет, убери задачу")
+        self.assertEqual(result["kind"], "deleted", result)
+        self.assertEqual(result["records"][0]["date"], "2026-11-18")
+        self.assertEqual(result["records"][0]["text"], "Репетитор по математике")
+        self.session.expire_all()
+        rows = await self.calendar()
+        self.assertEqual(len(rows), 9)
+        self.assertTrue(all("не будет" not in r["text"].lower() for r in rows))
+
+    async def test_named_unknown_subject_never_deletes_another_tutor(self):
+        await self.tutor("русскому")
+        result = await self.say("репетитора по математике в среду не будет")
+        self.assertEqual((result["kind"], result["total"]), ("found", 0), result)
+        self.assertEqual(len(await self.calendar()), 5)
+
+    async def test_named_tutor_without_date_does_not_delete_whole_series(self):
+        await self.tutor()
+        result = await self.say("репетитора по математике не будет, убери задачу")
+        self.assertEqual(result["kind"], "clarify", result)
+        self.assertEqual(len(await self.calendar()), 5)
+
+    async def test_named_cancellation_with_two_matching_tutors_requires_choice(self):
+        await self.tutor()
+        await self.tutor()
+        result = await self.say("репетитора по математике в среду не будет, убери задачу")
+        self.assertEqual(result["kind"], "clarify", result)
+        self.assertEqual(len(result["records"]), 2)
+        self.assertEqual(len(await self.calendar()), 10)
+
+    async def test_named_cancellation_cannot_touch_another_owner(self):
+        await self.tutor()
+        self.ctx.owner = Owner(sandbox_id="another-owner")
+        self.ctx.conv = chat.Conversation()
+        result = await self.say("репетитора по математике в среду не будет")
+        self.assertEqual((result["kind"], result["total"]), ("found", 0))
+        self.ctx.owner = self.owner
+        self.assertEqual(len(await self.calendar()), 5)
+
+    async def test_user_tutor_dialog_with_later_horizon_and_cancellation(self):
+        created = await self.say("поставь репетитора по математике каждую среду в 13.00")
+        self.assertEqual(created["kind"], "created", created)
+        updated = await self.say("на месяц вперёд")
+        self.assertEqual(updated["kind"], "updated", updated)
+        self.assertEqual(updated["records"][0]["repeat"], {"weekdays": [2], "until": "2026-11-25"})
+        rows = await chat.owner_records(self.ctx)
+        self.assertEqual(len(rows), 5)
+        result = await self.say("через две недели занятий с репетитором по математике не будет")
+        self.assertEqual(result["kind"], "clarify", result)
+        self.assertEqual([r["date"] for r in result["records"]], ["2026-11-11"])
+        result = await self.say("Выбрать", result["buttons"][0]["send"]["action"])
+        self.assertEqual(result["kind"], "deleted", result)
+        self.session.expire_all()
+        self.assertEqual(len(await self.calendar()), 4)
+
+    async def test_instrumental_tutor_cancellation_preserves_other_subject(self):
+        await self.tutor()
+        await self.tutor("русскому")
+        result = await self.say("в среду занятий с репетитором по математике не будет")
+        self.assertEqual(result["kind"], "deleted", result)
+        self.assertEqual(result["records"][0]["text"], "Репетитор по математике")
+        self.assertEqual(len(await self.calendar()), 9)
+
+    async def test_horizon_change_persists_and_can_extend_again(self):
+        await self.say("поставь репетитора по математике каждую среду в 13.00")
+        await self.say("на месяц вперёд")
+        self.session.expire_all()
+        self.assertEqual(len(await chat.owner_records(self.ctx)), 5)
+        result = await self.say("на два месяца вперёд")
+        self.assertEqual(result["kind"], "updated", result)
+        rows = await chat.owner_records(self.ctx)
+        self.assertEqual(len(rows), 9)
+        self.assertEqual(len({r.date for r in rows}), 9)
+        self.assertTrue(all(r.date <= "2026-12-25" and r.repeat_contract()["until"] == "2026-12-25" for r in rows))
+
+    async def test_horizon_refinement_only_changes_focused_series(self):
+        await self.tutor("русскому")
+        await self.say("поставь репетитора по математике каждую среду в 13.00")
+        await self.say("на месяц вперёд")
+        rules = {r.text: r for r in self.session.query(Series).all()}
+        self.assertEqual(rules["Репетитор по русскому"].until, "2026-11-25")
+        self.assertEqual(rules["Репетитора по математике"].until, "2026-11-25")
+        self.assertFalse(any(r.deleted_at for r in self.session.query(Record).filter(
+            Record.series_id == rules["Репетитор по русскому"].id).all()))
+
 
 if __name__ == "__main__":
     unittest.main()

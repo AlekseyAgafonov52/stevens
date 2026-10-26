@@ -193,6 +193,10 @@ export const api = {
     await request('/api/sandbox/reset', { method: 'POST' });
   },
 
+  async clearSandbox(clientId: string): Promise<void> {
+    await request('/api/sandbox/clear', { method: 'POST', auth: false, extra: { 'X-Client-Id': clientId } });
+  },
+
   async records(from: string, to: string): Promise<RecordItem[]> {
     const response = await request(`/api/records?from=${from}&to=${to}`, {});
     const data = (await json(response)) as { records?: unknown[] };

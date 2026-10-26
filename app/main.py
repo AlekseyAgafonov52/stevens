@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models  # noqa: F401 — таблицы для create_all
 from app.database import Base, engine, get_db
-from app.owner import CLIENT_ID_RE, clean_loop, ensure_sandbox, seed_sandbox
+from app.owner import CLIENT_ID_RE, clean_loop, clear_sandbox, ensure_sandbox, seed_sandbox
 from app import push
 from app import features
 from app.routers import auth, chat, client, imports, records, transfer
@@ -99,6 +99,17 @@ async def sandbox_reset(x_client_id: str | None = Header(default=None), db: Asyn
         return JSONResponse(status_code=422, content={"error": "client_id_required"})
     await ensure_sandbox(db, client_id)
     await seed_sandbox(db, client_id)
+    await db.commit()
+    chat.forget(f"s:{client_id}")
+    return Response(status_code=204)
+
+
+@app.post("/api/sandbox/clear", status_code=204)
+async def sandbox_clear(x_client_id: str | None = Header(default=None), db: AsyncSession = Depends(get_db)):
+    client_id = (x_client_id or "").strip()
+    if not CLIENT_ID_RE.fullmatch(client_id):
+        return JSONResponse(status_code=422, content={"error": "client_id_required"})
+    await clear_sandbox(db, client_id)
     await db.commit()
     chat.forget(f"s:{client_id}")
     return Response(status_code=204)

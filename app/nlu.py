@@ -688,7 +688,13 @@ def _filter_type(text: str) -> str | None:
 
 
 def _cut(text: str, spans: list[tuple[int, int]]) -> str:
-    for start, end in sorted(spans, reverse=True):
+    merged: list[tuple[int, int]] = []
+    for start, end in sorted(spans):
+        if merged and start <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+        else:
+            merged.append((start, end))
+    for start, end in reversed(merged):
         text = text[:start] + " " + text[end:]
     return text
 

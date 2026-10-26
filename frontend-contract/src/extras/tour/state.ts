@@ -1,10 +1,12 @@
 /** Ф23 Обучение в демо-режиме: шаги идут по ответам Stevens (контракт v1.5, Ф23). */
 import type { ChatResponse, RecordItem } from '../../api/types';
+import { api, errorKey } from '../../api';
 import { serverHas, type ServerFeature } from '../../config/server';
 import { TOUR_STEPS } from '../../content/texts';
 import { briefingStore, declineBriefing } from '../../state/briefing';
 import { pressButton, resetSandbox, send } from '../../state/chat';
-import { emitActivity, onAssistantResponse, onUiActivity } from '../../state/events';
+import { emitActivity, emitRecordsChanged, onAssistantResponse, onUiActivity } from '../../state/events';
+import { clearFeed } from '../../state/feed';
 import { notifyStore, showNotifyCard, viewNotifyCard } from '../../state/notify';
 import { enterTourSandbox, returnToAccount } from '../../state/session';
 import { createStore, store } from '../../state/store';
@@ -56,7 +58,7 @@ const STEP_DONE_MS = 1400;
 
 /** account — предложение после регистрации; back — обучение запущено из аккаунта, по окончании вернём */
 export const tourStore = createStore({
-  status: 'off' as TourStatus, step: 0, sub: 0, stepDone: false, again: false, account: false, back: false,
+  status: 'off' as TourStatus, step: 0, sub: 0, stepDone: false, again: false, account: false, back: false, cleaning: false,
 });
 
 /** Аккаунт, из которого ушли в обучение на демо-данных */
@@ -65,10 +67,55 @@ let back: { login: string | null; userId: number | null } | null = null;
 let doneTimer: ReturnType<typeof setTimeout> | undefined;
 /** Напоминание из шага «Напоминание» — его же показываем в примере уведомления */
 let exampleRecord: RecordItem | null = null;
+let cleanup: Promise<boolean> | null = null;
+let cleanupErrorTimer: ReturnType<typeof setTimeout> | undefined;
+
+function cleanTourSandbox(): Promise<boolean> {
+  if (cleanup) return cleanup;
+  const clientId = storage.clientId();
+  tourStore.set({ cleaning: true });
+  store.set({ waiting: true });
+  cleanup = (async () => {
+    try {
+      if (!clientId) throw new Error('Missing tour sandbox');
+      await api.clearSandbox(clientId);
+      clearTimeout(cleanupErrorTimer);
+      store.set({ resetError: null });
+      exampleRecord = null;
+      notifyStore.set({ card: null, offer: null });
+      if (store.get().mode === 'sandbox') {
+        clearFeed();
+        emitActivity('new-dialog');
+        store.set({ messages: [], conversationId: uuid(), editing: null, unseen: 0 });
+        emitRecordsChanged();
+      }
+      return true;
+    } catch (error) {
+      store.set({ resetError: { key: errorKey(error), until: Date.now() + 6000 } });
+      clearTimeout(cleanupErrorTimer);
+      cleanupErrorTimer = setTimeout(() => store.set({ resetError: null }), 6000);
+      return false;
+    } finally {
+      tourStore.set({ cleaning: false });
+      store.set({ waiting: false });
+    }
+  })().then((ok) => {
+    if (!ok) cleanup = null;
+    return ok;
+  });
+  return cleanup;
+}
 
 function next(): void {
   const { step } = tourStore.get();
-  if (step + 1 >= tourSteps().length) tourStore.set({ status: 'done', stepDone: false });
+  if (step + 1 >= tourSteps().length) {
+    if (store.get().waiting || store.get().recording) {
+      doneTimer = setTimeout(next, 100);
+      return;
+    }
+    tourStore.set({ status: 'done', stepDone: false });
+    void cleanTourSandbox();
+  }
   else tourStore.set({ step: step + 1, sub: 0, stepDone: false });
 }
 
@@ -100,6 +147,8 @@ function showExample(): void {
 }
 
 export async function startTour(): Promise<void> {
+  if (tourStore.get().cleaning || store.get().waiting || store.get().recording) return;
+  cleanup = null;
   storage.setTourSeen();
   storage.setTourOffer(null);
   clearTimeout(doneTimer);
@@ -141,13 +190,18 @@ function sayLater(): void {
   }));
 }
 
-export function closeTour(): void {
+export async function closeTour(): Promise<void> {
+  if ((store.get().waiting && !tourStore.get().cleaning) || store.get().recording) return;
   clearTimeout(doneTimer);
+  const { status } = tourStore.get();
+  if ((status === 'running' || status === 'done') && !(await cleanTourSandbox())) return;
+  dismissedFor = store.get().conversationId;
   tourStore.set({ status: 'off', stepDone: false, back: false });
   if (back) {
     const { login, userId } = back;
     back = null;
     returnToAccount(login, userId);
+    emitRecordsChanged();
   }
 }
 

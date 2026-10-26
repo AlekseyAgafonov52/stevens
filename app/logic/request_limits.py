@@ -48,7 +48,7 @@ class RequestLimits:
                 ip = forwarded.strip()
         auth = path in ("/api/auth/login", "/api/auth/register")
         group, limit = ("auth", 30) if auth else ("transfer", 20) if "/import" in path or "/transfer" in path or path.endswith("/export") else (
-            ("stt", 30) if path == "/api/stt" else ("reset", 10) if path == "/api/sandbox/reset" else ("api", 180))
+            ("stt", 30) if path == "/api/stt" else ("reset", 10) if path in ("/api/sandbox/reset", "/api/sandbox/clear") else ("api", 180))
         if os.getenv("STEVENS_RATE_LIMIT", "1") != "0":
             wait = self.hit((ip, group), limit)
             client_id = headers.get(b"x-client-id") if not headers.get(b"authorization") else None
