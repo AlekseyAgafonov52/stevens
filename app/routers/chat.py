@@ -727,7 +727,7 @@ async def answer_many(ctx: Ctx, parses: list[nlu.Parse]) -> dict | None:
     text, speech = ctx.say("multi_confirm", {"count": len(drafts)})
     return reply("confirm", text, speech, records=[draft_record(d, ["draft"]) for d in drafts], awaiting=True,
                  buttons=[button_action("Да, записать все", "confirm_yes"),
-                          button_action("Нет", "cancel", style="secondary")])
+                          button_action("Нет", "multi_no", style="secondary")])
 
 
 async def save_many(ctx: Ctx, drafts: list[dict]) -> dict:
@@ -850,14 +850,14 @@ async def answer_free(ctx: Ctx, p: nlu.Parse) -> dict:
         text, speech = ctx.say("free_longest_more" if others else "free_longest", values)
         need = min(p.duration, best[1] - best[0])
         buttons = [button_text(hhmm(t), f"{what} {send_day} в {hhmm(t)}") for t in window_starts([best], need)]
-        return reply("clarify", text, speech, buttons=buttons)
+        return reply("clarify", text, speech, awaiting=True, buttons=buttons)
     # В тексте — все окна промежутками, кнопки — каждый час внутри тех, куда помещается встреча
     times = [hhmm(t) for t in window_starts([w for w in windows if w[1] - w[0] >= p.duration], p.duration)]
     text, speech = ctx.say("free_slots" if p.subject else "free_slots_plain",
                            {"day": day_word, "slots": spans_text(windows), "need": length_text(p.duration),
                             "text": p.subject or ""})
     buttons = [button_text(t, f"{what} {send_day} в {t}") for t in times]
-    return reply("clarify", text, speech, buttons=buttons)
+    return reply("clarify", text, speech, awaiting=True, buttons=buttons)
 
 
 def free_at(ctx: Ctx, p: nlu.Parse, day: date, rows: list[Record], windows: list[tuple[int, int]], what: str,
@@ -870,7 +870,7 @@ def free_at(ctx: Ctx, p: nlu.Parse, day: date, rows: list[Record], windows: list
     values = {"day": date_text(day, ctx.today), "time": p.time}
     if not clash:
         text, speech = ctx.say("free_at_yes", values)
-        return reply("clarify", text, speech, buttons=[button_text(f"Поставить на {p.time}", f"{what} {send_day} в {p.time}")])
+        return reply("clarify", text, speech, awaiting=True, buttons=[button_text(f"Поставить на {p.time}", f"{what} {send_day} в {p.time}")])
     first = sorted(clash, key=moment)[0]
     values["text"] = first.text
     if not windows:
@@ -879,7 +879,7 @@ def free_at(ctx: Ctx, p: nlu.Parse, day: date, rows: list[Record], windows: list
     values["slots"] = spans_text(windows)
     text, speech = ctx.say("free_at_no", values)
     times = [hhmm(t) for t in window_starts([w for w in windows if w[1] - w[0] >= p.duration], p.duration)]
-    return reply("clarify", text, speech, records=[first.to_contract()],
+    return reply("clarify", text, speech, records=[first.to_contract()], awaiting=True,
                  buttons=[button_text(t, f"{what} {send_day} в {t}") for t in times])
 
 
@@ -981,7 +981,12 @@ async def answer_free_days(ctx: Ctx, p: nlu.Parse) -> dict:
         text, speech = ctx.say("free_day", values, {"period": period.label_speech, "day": date_speech(top[0].day, ctx.today)})
     buttons = [button_text(capitalize(date_text(x.day, ctx.today)), f"Найди свободное окно {day_send(ctx, x.day)}")
                for x in top[:3]]
-    return reply("clarify", text, speech, buttons=buttons)
+    # День рекомендации, а не начало произвольного периода: голосовое «в 16»
+    # должно относиться к рекомендованной дате.
+    ctx.conv.pending = Pending("free_choice", {
+        "date": top[0].day.isoformat(), "subject": p.subject,
+        "duration": p.duration, "window": p.window})
+    return reply("clarify", text, speech, awaiting=True, buttons=buttons)
 
 
 def undo_button(ctx: Ctx, record: Record) -> list[dict]:
@@ -1060,6 +1065,11 @@ def merge_reply(pending: Pending, raw: str, now: datetime) -> dict | None:
         return merge_busy(draft, raw, now)
     repeat = nlu.parse_repeat(raw, now)
     time, ambiguous, time_spans, info = nlu.parse_when(raw, now)
+    # Если пользователь передумал внутри ответа, решает последнее названное время.
+    if re.search(r"\b(?:нет|стой|точнее|вернее|передумал[аи]?)\b", raw, re.I):
+        latest, latest_ambiguous = nlu.reply_time(raw)
+        if latest:
+            time, ambiguous = latest, latest_ambiguous
     repeat_spans = repeat.spans if repeat else []
     rest = " ".join(nlu._cut(raw, info.spans + time_spans + repeat_spans).split()).strip(" ,.!?")
     changed = False
@@ -1639,8 +1649,20 @@ def meeting_not_done(ctx: Ctx, meetings: list[Record]) -> dict:
 
 
 async def complete_one(ctx: Ctx, record: Record) -> dict:
-    if record.type in (TaskType.busy, TaskType.note):
-        text, speech = ctx.say("completed_note_no" if record.type == TaskType.note else "completed_busy_no", {"text": record.text})
+    if record.type == TaskType.meeting:
+        return meeting_not_done(ctx, [record])
+    if record.type == TaskType.busy:
+        # Не отмечаем занятость выполненной, но предлагаем безопасный выбор.
+        ctx.conv.pending = Pending("complete_delete_offer", {"id": record.id})
+        ctx.conv.focus = record.id
+        text, speech = ctx.say("completed_busy_no", {"text": record.text})
+        text += " Удалить эту занятость?"
+        if speech:
+            speech += " Удалить эту занятость?"
+        return reply("clarify", text, speech, records=[record.to_contract()], awaiting=True,
+                     buttons=[button_action("Удалить", "delete", record.id), CANCEL])
+    if record.type == TaskType.note:
+        text, speech = ctx.say("completed_note_no", {"text": record.text})
         return reply("clarify", text, speech, records=[record.to_contract()])
     record.status = TaskStatus.done
     await ctx.db.commit()
@@ -1746,9 +1768,13 @@ async def answer_delete(ctx: Ctx, p: nlu.Parse) -> dict:
     if not found:
         text, speech = ctx.say("found_none")
         return reply("found", text, speech, total=0)
-    if one := only_series(ctx, exact(found, p) or found):
+    candidates = exact(found, p) or found
+    # Несколько встреч «с Иваном» на разные дни — нельзя удалять последнюю по фокусу.
+    if not (p.date or p.time or p.ref) and len({(r.date, r.time) for r in candidates}) > 1:
+        return which_one(ctx, candidates, "delete")
+    if one := only_series(ctx, candidates):
         return await delete_record(ctx, one, p)
-    if one := single(ctx, exact(found, p) or found):
+    if one := single(ctx, candidates):
         return await delete_record(ctx, one, p)
     return which_one(ctx, found, "delete")
 
@@ -1882,7 +1908,7 @@ async def answer_complete(ctx: Ctx, p: nlu.Parse) -> dict:
     if not open_ones:
         others = await find(ctx, nlu.Parse(keywords=p.keywords, date=p.date), types={"meeting", "busy"})
         if meetings := [r for r in others if r.type == TaskType.meeting]:
-            return await complete_one(ctx, meetings[0]) if len(meetings) == 1 else which_one(ctx, meetings, "complete")
+            return meeting_not_done(ctx, meetings) if len(meetings) == 1 else which_one(ctx, meetings, "complete")
         if others:
             return await complete_one(ctx, others[0])  # занятость: «не отмечается, можно удалить»
         text, speech = ctx.say("found_none")
@@ -1897,6 +1923,8 @@ async def answer_complete(ctx: Ctx, p: nlu.Parse) -> dict:
 YES_RE = re.compile(r"^(?:(?:стив\w*|stevens?)[\s,]+)?(?:(?:да|ага|угу|давай|подтверждаю|конечно|точно|ок|окей|верно|правильно|хорошо|записывай|сохраняй|можно)\b[^?]*"
                     r"|(?:удаляй|удали)(?:\s+(?:все|всё|их))?[\s.!]*)$", re.I)
 NO_RE = re.compile(r"^(?:(?:стив\w*|stevens?)[\s,]+)?(?:нет|неа|не-а|не\s+надо|не\s+удаляй|не\s+нужно|отмена|отмени|стоп|оставь)\b", re.I)
+# Нерешительный звук при ожидании подтверждения не является новой командой.
+UNCERTAIN_CONFIRM_RE = re.compile(r"(?:м+|хм+|эм+|э+|ну+|не\s+знаю)[\s.,!?…]*", re.I)
 
 
 def bulk_scope(ctx: Ctx, p: nlu.Parse) -> str:
@@ -1931,8 +1959,6 @@ async def answer_bulk_delete(ctx: Ctx, p: nlu.Parse) -> dict:
     if not rows:
         text, speech = ctx.say("bulk_none", {"scope": scope})
         return reply("found", text, speech, total=0)
-    if len(rows) == 1:
-        return await delete_one(ctx, rows[0])
     ordered = sorted(rows, key=lambda r: (r.date or "9999-99-99", r.time or "99:99", r.id))
     ctx.conv.pending = Pending("bulk_delete", {"ids": [r.id for r in ordered], "forms": forms})
     text, speech = ctx.say("bulk_delete_confirm", {"count": len(rows), "scope": scope}, count_forms=forms)
@@ -2166,7 +2192,7 @@ async def move_one(ctx: Ctx, record: Record, changes: dict) -> dict:
     if not new_date and new_time and record.date and record.date >= ctx.today.isoformat():
         new_date = record.date
     if new_date and not new_time and record.time and needs_time(record) and new_date != record.date:
-        new_time = record.time  # на тот же день — ничего бы не поменялось: спросим время
+        new_time = record.time  # явный перенос на день без нового часа сохраняет старое время
     if not new_date:
         return await ask_move_day(ctx, record, new_time)
     if not new_time and needs_time(record):
@@ -2211,6 +2237,13 @@ async def answer_move_when(ctx: Ctx, pending: Pending, raw: str) -> dict | None:
     changes = move_changes(p)
     changes["time"] = changes["time"] or pending.draft.get("time")
     changes["date"] = changes["date"] or pending.draft.get("date")
+    # После «перенеси её» мы сначала спрашивали день, затем должны спросить час.
+    # Для самостоятельной команды «перенеси её на пятницу» старый час сохраняем.
+    if (changes["date"] and not changes["time"] and record.time
+            and needs_time(record) and not pending.draft.get("date")):
+        day = parse_date(changes["date"])
+        if day is not None:
+            return await ask_move_time(ctx, record, day)
     queue = pending.draft.get("queue") or []
     answer = await move_one(ctx, record, changes)
     if answer["kind"] != "updated" or not queue:
@@ -2553,6 +2586,11 @@ async def handle_action(ctx: Ctx, action_id: str, record_id: int | None) -> dict
         return await save_many(ctx, pending.draft["drafts"])
     if action_id == "confirm_yes" and pending and pending.kind == "confirm":
         return await process_draft(ctx, {**pending.draft, "confirmed": True})
+    if action_id == "multi_no" and pending and pending.kind == "multi":
+        ctx.conv.pending = Pending("multi_fix", pending.draft)
+        text, speech = ctx.say("confirm_no")
+        return reply("clarify", text, speech, awaiting=True,
+                     records=[draft_record(d, ["draft"]) for d in pending.draft["drafts"]], buttons=[CANCEL])
     if action_id == "confirm_no" and pending and pending.kind == "confirm":
         ctx.conv.pending = Pending("confirm_no", {**pending.draft, "ambiguous": False})
         text, speech = ctx.say("confirm_no")
@@ -3146,12 +3184,20 @@ async def respond(ctx: Ctx, payload: ChatRequest) -> dict:
             return reply("cancelled", text, speech)
         if YES_RE.match(raw):
             return await bulk_delete(ctx, pending)
+        if UNCERTAIN_CONFIRM_RE.fullmatch(raw):
+            # «ммм» не подтверждает и не отменяет удаление: сохраняем список
+            # записей, чтобы последующее «да» завершило исходную операцию.
+            ctx.conv.pending = pending
+            text, speech = ctx.say("yes_no_again")
+            return reply("clarify", text, speech, awaiting=True, buttons=[
+                button_action("Да, удалить все", "confirm_yes"),
+                button_action("Нет", "cancel", style="secondary")])
     if pending and pending.kind == "undated":
         if NO_RE.match(raw) or REFUSE_RE.match(raw):
             return skip_undated(ctx)
         if YES_RE.match(raw) or SHOW_RE.match(raw):
             return await answer_undated(ctx)
-    if pending and pending.kind == "meeting_delete":
+    if pending and pending.kind in ("meeting_delete", "complete_delete_offer"):
         if YES_RE.match(raw) and (answer := await handle_action(ctx, "delete", pending.draft["id"])):
             return answer
         if NO_RE.match(raw) or nlu.is_cancel_reply(raw):
@@ -3173,8 +3219,12 @@ async def respond(ctx: Ctx, payload: ChatRequest) -> dict:
     if pending and pending.kind == "confirm" and (no := NO_RE.match(raw)) and (
             rest := raw[no.end():].strip(" ,.!—-")) and (answer := await answer_confirm_fix(ctx, pending, rest)):
         return answer
+    # «Нет» к групповому списку означает исправление, но «стоп» и «отмена» — отмену.
+    if pending and pending.kind == "multi" and nlu.is_cancel_reply(raw):
+        if answer := await handle_action(ctx, "cancel", None):
+            return answer
     if pending and pending.kind in ("multi", "confirm") and NO_RE.match(raw):
-        if answer := await handle_action(ctx, "cancel" if pending.kind == "multi" else "confirm_no", None):
+        if answer := await handle_action(ctx, "multi_no" if pending.kind == "multi" else "confirm_no", None):
             return answer
     if (fix := fix_words(raw, ctx.now)) and (answer := await answer_fix(ctx, *fix)):
         return answer
@@ -3185,8 +3235,63 @@ async def respond(ctx: Ctx, payload: ChatRequest) -> dict:
     if pending and pending.kind == "move_all" and not is_new_request(p, raw):
         if answer := await answer_move_all_reply(ctx, pending, raw):
             return answer
-    if pending and pending.kind == "note" and not is_new_request(p, raw) and not nlu.is_cancel_reply(raw):
+    if pending and pending.kind == "note" and not nlu.is_cancel_reply(raw) and (
+            not is_new_request(p, raw) or (p.intent == "create" and not nlu.CREATE_VERB_RE.match(raw))):
         return await answer_note(ctx, nlu.Parse(text=nlu.capitalize(raw.strip(" ,.!?:—-")) or None))
+    # После показа свободных окон фраза «давай в 16» продолжает этот запрос.
+    # Новая явная команда не перехватывается: пользователь может сменить тему.
+    if pending and pending.kind == "free_choice" and not nlu.is_cancel_reply(raw) and not is_new_request(p, raw):
+        chosen_time, _, _, when = nlu.parse_when(raw, ctx.now)
+        if not chosen_time:
+            chosen_time, _ = nlu.reply_time(raw)
+        chosen_day = when.date.isoformat() if when.date else pending.draft.get("date")
+        if chosen_time and chosen_day:
+            subject = pending.draft.get("subject")
+            draft = {"type": "meeting", "text": subject or "Встреча", "date": chosen_day,
+                     "date_kind": "exact", "time": chosen_time, "end_time": None,
+                     "ambiguous": False, "has_subject": bool(subject)}
+            ctx.conv.pending = None
+            return await process_draft(ctx, draft)
+        if when.date and not chosen_time:
+            ctx.conv.pending = None
+            request = nlu.Parse(intent="free", date=when.date,
+                                duration=pending.draft.get("duration", 60),
+                                window=pending.draft.get("window", 30),
+                                subject=pending.draft.get("subject"))
+            answer = await answer_free(ctx, request)
+            if answer.get("awaiting_reply"):
+                ctx.conv.pending = Pending("free_choice", {
+                    "date": when.date.isoformat(), "duration": request.duration,
+                    "window": request.window, "subject": request.subject})
+            return answer
+
+    if pending and pending.kind == "multi_fix" and not nlu.is_cancel_reply(raw):
+        # «Нет» в групповом подтверждении означает желание поправить черновики,
+        # а не отменить без возможности выбора.
+        order = nlu.ordinal_of(raw)
+        drafts = [dict(d) for d in pending.draft["drafts"]]
+        if order and 0 <= order[0] < len(drafts):
+            if re.search(r"\b(?:убери|удали|исключи|без|не\s+надо)\b", raw, re.I):
+                drafts.pop(order[0])
+            elif re.search(r"\bтолько\b", raw, re.I):
+                drafts = [drafts[order[0]]]
+            else:
+                order = None
+            if order:
+                if not drafts:
+                    ctx.conv.pending = None
+                    return reply("cancelled", *ctx.say("cancelled"))
+                if len(drafts) == 1:
+                    return await process_draft(ctx, drafts[0])
+                ctx.conv.pending = Pending("multi", {"drafts": drafts})
+                text, speech = ctx.say("multi_confirm", {"count": len(drafts)})
+                return reply("confirm", text, speech, awaiting=True,
+                             records=[draft_record(d, ["draft"]) for d in drafts],
+                             buttons=[button_action("Да, записать все", "confirm_yes"),
+                                      button_action("Нет", "multi_no", style="secondary")])
+        ctx.conv.pending = pending
+        return reply("clarify", *ctx.say("confirm_no"), awaiting=True,
+                     records=[draft_record(d, ["draft"]) for d in drafts], buttons=[CANCEL])
     if pending and pending.kind == "move_existing" and not nlu.is_cancel_reply(raw):
         if answer := await answer_move_existing(ctx, pending, raw):
             return answer
@@ -3208,15 +3313,16 @@ async def respond(ctx: Ctx, payload: ChatRequest) -> dict:
             ctx.conv.pending = keep
             return answer
     if pending and pending.kind == "conflict" and not nlu.is_cancel_reply(raw):
-        if KEEP_BOTH_RE.match(raw) or (pending.draft.get("busy_clash") and ANYWAY_RE.match(raw)):
+        if KEEP_BOTH_RE.match(raw) or (pending.draft.get("busy_clash") and (ANYWAY_RE.match(raw) or re.search(r"\bвс[её]\s+равно\b", raw, re.I))):
             return await keep_anyway(ctx, pending.draft)
         if OTHER_TIME_RE.match(raw) and (answer := await handle_action(ctx, "change_new_time", None)):
             return answer
-        if not is_new_request(p, raw) and (nlu.parse_when(raw, ctx.now)[0] or nlu.reply_time(raw)[0]):
+        if (not is_new_request(p, raw) or re.match(r"^(?:да|ну|тогда|давай)[,!\s]+(?:давай\s+)?(?:в|на)\s+\d", raw, re.I)) and (
+                nlu.parse_when(raw, ctx.now)[0] or nlu.reply_time(raw)[0]):
             # «Давай в 16» — другое время для новой встречи
             pending = ctx.conv.pending = Pending("new_time", {**pending.draft, "time": None, "end_time": None,
                                                               "busy_clash": False})
-    asking = pending and pending.kind in ("draft", "new_time", "confirm_no", "multi_ask", "multi", "confirm", "conflict",
+    asking = pending and pending.kind in ("draft", "new_time", "confirm_no", "multi_ask", "multi", "multi_fix", "free_choice", "confirm", "conflict",
                                           "move_existing", "edit_ask")
     if asking and nlu.is_cancel_reply(raw):
         # «Стой», «убери всё» в ответ на вопрос — отмена, а не удаление записей
@@ -3272,6 +3378,11 @@ async def respond(ctx: Ctx, payload: ChatRequest) -> dict:
             if changed.intent == "move" and (changed.date or changed.time) and not changed.keywords:
                 ctx.trace["intent"] = "move"
                 return await answer_move(ctx, changed)
+    # «Купил хлеб» — безопасно отмечаем найденную задачу до обращения к LLM,
+    # чтобы неопределённый модельный ответ не подменял однозначное действие.
+    if p.intent == "unknown" and ctx.conv.pending is None and "d3" in ctx.features:
+        if answer := await answer_did(ctx, raw):
+            return answer
     refine = nlu.needs_llm_review(p)
     if refine and not any(d.get("why") == "unclear" for d in p.doubt):
         p.doubt.append({"why": "unclear"})
@@ -3335,16 +3446,36 @@ async def respond(ctx: Ctx, payload: ChatRequest) -> dict:
     if p.intent == "repeats":
         return await answer_repeats(ctx)
     if p.intent == "bad_date":
+        # Не просто ставим awaiting_reply=True: храним сам черновик, чтобы
+        # «30 ноября» в следующем сообщении завершило «купить билеты».
+        without_bad_day = re.sub(r"(?:\b(?:на|в)\s+)?" + re.escape(p.text or ""),
+                                 " ", raw, count=1, flags=re.I)
+        candidate = nlu.parse(" ".join(without_bad_day.split()), ctx.now)
+        if candidate.intent == "create" and candidate.text:
+            draft = draft_from(candidate, ctx.today)
+            draft.update(date=None, date_kind="exact",
+                         ask={"template": "bad_date", "values": {"text": p.text}, "quick": None})
+            ctx.conv.pending = Pending("draft", draft)
         text, speech = ctx.say("bad_date", {"text": p.text})
-        return reply("clarify", text, speech)
+        return reply("clarify", text, speech, awaiting=True, buttons=[CANCEL])
     if p.intent == "note":
         return await answer_note(ctx, p)
     if p.intent == "notes":
         return await answer_notes(ctx, p)
     if p.intent == "free":
-        return await answer_free(ctx, p)
+        answer = await answer_free(ctx, p)
+        if answer.get("awaiting_reply") and ctx.conv.pending is None:
+            day = p.date or (p.period.start if p.period else ctx.today)
+            ctx.conv.pending = Pending("free_choice", {
+                "date": day.isoformat(), "subject": p.subject,
+                "duration": p.duration, "window": p.window})
+        return answer
     if p.intent == "list":
         last = ctx.conv.last_query
+        if p.query_mode == "filter_only" and isinstance(last, nlu.Parse) and last.intent == "list":
+            p.period = last.period
+            p.day_part = last.day_part
+            p.status = last.status
         if p.only_when and not p.filter_type and isinstance(last, nlu.Parse) and last.intent == "list":
             p.filter_type = last.filter_type  # «а в пятницу?» после «какие встречи завтра» — тоже встречи
         ctx.conv.last_query = p
