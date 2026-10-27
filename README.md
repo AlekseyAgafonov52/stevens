@@ -71,7 +71,7 @@ python tests/test_contract_v16.py
 python tests/test_ai_parser.py
 ```
 
-`tests/test_jury_phrases_api.py` прогоняет все примеры из задания и их пересказы: 34 фразы, все проходят. Всего в `tests/` 37 файлов, им нужна отдельная тестовая PostgreSQL (см. [ЗАПУСК.md](ЗАПУСК.md)). Фронтенд проверяется `pnpm run lint`, `typecheck`, `test` и `build` при сборке образа.
+`tests/test_jury_phrases_api.py` прогоняет все примеры из задания и их пересказы: 36 фраз, все проходят. Всего в `tests/` 37 файлов, им нужна отдельная тестовая PostgreSQL (см. [ЗАПУСК.md](ЗАПУСК.md)). Фронтенд проверяется `pnpm run lint`, `typecheck`, `test` и `build` при сборке образа.
 
 ## Что улучшили бы при наличии времени
 

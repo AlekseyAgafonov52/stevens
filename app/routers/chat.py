@@ -393,6 +393,18 @@ async def process_draft(ctx: Ctx, draft: dict) -> dict:
         # «Сегодня в 8 утра», а уже 10 — предлагаем завтра в то же время
         quick = [(f"Завтра в {draft['time']}", f"завтра в {draft['time']}")] \
             if draft["date"] == today and has_time else None
+        # «23 сентября» без года, а оно уже прошло — не переносим молча, а спрашиваем про следующий год
+        day = parse_date(draft["date"])
+        if day and (ctx.today - day).days > 14:
+            try:
+                ahead = day.replace(year=day.year + 1)
+            except ValueError:
+                ahead = None
+            if ahead and ahead > ctx.today:
+                said = f"{ahead.day} {nlu.MONTHS_GEN[ahead.month - 1]} {ahead.year}"
+                return clarify(ctx, "clarify_date_past_year", {**past, "time": draft.get("time")},
+                               [(f"Да, на {said}", f"на {said}")],
+                               values={"when": values["when"], "next": said})
         return clarify(ctx, "clarify_date_past", past, quick, values={"when": values["when"]})
 
     # Высокий риск ошибки — «правильно понял?» (Р-19); разбор неуверенный — «верно понял?» с причиной
@@ -3089,6 +3101,10 @@ async def respond(ctx: Ctx, payload: ChatRequest) -> dict:
     if pending and pending.kind in ("multi", "confirm") and YES_RE.match(raw):
         if answer := await handle_action(ctx, "confirm_yes", None):
             return answer
+    # «Да» на «Поставить на 23 сентября 2027?» — как кнопка с этой датой
+    if pending and pending.kind == "draft" and YES_RE.match(raw) \
+            and (ask := pending.draft.get("ask") or {}).get("template") == "clarify_date_past_year":
+        return await respond(ctx, payload.model_copy(update={"text": ask["quick"][0][1]}))
     if pending and pending.kind == "confirm" and (no := NO_RE.match(raw)) and (
             rest := raw[no.end():].strip(" ,.!—-")) and (answer := await answer_confirm_fix(ctx, pending, rest)):
         return answer
