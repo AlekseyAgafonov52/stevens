@@ -694,6 +694,8 @@ async def answer_many(ctx: Ctx, parses: list[nlu.Parse]) -> dict | None:
     drafts = [draft_from(p, ctx.today) for p in parses]
     if any(d.get("repeat") for d in drafts):
         return None  # повтор записываем по одному
+    for d in drafts:
+        d["has_subject"] = True  # «созвон и напомни…»: в списке дел «Созвон» без «с кем» — уже название, не переспрашиваем
     if not all(ready_draft(ctx, d) for d in drafts):
         if all(ready_draft(ctx, d) or needs_only_time(ctx, d) for d in drafts):
             return await ask_many(ctx, drafts)
