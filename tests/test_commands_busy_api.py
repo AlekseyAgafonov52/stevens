@@ -115,7 +115,7 @@ async def main():
                   and "Без времени" not in by_text, after)
             rows = (await c.get("/api/records?from=2026-10-29&to=2026-10-29", headers=h)).json()["records"]
             check("правка повтора — во всех днях", any(x["text"] == "Работа" and x["end_time"] == "20:00" for x in rows), rows)
-            again = (await c.post("/api/transfer/import", json={"text": json.dumps({"records": after}), "apply": False},
+            again = (await c.post("/api/transfer/import", json={"text": json.dumps({"records": after}), "apply": False, "client_time": CLOCK},
                                   headers=h)).json()
             check("та же выгрузка — менять нечего", counts(again) == (0, 0, 0, 0) and again["unchanged"] == len(after),
                   counts(again))
