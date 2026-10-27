@@ -251,6 +251,14 @@ async def find(ctx: Ctx, p: nlu.Parse, types: set[str] | None = None) -> list[Re
     return by_keywords(rows, p)
 
 
+def clear_matches(rows: list[Record], p: nlu.Parse) -> list[Record]:
+    """Для отметки и удаления без имени совпасть должно больше половины слов: «купил молоко» не отметит
+    «Купить билеты». С именем («отмени встречу с Олегом») хватает совпадения имени — его проверил rank_records."""
+    if len(p.keywords) < 2 or p.required:
+        return rows
+    return [r for r in rows if matches(r, p.keywords) * 2 > len(p.keywords)]
+
+
 def by_keywords(rows: list[Record], p: nlu.Parse) -> list[Record]:
     return rank_records(rows, p.keywords, p.required)
 
@@ -1182,7 +1190,38 @@ def examples(kind: str, template_id: str, ctx: Ctx, items: list[str]) -> dict:
 DAY_PARTS = {"утром": ("05:00", "11:59"), "днём": ("12:00", "16:59"), "вечером": ("17:00", "23:59")}
 
 
+STATUS_SINCE_DAYS = 30  # просроченное и невыполненное — за последний месяц: в демо-базе прошлое никто не закрывал
+
+
+async def answer_status_list(ctx: Ctx, p: nlu.Parse) -> dict:
+    """«Невыполненные задачи», «что просрочено», «что я уже сделал» — по статусу, а не по одному дню."""
+    conditions = [Record.type.not_in([TaskType.busy, TaskType.note])]
+    if p.filter_type:
+        conditions.append(Record.type == TaskType(p.filter_type))
+    if p.period:
+        conditions += [Record.date >= p.period.start.isoformat(), Record.date <= p.period.end.isoformat()]
+    rows = await owner_records(ctx, *conditions)
+    since = (ctx.today - timedelta(days=STATUS_SINCE_DAYS)).isoformat()
+    if p.status == "done":
+        rows = [r for r in rows if r.status == TaskStatus.done]
+        rows.sort(key=moment, reverse=True)
+    else:
+        rows = [r for r in rows if r.status != TaskStatus.done and (p.period or not r.date or r.date >= since)]
+        if p.status == "overdue":
+            rows = [r for r in rows if r.date and not is_future(r, ctx.now)]
+        rows.sort(key=lambda r: (r.date or "9999-99-99", r.time or "99:99", r.id))
+    if not rows:
+        return reply("list", *ctx.say(f"list_status_{p.status}_none"), total=0)
+    forms = TYPE_FORMS[p.filter_type] if p.filter_type else None
+    text, speech = ctx.say(f"list_status_{p.status}", {"count": len(rows)}, count_forms=forms)
+    shown = rows[:FOUND_LIMIT]
+    remember_shown(ctx, shown)
+    return reply("list", text, speech, records=[r.to_contract() for r in shown], total=len(rows))
+
+
 async def answer_list(ctx: Ctx, p: nlu.Parse) -> dict:
+    if p.status:
+        return await answer_status_list(ctx, p)
     period = p.period or nlu.describe_period(ctx.today, ctx.today, ctx.today)
     conditions = [Record.date.is_not(None), Record.date >= period.start.isoformat(), Record.date <= period.end.isoformat()]
     if p.filter_type:
@@ -1629,7 +1668,7 @@ async def answer_delete(ctx: Ctx, p: nlu.Parse) -> dict:
             return await delete_record(ctx, focus, p)
         text, speech = ctx.say("clarify_generic")
         return reply("clarify", text, speech, awaiting=True, buttons=[CANCEL])
-    found = await find(ctx, p)
+    found = clear_matches(await find(ctx, p), p)
     if p.time:
         found = [r for r in found if r.time == p.time] or found
     if not found:
@@ -1766,7 +1805,7 @@ async def answer_complete(ctx: Ctx, p: nlu.Parse) -> dict:
     if not (p.keywords or p.date or p.filter_type):
         text, speech = ctx.say("clarify_generic")
         return reply("clarify", text, speech, awaiting=True, buttons=[CANCEL])
-    found = await find(ctx, p, types={"task", "reminder", "meeting"})
+    found = clear_matches(await find(ctx, p, types={"task", "reminder", "meeting"}), p)
     open_ones = [r for r in found if r.status != TaskStatus.done] or found
     if not open_ones:
         others = await find(ctx, nlu.Parse(keywords=p.keywords, date=p.date), types={"meeting", "busy"})
@@ -2569,7 +2608,7 @@ def is_new_request(p: nlu.Parse, raw: str) -> bool:
     if QUESTION_RE.match(raw.strip()):
         return True
     if p.intent in ("list", "search", "help", "off_topic", "delete", "complete", "thanks", "move", "edit", "note", "notes",
-                    "undated", "repeats"):
+                    "undated", "repeats", "greeting"):
         return True
     if p.intent == "create":
         return bool(nlu.CREATE_VERB_RE.search(raw.strip().lower()) or (p.text and len(nlu.keywords(p.text)) >= 2)
@@ -2669,8 +2708,10 @@ def pick_choice(raw: str, rows: list[Record], now: datetime) -> Record | None:
 # ── Контракт v1.5: удержание записи, «что поменять?», «перенести существующую», продолжения ──
 
 HOLD_KINDS = ("draft", "new_time")
-HOLD_BLOCK = ("create", "delete", "complete", "move", "edit", "note")          # новое не делаем, повторяем вопрос
-HOLD_PASS = ("list", "search", "person", "free", "help", "notes", "undated", "repeats", "greeting")  # отвечаем, запись ждёт
+HOLD_BLOCK = ("create", "note")          # новую запись не делаем, повторяем вопрос
+# Отвечаем или делаем, запись ждёт: «отметь звонок Ивану», «удали встречу с Петей» не про черновик — не застреваем
+HOLD_PASS = ("list", "search", "person", "free", "help", "notes", "undated", "repeats", "greeting", "thanks",
+             "delete", "complete", "move", "edit")
 EDIT_ASK_RE = re.compile(r"^(?:(?:стив\w*|stevens?)[\s,]+)?(?:пожалуйста\s+)?(?:измени(?:те)?|отредактируй(?:те)?|редактируй|поменяй|исправь)"
                          r"(?:\s+(?:её|ее|его|это|эту|этот|последн\w*|предыдущ\w*|запись|задачу|встречу|напоминание|дело))*[\s.!?]*$", re.I)
 FOLLOW_TYPE_RE = re.compile(r"^(?:а|и)\s+(?:(?:какие|есть)\s+)?(?:ещё\s+|еще\s+)?(встреч\w*|задач\w*|напоминани\w*)(?:\s+(?:есть|там))?[\s?!.]*$", re.I)

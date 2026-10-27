@@ -37,9 +37,9 @@ class ProjectSafetyTests(unittest.TestCase):
         assert result is not None
         self.assertEqual(result.intent, "create")
         self.assertEqual(result.items[0].time, "09:00")
-        tool = create.call_args.kwargs["tools"][0]
-        self.assertEqual(tool["name"], "extract_intent")
-        self.assertFalse(tool["strict"])
+        # С 27.10 без tools: YandexGPT отвечает JSON текстом по русскому промпту с календарём
+        self.assertNotIn("tools", create.call_args.kwargs)
+        self.assertIn("Календарь", create.call_args.kwargs["instructions"])
         self.assertFalse(create.call_args.kwargs["store"])
 
     def test_push_marks_only_successful_responses_as_delivered(self):
