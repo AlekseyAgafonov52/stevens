@@ -101,6 +101,17 @@ export interface RecordItem {
   highlight: HighlightField | null;
   /** Только у встреч: за сколько минут прислать уведомление, по умолчанию 15 (контракт v1.5, Ф10) */
   remind_before?: number | null;
+  /** Поля, спрятанные при смене типа: вернутся, если тип сменят обратно */
+  stash?: RecordStash | null;
+}
+
+export interface RecordStash {
+  date?: LocalDate;
+  time?: LocalTime;
+  end_time?: LocalTime;
+  remind_before?: number;
+  date_kind?: DateKind;
+  status?: 'open' | 'done';
 }
 
 export interface Repeat {
@@ -188,12 +199,24 @@ export interface RecordsResponse {
 
 /** PATCH /api/records/{id} — только изменённые поля */
 export interface RecordPatch {
+  /** Смена типа: поля, которых у нового типа нет, сервер прячет в stash и возвращает при смене обратно */
+  type?: RecordType;
   text?: string;
   date?: LocalDate | null;
   time?: LocalTime | null;
   end_time?: LocalTime | null;
   status?: 'open' | 'done';
   /** Только у встречи: 0–1440 минут */
+  remind_before?: number;
+}
+
+/** POST /api/records → 201 { record }: новая запись из календаря */
+export interface RecordCreate {
+  type: 'task' | 'reminder' | 'meeting' | 'busy';
+  text: string;
+  date: LocalDate | null;
+  time: LocalTime | null;
+  end_time?: LocalTime | null;
   remind_before?: number;
 }
 
@@ -211,8 +234,25 @@ export interface TransferResult {
   add: number;
   update: number;
   delete: number;
+  /** Только добавление (.ics или JSON без id): уже есть в Стивенсе / прошедшее и отменённое из файла */
+  same?: number;
+  skipped?: number;
+  past?: number;
   errors?: { index: number; field: string; code: string }[];
   undo_id?: string;
+  /** Только с details: true — для окна импорта */
+  kinds?: Record<string, number>;
+  items?: TransferItem[];
+}
+
+export interface TransferItem {
+  action: 'add' | 'update' | 'delete';
+  type: string;
+  text: string;
+  date: string | null;
+  time: string | null;
+  end_time: string | null;
+  repeat: { weekdays: number[]; until: string | null } | null;
 }
 
 /** Заголовок POST /api/chat со включёнными допами, которым нужен бэк. Не слать, если список пуст */

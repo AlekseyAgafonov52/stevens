@@ -7,7 +7,7 @@ X-Client-Id, записи с мягким удалением (15.4).
 import enum
 from datetime import datetime as dt
 
-from sqlalchemy import Boolean, DateTime, Enum, Float, ForeignKey, Index, Integer, String, Text, func
+from sqlalchemy import JSON, Boolean, DateTime, Enum, Float, ForeignKey, Index, Integer, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
@@ -117,6 +117,8 @@ class Record(Base):
     repeat: Mapped[str | None] = mapped_column(String(24), nullable=True)
     # Демо-данные песочницы из CSV: время создания у них есть, но уведомления по ним не звонят
     demo: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false", nullable=False)
+    # Смена типа: поля, которых у нового типа нет (время, «до», напоминание, срок, отметка), — чтобы вернуть их обратно
+    stash: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
     def remind_minutes(self) -> int:
         """За сколько минут до встречи уведомление (контракт v1.5: по умолчанию 15)."""
@@ -143,6 +145,7 @@ class Record(Base):
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "repeat": self.repeat_contract(),
             "demo": bool(self.demo),
+            "stash": self.stash or None,
             "marks": marks if marks is not None else (["deleted"] if self.deleted_at else []),
             "highlight": highlight,
         }
@@ -161,6 +164,8 @@ class PushSubscription(Base):
     # Часовой пояс браузера: записи хранятся в местном времени
     timezone: Mapped[str] = mapped_column(String(64), nullable=False)
     created_at: Mapped[dt] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    # Когда этот браузер последний раз открывал сайт: вечерняя сводка уходит на самый свежий
+    seen_at: Mapped[dt | None] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=True)
 
 
 class PushSent(Base):

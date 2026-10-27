@@ -7,6 +7,7 @@ import { pressButton } from '../state/chat';
 import { useApp, type AnswerMessage } from '../state/store';
 import { AnswerExtraButtons, RecordCardOverride, cardEditHandler } from '../extensions/points';
 import { NotifyOffer } from './NotifyOffer';
+import { OverdueActions } from './OverdueActions';
 import { undoImport } from '../state/imports';
 import { Pill, type PillVariant } from './Pill';
 import { RecordCard } from './RecordCard';
@@ -38,7 +39,7 @@ export function Answer({ message, isLast }: Props) {
     if (isEditing) {
       return <RecordCardOverride key={`${record.id}-${index}`} message={message} record={record} editing />;
     }
-    return (
+    const view = (
       <RecordCard
         key={`${record.id ?? 'd'}-${index}-${flash ? message.flash?.at : ''}`}
         record={flash ? { ...record, marks: [...record.marks, 'new'] } : record}
@@ -46,6 +47,13 @@ export function Answer({ message, isLast }: Props) {
         isNew={(fresh && record.marks.includes('new')) || !!flash}
         onClick={cardEditHandler(message, record, isLast && !message.restored && !waiting && !editing)}
       />
+    );
+    if (response.kind !== 'overdue') return view;
+    return (
+      <div className="overdue-item" key={`${record.id ?? 'd'}-${index}`}>
+        {view}
+        <OverdueActions message={message} record={record} />
+      </div>
     );
   };
 

@@ -4,13 +4,13 @@
 встреча — за remind_before минут (по умолчанию 15). У пуша кнопки «Посмотреть» и «Через 10 минут» (public/sw.js);
 отложенное лежит в push_snoozes и уходит ещё раз в свой срок. Время записи местное, поэтому пояс берём из подписки браузера.
 Демо-записи песочницы (demo) не звонят — только то, что человек завёл сам.
-Просроченные задачи, напоминания и встречи повторяются раз в час до выполнения.
-Интервал считается от последней успешной отправки отдельно для каждой подписки.
+Просроченное — одной сводкой вечером (DIGEST_AT по местному времени), каждое дело попадает в неё один раз.
+Сводка уходит на одно устройство — то, где человек был последним (seen_at подписки), а не на все сразу.
 """
 import asyncio
 import base64
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from cryptography.hazmat.primitives import serialization
@@ -23,14 +23,17 @@ from app.database import AsyncSessionLocal
 from app.textfmt import plural
 from app.models import AppSetting, PushSent, PushSnooze, PushSubscription, Record, TaskStatus, TaskType
 from app.logic.push_targets import PushSession, allowed_endpoint, valid_keys
-from app.templates import render
 
 TICK_SECONDS = 30
 # Опоздали больше чем на столько (сервер спал) — уже не шлём
 LATE_LIMIT = timedelta(minutes=15)
 CLAIMS = {"sub": "mailto:stevens@example.com"}
 SNOOZE = timedelta(minutes=10)
-OVERDUE_INTERVAL = timedelta(hours=1)
+# Вечерняя сводка о просроченном: с этого часа, раз в день; дела старше недели в неё не попадают
+DIGEST_AT = time(19, 0)
+DIGEST_LOOKBACK_DAYS = 7
+# Отметки «уже было в сводке» живут дольше обычных, иначе дело вернулось бы в сводку
+DIGEST_KEEP = timedelta(days=30)
 
 _vapid: Vapid | None = None
 
@@ -104,22 +107,25 @@ def due_at(record: Record, tz) -> datetime | None:
         return None
 
 
-def overdue_key(record: Record, subscription_id: int) -> str:
-    return f"o:{record_key(record)}:s{subscription_id}"
+def digest_key(record: Record) -> str:
+    """Дело уже было в сводке. Перенесли на другой срок — ключ другой, и оно снова попадёт в сводку."""
+    return f"do:{record_key(record)}"
 
 
-def overdue_due(record: Record, tz, now: datetime, previous: datetime | None = None) -> bool:
-    at = due_at(record, tz)
-    if at is None:
-        return False
-    now = now.astimezone(timezone.utc)
-    if now - at.astimezone(timezone.utc) < OVERDUE_INTERVAL:
-        return False
-    if previous is not None:
-        previous = previous.replace(tzinfo=timezone.utc) if previous.tzinfo is None else previous.astimezone(timezone.utc)
-        if now - previous < OVERDUE_INTERVAL:
-            return False
-    return True
+def digest_day_key(account_id: int | None, sandbox_id: str | None, day: str) -> str:
+    return f"dg:{account_id or ''}:{sandbox_id or ''}:{day}"
+
+
+def digest_payload(records: list[Record]) -> str:
+    """«2 дела остались без отметки» и сами дела строкой ниже."""
+    title = f"{plural(len(records), 'дело осталось', 'дела остались', 'дел осталось')} без отметки"
+    names = ", ".join(r.text for r in records[:3])
+    if len(records) > 3:
+        names += f" и ещё {len(records) - 3}"
+    return json.dumps({
+        "title": title, "body": names, "tag": "overdue-digest", "digest": True,
+        "record_ids": [r.id for r in records],
+    }, ensure_ascii=False)
 
 
 def minutes_text(total: int) -> str:
@@ -138,17 +144,15 @@ def record_key(record: Record) -> str:
     return f"{record.id}@{record.date}T{record.time}"
 
 
-def payload(record: Record, snoozed: bool = False, overdue: bool = False) -> str:
+def payload(record: Record, snoozed: bool = False) -> str:
     """Заголовок — сам текст записи, без «Позвольте напомнить» (просьба Матвея 24.10).
     У встречи ниже строка «Через 15 минут у вас встреча.», у остального текста ниже нет."""
     body = ""
-    if overdue:
-        body, _ = render("push_overdue")
-    elif record.type == TaskType.meeting and not snoozed:
+    if record.type == TaskType.meeting and not snoozed:
         body = f"Через {minutes_text(record.remind_minutes())} у вас встреча."
     return json.dumps({
         "title": record.text, "body": body, "tag": record_key(record),
-        "record_id": record.id, "snoozed": snoozed, "overdue": overdue,
+        "record_id": record.id, "snoozed": snoozed,
     }, ensure_ascii=False)
 
 
@@ -189,19 +193,9 @@ async def tick() -> None:
         owners: dict[tuple, list[PushSubscription]] = {}
         for sub in subs:
             owners.setdefault((sub.account_id, sub.sandbox_id, sub.timezone), []).append(sub)
-        deliveries = {row.key: row for row in (await db.execute(select(PushSent))).scalars().all()}
-        sent = set(deliveries)
+        sent = set((await db.execute(select(PushSent.key))).scalars().all())
         snoozes = list((await db.execute(select(PushSnooze))).scalars().all())
         deferred = {(s.account_id, s.sandbox_id, s.record_id) for s in snoozes}
-
-        def mark(record, sub, now):
-            marker = overdue_key(record, sub.id)
-            if marker in deliveries:
-                deliveries[marker].sent_at = now.astimezone(timezone.utc)
-            else:
-                row = PushSent(key=marker, sent_at=now.astimezone(timezone.utc))
-                db.add(row)
-                deliveries[marker] = row
         dead: list[int] = []
         for (account_id, sandbox_id, _), group in owners.items():
             tz = zone(group[-1].timezone)
@@ -211,40 +205,32 @@ async def tick() -> None:
             owner = Record.account_id == account_id if account_id else Record.sandbox_id == sandbox_id
             records = (await db.execute(
                 select(Record).where(owner, Record.deleted_at.is_(None), Record.demo.is_(False),
-                                     Record.type.in_([TaskType.task, TaskType.reminder, TaskType.meeting]),
+                                     Record.type.in_([TaskType.reminder, TaskType.meeting]),
                                      Record.status.is_distinct_from(TaskStatus.done),
-                                     Record.date <= days[-1])
+                                     Record.date >= days[0], Record.date <= days[-1])
             )).scalars().all()
             for record in records:
                 at = fire_at(record, tz)
-                normal = at is not None and now - LATE_LIMIT <= at <= now and record_key(record) not in sent
+                if at is None or not now - LATE_LIMIT <= at <= now or record_key(record) in sent:
+                    continue
+                if (account_id, sandbox_id, record.id) in deferred:
+                    continue
                 for sub in group:
                     sub_key = f"{record_key(record)}:s{sub.id}"
-                    marker = deliveries.get(overdue_key(record, sub.id))
-                    overdue = (account_id, sandbox_id, record.id) not in deferred and overdue_due(
-                        record, tz, now, marker.sent_at if marker else None)
-                    regular = normal and sub_key not in sent and (account_id, sandbox_id, record.id) not in deferred
-                    if sub.id in dead or not (regular or overdue):
+                    if sub.id in dead or sub_key in sent:
                         continue
-                    # Recheck before delivery: the user may complete or move it while the queue runs.
+                    # Перед отправкой перечитываем: запись могли выполнить или перенести, пока шла очередь.
                     original = record_key(record)
                     await db.refresh(record)
                     if record.deleted_at is not None or record.status == TaskStatus.done or record_key(record) != original:
-                        continue
-                    refreshed_at = fire_at(record, tz)
-                    regular = regular and refreshed_at is not None and now - LATE_LIMIT <= refreshed_at <= now
-                    overdue = overdue and overdue_due(record, tz, now, marker.sent_at if marker else None)
-                    if not (regular or overdue):
-                        continue
-                    data = payload(record, overdue=overdue and not regular)
-                    result = await asyncio.to_thread(send, sub, data, key)
+                        break
+                    result = await asyncio.to_thread(send, sub, payload(record), key)
                     if result is False:
                         dead.append(sub.id)
                     elif result is True:
-                        mark(record, sub, datetime.now(timezone.utc))
-                        if regular:
-                            db.add(PushSent(key=sub_key))
-                            sent.add(sub_key)
+                        db.add(PushSent(key=sub_key))
+                        sent.add(sub_key)
+        await send_digests(db, key, subs, sent, dead)
         # Отложенные «Через 10 минут»: запись могли уже выполнить или удалить — тогда молчим
         due = [s for s in snoozes if s.at <= datetime.now(timezone.utc)]
         for snooze in due:
@@ -268,14 +254,63 @@ async def tick() -> None:
                 else:
                     db.add(PushSent(key=sub_key))
                     sent.add(sub_key)
-                    mark(record, sub, datetime.now(timezone.utc))
             if complete:
                 await db.delete(snooze)
         if dead:
             await db.execute(delete(PushSubscription).where(PushSubscription.id.in_(dead)))
-        # Старые отметки больше не нужны
-        await db.execute(delete(PushSent).where(PushSent.sent_at < datetime.now(timezone.utc) - timedelta(days=3)))
+        # Старые отметки больше не нужны; отметки сводки держим дольше
+        now_utc = datetime.now(timezone.utc)
+        await db.execute(delete(PushSent).where(PushSent.sent_at < now_utc - timedelta(days=3), ~PushSent.key.startswith("do:")))
+        await db.execute(delete(PushSent).where(PushSent.sent_at < now_utc - DIGEST_KEEP))
         await db.commit()
+
+
+def digest_due(record: Record, tz, now: datetime) -> bool:
+    at = due_at(record, tz)
+    return at is not None and at <= now
+
+
+async def send_digests(db, key: Vapid, subs: list[PushSubscription], sent: set[str], dead: list[int]) -> None:
+    """Вечерняя сводка: одна на человека в день, на устройство, где он был последним."""
+    people: dict[tuple, list[PushSubscription]] = {}
+    for sub in subs:
+        people.setdefault((sub.account_id, sub.sandbox_id), []).append(sub)
+    for (account_id, sandbox_id), group in people.items():
+        group = sorted(group, key=lambda s: s.seen_at or s.created_at or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
+        tz = zone(group[0].timezone)
+        now = datetime.now(tz)
+        if now.time() < DIGEST_AT:
+            continue
+        day_key = digest_day_key(account_id, sandbox_id, now.date().isoformat())
+        if day_key in sent:
+            continue
+        owner = Record.account_id == account_id if account_id else Record.sandbox_id == sandbox_id
+        since = (now - timedelta(days=DIGEST_LOOKBACK_DAYS)).date().isoformat()
+        rows = (await db.execute(
+            select(Record).where(owner, Record.deleted_at.is_(None), Record.demo.is_(False),
+                                 Record.type.in_([TaskType.task, TaskType.reminder, TaskType.meeting]),
+                                 Record.status.is_distinct_from(TaskStatus.done),
+                                 Record.date >= since, Record.date <= now.date().isoformat())
+        )).scalars().all()
+        overdue = sorted((r for r in rows if digest_due(r, tz, now) and digest_key(r) not in sent),
+                         key=lambda r: (r.date or "", r.time or ""))
+        delivered = not overdue
+        if overdue:
+            data = digest_payload(overdue)
+            for sub in group:
+                if sub.id in dead:
+                    continue
+                result = await asyncio.to_thread(send, sub, data, key)
+                if result is False:
+                    dead.append(sub.id)
+                elif result is True:
+                    delivered = True
+                    break
+        if not delivered:
+            continue  # ни одно устройство не приняло — попробуем на следующем тике
+        for marker in [day_key, *(digest_key(r) for r in overdue)]:
+            db.add(PushSent(key=marker))
+            sent.add(marker)
 
 
 async def loop() -> None:

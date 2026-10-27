@@ -9,7 +9,7 @@ from app.logic.record_validation import apply_patch, valid_date
 FIELDS = ("type", "text", "date", "time", "end_time", "remind_before", "date_kind", "status",
           "created_at", "deleted_at", "series_id", "repeat", "demo")
 CONTRACT_FIELDS = {"id", "type", "text", "date", "time", "end_time", "remind_before", "date_kind", "status",
-                   "created_at", "repeat", "demo", "marks", "highlight"}
+                   "created_at", "repeat", "demo", "marks", "highlight", "stash"}
 
 
 def snapshot(record: Record) -> dict:

@@ -58,6 +58,35 @@ async def get_record(record_id: int, owner: Owner = Depends(get_owner), db: Asyn
     return {"record": record.to_contract()}
 
 
+CREATE_TYPES = {t.value: t for t in (TaskType.task, TaskType.reminder, TaskType.meeting, TaskType.busy)}
+
+
+@router.post("", status_code=201)
+async def create_record(
+    body: object = Body(default=None),
+    owner: Owner = Depends(get_owner),
+    db: AsyncSession = Depends(get_db),
+):
+    """Новая запись из календаря: те же проверки, что у правки (apply_patch)."""
+    if not isinstance(body, dict) or body.get("type") not in CREATE_TYPES:
+        return invalid()
+    kind = CREATE_TYPES[body["type"]]
+    fields = {k: v for k, v in body.items() if k != "type"}
+    fields.setdefault("text", "")
+    record = owner.new_record(
+        type=kind, text="", date=None, time=None, end_time=None, date_kind=DateKind.none,
+        status=None if kind in (TaskType.meeting, TaskType.busy) else TaskStatus.open,
+        created_at=datetime.now(timezone.utc),
+    )
+    problem = apply_patch(record, fields)
+    if problem:
+        return invalid(problem)
+    db.add(record)
+    await db.commit()
+    await db.refresh(record)
+    return JSONResponse(status_code=201, content={"record": record.to_contract()})
+
+
 @router.patch("/{record_id}")
 async def patch_record(
     record_id: int,
@@ -70,7 +99,7 @@ async def patch_record(
         return not_found()
     if not isinstance(body, dict):
         return invalid()
-    problem = apply_patch(record, body)
+    problem = apply_patch(record, body, allow_type=True)
     if problem:
         await db.rollback()
         return invalid(problem)

@@ -1,5 +1,5 @@
 /** Д6: встроенный календарь — 07-extras.md, раздел 2. */
-import { ChevronLeft, ChevronRight, CalendarDays, Circle, CircleAlert, CircleCheck, X } from 'lucide-react';
+import { ChevronLeft, ChevronRight, CalendarDays, Circle, CircleAlert, CircleCheck, Plus, X } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { api, ApiFailure, errorKey } from '../../api';
 import type { RecordItem } from '../../api/types';
@@ -12,7 +12,7 @@ import { dayTitle, isoDate } from '../../lib/dates';
 import { onAssistantResponse, onRecordsChanged } from '../../state/events';
 import { sessionExpired } from '../../state/session';
 import { store, useApp } from '../../state/store';
-import { EditForm } from '../edit/EditForm';
+import { EditForm, draftRecord } from '../edit/EditForm';
 import { DragGhost, MoveNotice, startDrag, takeSuppressedClick, useDrag } from './move';
 import { calendar, invalidate, load, shiftMonth } from './state';
 import { busyDates, conflictIds, countByDate, dayLabel, dotsFor, gridDays, sortDay } from './month';
@@ -151,6 +151,7 @@ type Ghost = { record: RecordItem; timer: ReturnType<typeof setTimeout> };
 function DayList({ canComplete, canDelete }: { canComplete: boolean; canDelete: boolean }) {
   const { selected, records, loading, failed } = useSyncExternalStore(calendar.subscribe, calendar.get);
   const [editingId, setEditingId] = useState<number | null>(null);
+  const [adding, setAdding] = useState(false);
   const [ghosts, setGhosts] = useState<Record<number, Ghost>>({});
   const [errors, setErrors] = useState<Record<number, string>>({});
   const ghostsRef = useRef(ghosts);
@@ -235,7 +236,33 @@ function DayList({ canComplete, canDelete }: { canComplete: boolean; canDelete: 
 
   return (
     <div className="cal__day-list">
-      <div className="day-title">{dayTitle(selected)}</div>
+      <div className="cal__day-head">
+        <span className="day-title">{dayTitle(selected)}</span>
+        {!adding && (
+          <button
+            type="button"
+            className="cal__add"
+            aria-label={T.calendar_add_label}
+            onClick={() => { setEditingId(null); setAdding(true); }}
+          >
+            <Plus size={15} strokeWidth={1.5} aria-hidden="true" />
+            {T.calendar_add}
+          </button>
+        )}
+      </div>
+      {adding && (
+        <EditForm
+          key={selected}
+          create
+          record={draftRecord(selected)}
+          onCancel={() => setAdding(false)}
+          onSaved={(saved) => {
+            setAdding(false);
+            calendar.set((c) => ({ records: [...c.records, saved] }));
+            void load();
+          }}
+        />
+      )}
       {loading && list.length === 0 ? (
         <Dots className="cal__loading" />
       ) : failed ? (
@@ -244,7 +271,7 @@ function DayList({ canComplete, canDelete }: { canComplete: boolean; canDelete: 
           <Pill variant="secondary" onClick={() => void load()}>{T.btn_retry}</Pill>
         </div>
       ) : list.length === 0 ? (
-        <div className="cal__empty">{T.calendar_empty}</div>
+        !adding && <div className="cal__empty">{T.calendar_empty}</div>
       ) : (
         list.map((record) => {
           const id = record.id ?? -1;
@@ -299,7 +326,7 @@ function DayList({ canComplete, canDelete }: { canComplete: boolean; canDelete: 
                 compact
                 conflict={conflicts.has(id)}
                 leading={leading}
-                onClick={() => { if (!takeSuppressedClick()) setEditingId(id); }}
+                onClick={() => { if (!takeSuppressedClick()) { setAdding(false); setEditingId(id); } }}
               />
               {errors[id] && (
                 <div className="cal__error">

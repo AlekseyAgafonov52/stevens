@@ -2,8 +2,9 @@
 import { CircleAlert, Trash2 } from 'lucide-react';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { api, ApiFailure, errorKey } from '../../api';
-import type { RecordItem } from '../../api/types';
+import type { RecordCreate, RecordItem, RecordType } from '../../api/types';
 import { Dots } from '../../components/Dots';
+import { Pill } from '../../components/Pill';
 import { T, fill } from '../../content/texts';
 import { createdText } from '../../lib/dates';
 import { sessionExpired } from '../../state/session';
@@ -16,7 +17,21 @@ type Props = {
   onCancel: () => void;
   /** Только в календаре и при Д2 */
   onDelete?: () => void;
+  /** Новая запись из календаря: сохранение — POST /api/records, без «Заметки» */
+  create?: boolean;
 };
+
+type CreateType = RecordCreate['type'];
+const CREATE_TYPES: CreateType[] = ['task', 'reminder', 'meeting', 'busy'];
+const ALL_TYPES: RecordType[] = [...CREATE_TYPES, 'note'];
+
+/** Черновик новой записи на выбранный день */
+export function draftRecord(date: string): RecordItem {
+  return {
+    id: null, type: 'task', text: '', date, time: null, end_time: null, date_kind: 'exact', status: 'open',
+    created_at: null, repeat: null, demo: false, marks: [], highlight: null, remind_before: null,
+  };
+}
 
 /** Встреча: за сколько напомнить — 5, 10, 15, 30 минут или 1 час (контракт v1.5, Ф5) */
 const REMIND_DEFAULT = 15;
@@ -25,13 +40,17 @@ const remindOptions = (current: number | null | undefined) =>
   current != null && !REMIND_CHOICES.includes(current) ? [...REMIND_CHOICES, current].sort((a, b) => a - b) : REMIND_CHOICES;
 const remindLabel = (m: number) => (m === 60 ? T.edit_remind_hour : fill(T.edit_remind_minutes, { n: m }));
 
-export function EditForm({ record, onSaved, onCancel, onDelete }: Props) {
+export function EditForm({ record: initial, onSaved, onCancel, onDelete, create = false }: Props) {
+  // Тип меняется на лету: поля других типов в форме не стираются, а спрятанные на сервере (stash) подставляются
+  const [type, setType] = useState(initial.type);
+  const record: RecordItem = { ...initial, type };
   const [text, setText] = useState(record.text);
   const [date, setDate] = useState(record.date ?? '');
   const [time, setTime] = useState(record.time ?? '');
   const [end, setEnd] = useState(record.end_time ?? '');
   const [remind, setRemind] = useState(String(record.remind_before ?? REMIND_DEFAULT));
-  const interval = record.type === 'busy' || !!record.end_time;
+  const [withEnd, setWithEnd] = useState(!!record.end_time);
+  const interval = type === 'busy' || (type === 'meeting' && withEnd);
   const [errors, setErrors] = useState<EditErrors>({});
   const [failure, setFailure] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -50,23 +69,54 @@ export function EditForm({ record, onSaved, onCancel, onDelete }: Props) {
     el.style.height = `${Math.min(el.scrollHeight + 2, line * 3 + pad)}px`;
   }, [text]);
 
+  const switchType = (next: RecordType) => {
+    const stash = initial.stash ?? {};
+    const nextDate = date || stash.date || '';
+    const nextTime = time || stash.time || '';
+    const nextEnd = end || stash.end_time || '';
+    setType(next);
+    if (next !== 'note') { setDate(nextDate); setTime(nextTime); }
+    setEnd(nextEnd);
+    if (next === 'meeting' && stash.remind_before != null && initial.type !== 'meeting') setRemind(String(stash.remind_before));
+    setWithEnd(!!nextEnd);
+    setErrors({});
+  };
+
   const save = async () => {
     const values = {
-      text, date, time, ...(interval ? { end } : {}),
+      text,
+      // У заметки нет даты и времени — их не шлём, сервер спрячет старые и вернёт при смене типа обратно
+      ...(type === 'note' ? { date: initial.date ?? '', time: initial.time ?? '' } : { date, time }),
+      ...(interval ? { end } : {}),
       ...(record.type === 'meeting' ? { remindBefore: Number(remind) } : {}),
     };
     const found = validate(record, values);
     setErrors(found);
-    if (found.text || found.datetime || record.id === null) return;
+    if (found.text || found.datetime) return;
+    if (create) {
+      await submit(() => api.createRecord({
+        type: type as CreateType, text: text.trim(), date: date || null, time: date && time ? time : null,
+        ...(interval ? { end_time: end || null } : {}),
+        ...(type === 'meeting' ? { remind_before: Number(remind) } : {}),
+      }));
+      return;
+    }
+    if (record.id === null) return;
+    const id = record.id;
     const patch = buildPatch(record, values);
+    if (type !== initial.type && type !== null) patch.type = type;
     if (Object.keys(patch).length === 0) {
       onCancel();
       return;
     }
+    await submit(() => api.patchRecord(id, patch));
+  };
+
+  const submit = async (call: () => Promise<RecordItem>) => {
     setBusy(true);
     setFailure(null);
     try {
-      onSaved(await api.patchRecord(record.id, patch));
+      onSaved(await call());
     } catch (error) {
       if (error instanceof ApiFailure && error.error.type === 'unauthorized') {
         sessionExpired();
@@ -85,6 +135,24 @@ export function EditForm({ record, onSaved, onCancel, onDelete }: Props) {
         if (e.key === 'Enter' && (e.target as HTMLElement).tagName === 'INPUT') { e.preventDefault(); void save(); }
       }}
     >
+      <div className="edit-form__field">
+          <span className="edit-form__label">{T.edit_type}</span>
+          <div className="edit-form__types" role="radiogroup" aria-label={T.edit_type}>
+            {(create ? CREATE_TYPES : ALL_TYPES).map((t) => (
+              <Pill
+                key={t}
+                role="radio"
+                aria-checked={type === t}
+                variant={type === t ? 'selected' : 'secondary'}
+                className="pill--compact"
+                disabled={busy}
+                onClick={() => switchType(t)}
+              >
+                {T[`type_${t}`]}
+              </Pill>
+            ))}
+          </div>
+        </div>
       <label className="edit-form__field">
         <span className="edit-form__label">{T.edit_text}</span>
         <textarea
@@ -145,7 +213,7 @@ export function EditForm({ record, onSaved, onCancel, onDelete }: Props) {
         <span className="edit-form__spacer" />
         <button type="button" className="pill pill--secondary pill--compact" disabled={busy} onClick={onCancel}>{T.edit_cancel}</button>
         <button type="button" className="pill pill--selected pill--compact pill--action" disabled={busy} onClick={() => void save()}>
-          {busy ? <Dots className="dots--light" /> : T.edit_save}
+          {busy ? <Dots className="dots--light" /> : create ? T.edit_create : T.edit_save}
         </button>
       </div>
     </div>

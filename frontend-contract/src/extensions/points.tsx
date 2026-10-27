@@ -24,6 +24,9 @@ const TourBar = features.d15_tour ? lazy(() => tour().then((m) => ({ default: m.
 const DeletedLabel =
   features.d2_delete || features.d10_undo ? lazy(() => deleted().then((m) => ({ default: m.DeletedLabel }))) : null;
 
+/** Д10 включён: форму правки можно открыть на месте любой карточки в ленте */
+export const canEditInFeed = !!FeedEditForm;
+
 const wrap = (node: ReactNode) => <Suspense fallback={null}>{node}</Suspense>;
 
 /** Фича включена на сервере (GET /api/health): нет — места на экране не занимает */

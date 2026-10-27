@@ -1,13 +1,19 @@
 /* Пуш-уведомления Stevens, как в мессенджере: человек не на вкладке — пуш, на вкладке — пуша нет,
    там сообщение Стивенса появляется само. У пуша кнопки «Посмотреть» и «Через 10 минут»:
    «Посмотреть» (и клик по самому пушу) открывает приложение, и Стивенс присылает запись в чат,
-   «Через 10 минут» просит сервер напомнить ещё раз. */
+   «Через 10 минут» просит сервер напомнить ещё раз.
+   Вечерняя сводка о просроченном — свои кнопки: «Разобрать» (Стивенс присылает дела в чат)
+   и «Оставить как есть» (просто закрыть: сервер больше не напоминает об этих делах). */
 self.addEventListener('install', () => self.skipWaiting());
 self.addEventListener('activate', (event) => event.waitUntil(self.clients.claim()));
 
 const ACTIONS = [
   { action: 'view', title: 'Посмотреть' },
   { action: 'snooze', title: 'Через 10 минут' },
+];
+const DIGEST_ACTIONS = [
+  { action: 'review', title: 'Разобрать' },
+  { action: 'skip', title: 'Оставить как есть' },
 ];
 
 /** Номер записи из tag вида «id@дата Tвремя» — если сервер его не прислал отдельно */
@@ -24,38 +30,80 @@ self.addEventListener('push', (event) => {
   } catch {
     data = { body: event.data ? event.data.text() : '' };
   }
+  if (data.digest) {
+    event.waitUntil(showDigest(data));
+    return;
+  }
   const recordId = recordIdOf(data);
   event.waitUntil(
     self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((list) => {
       const visible = list.filter((c) => c.visibilityState === 'visible');
       if (visible.length) {
-        visible.forEach((c) => c.postMessage({ type: 'stevens-reminder', tag: data.tag, recordId, snoozed: !!data.snoozed, overdue: !!data.overdue }));
+        visible.forEach((c) => c.postMessage({ type: 'stevens-reminder', tag: data.tag, recordId, snoozed: !!data.snoozed }));
       }
       // Каждый Web Push должен показать уведомление, в том числе при открытом окне:
       // Safari отзывает разрешение за невидимые push-события.
       return self.registration.showNotification(data.title || 'Stevens', {
         body: data.body || '',
         tag: data.tag,
-        renotify: !!data.snoozed || !!data.overdue,
+        renotify: !!data.snoozed,
         icon: '/icon-192.png',
-        badge: '/icon-192.png',
+        badge: '/badge-96.png',
         requireInteraction: true,
         actions: recordId === null ? [] : ACTIONS,
-        data: { recordId, overdue: !!data.overdue },
+        data: { recordId },
       });
     }),
   );
 });
 
-/** Открыть вкладку и попросить Стивенса показать запись в чате */
-function openRecord(recordId, overdue = false) {
+const digestIds = (value) => (Array.isArray(value) ? value.filter(Number.isInteger) : []);
+
+/** Сводка о просроченном. Человек на вкладке — Стивенс сразу пишет в чат, а пуш показываем и тут же убираем
+ *  (показать его всё равно нужно, см. выше про Safari) */
+function showDigest(data) {
+  const recordIds = digestIds(data.record_ids);
+  return self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((list) => {
+    const visible = list.filter((c) => c.visibilityState === 'visible');
+    visible.forEach((c) => c.postMessage({ type: 'stevens-digest', recordIds }));
+    return self.registration.showNotification(data.title || 'Stevens', {
+      body: data.body || '',
+      tag: data.tag || 'overdue-digest',
+      renotify: true,
+      icon: '/icon-192.png',
+      badge: '/badge-96.png',
+      requireInteraction: true,
+      actions: DIGEST_ACTIONS,
+      data: { digest: true, recordIds },
+    }).then(() => {
+      if (!visible.length) return undefined;
+      return self.registration.getNotifications({ tag: data.tag || 'overdue-digest' })
+        .then((shown) => shown.forEach((n) => n.close()));
+    });
+  });
+}
+
+/** «Разобрать»: открыть вкладку, и Стивенс присылает в чат дела из сводки с кнопками */
+function openDigest(recordIds) {
   return self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((list) => {
     const open = list.find((c) => 'focus' in c);
     if (open) {
-      if (recordId !== null) open.postMessage({ type: 'stevens-open', recordId, overdue });
+      open.postMessage({ type: 'stevens-digest', recordIds });
       return open.focus();
     }
-    return self.clients.openWindow(recordId === null ? '/' : `/?remind=${recordId}${overdue ? '&overdue=1' : ''}`);
+    return self.clients.openWindow(`/?overdue=${recordIds.join(',')}`);
+  });
+}
+
+/** Открыть вкладку и попросить Стивенса показать запись в чате */
+function openRecord(recordId) {
+  return self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((list) => {
+    const open = list.find((c) => 'focus' in c);
+    if (open) {
+      if (recordId !== null) open.postMessage({ type: 'stevens-open', recordId });
+      return open.focus();
+    }
+    return self.clients.openWindow(recordId === null ? '/' : `/?remind=${recordId}`);
   });
 }
 
@@ -79,10 +127,15 @@ function snooze(recordId) {
 
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
+  if (event.notification.data?.digest) {
+    // «Оставить как есть» — только закрыть: в сводку эти дела больше не попадут
+    if (event.action !== 'skip') event.waitUntil(openDigest(digestIds(event.notification.data.recordIds)));
+    return;
+  }
   const recordId = event.notification.data?.recordId ?? recordIdOf({ tag: event.notification.tag });
   if (event.action === 'snooze' && recordId !== null) {
     event.waitUntil(snooze(recordId));
     return;
   }
-  event.waitUntil(openRecord(recordId, !!event.notification.data?.overdue));
+  event.waitUntil(openRecord(recordId));
 });

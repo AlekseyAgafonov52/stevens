@@ -82,6 +82,10 @@
 .cal__divider { height: 1px; background: var(--c-line); margin: var(--sp-10) 0; }
 .cal__day-list { display: flex; flex-direction: column; gap: var(--sp-3); }
 .cal__day-list .day-title { margin-bottom: var(--sp-1); }
+.cal__day-head { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3); margin-bottom: var(--sp-1); }
+.cal__day-head .day-title { margin-bottom: 0; }
+.cal__add { display: inline-flex; align-items: center; gap: var(--sp-1); border: 0; background: transparent; padding: var(--sp-1) 0; font-size: var(--fs-meta); font-weight: 500; color: var(--c-text-2); cursor: pointer; }
+@media (hover: hover) { .cal__add:hover { color: var(--c-text); } }
 .cal__empty { font-size: var(--fs-meta); color: var(--c-text-2); }
 .cal__loading { padding: var(--sp-3) 0; }
 .cal__failed { display: flex; flex-direction: column; align-items: flex-start; gap: var(--sp-4); font-size: var(--fs-meta); color: var(--c-text-2); }

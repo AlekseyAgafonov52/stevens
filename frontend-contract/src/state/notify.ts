@@ -9,6 +9,8 @@
  * Меню: «Уведомления» с галочкой.
  * Звонят только записи, заведённые человеком: демо-записи песочницы помечены demo.
  * У пуша кнопки «Посмотреть» (Стивенс присылает запись в чат) и «Через 10 минут» — см. public/sw.js.
+ * Просроченное — вечерней сводкой с сервера; «Разобрать» — сообщение Стивенса (kind overdue),
+ * у каждого дела кнопки «Перенести», «Выполнено», «Удалить» (components/OverdueActions.tsx).
  */
 import { api } from '../api';
 import { serverHas } from '../config/server';
@@ -22,7 +24,7 @@ import { emitActivity, onAssistantResponse, onRecordsChanged } from './events';
 import { setHint } from './chat';
 import { createStore, lastAnswerId, store } from './store';
 
-type PushMessage = { type?: string; recordId?: number; snoozed?: boolean; overdue?: boolean };
+type PushMessage = { type?: string; recordId?: number; snoozed?: boolean; recordIds?: number[] };
 
 export type NotifyCard = { record: RecordItem; title: string; tag: string };
 
@@ -89,7 +91,7 @@ const keyOf = (record: RecordItem) => `${record.id}@${record.date}T${record.time
  *  Заголовок — сам текст записи, без «Позвольте напомнить»; у встречи ниже — через сколько */
 async function systemNotify(title: string, body: string, tag: string, recordId: number): Promise<void> {
   const options = {
-    body, tag, icon: '/icon-192.png', badge: '/icon-192.png', requireInteraction: true, renotify: true,
+    body, tag, icon: '/icon-192.png', badge: '/badge-96.png', requireInteraction: true, renotify: true,
     data: { recordId },
     // Кнопки обрабатывает public/sw.js; TypeScript о них пока не знает
     actions: [{ action: 'view', title: 'Посмотреть' }, { action: 'snooze', title: 'Через 10 минут' }],
@@ -113,13 +115,13 @@ async function systemNotify(title: string, body: string, tag: string, recordId: 
 }
 
 /** Сообщение Стивенса в ленте с карточками записей */
-function remindInFeed(records: RecordItem[], text: string): void {
+function remindInFeed(records: RecordItem[], text: string, kind = 'reminder'): void {
   if (store.get().screen !== 'app') return;
   store.set((s) => ({
     messages: [...s.messages, {
       kind: 'answer', id: uuid(), restored: false, pressed: null, voice: false, edited: {}, flash: null,
       response: {
-        message_id: '', kind: 'reminder', text, speech: null, records, nearest: null,
+        message_id: '', kind, text, speech: null, records, nearest: null,
         total: null, awaiting_reply: false, buttons: [],
       },
     }],
@@ -202,7 +204,7 @@ async function findRecord(id: number): Promise<RecordItem | null> {
 }
 
 /** «Посмотреть» в пуше: Стивенс присылает запись в чат (если только что не прислал её сам) */
-async function showRecord(id: number, ring = false, overdue = false): Promise<void> {
+async function showRecord(id: number, ring = false): Promise<void> {
   const record = await findRecord(id);
   if (!record) return;
   const last = store.get().messages.at(-1);
@@ -210,12 +212,20 @@ async function showRecord(id: number, ring = false, overdue = false): Promise<vo
   const key = keyOf(record);
   const fired = storage.notifyFired();
   if (!fired.includes(key)) storage.setNotifyFired([...fired, key]);
-  if ((ring || overdue) && record.status === 'done') return;
-  if (ring) {
-    showNotifyCard(record, true);
-    if (overdue && notifyStore.get().card) notifyStore.set({ card: { record, title: T.remind_overdue, tag: key } });
-  }
-  else remindInFeed([record], overdue ? T.remind_overdue : titleOf(record, false));
+  if (ring && record.status === 'done') return;
+  if (ring) showNotifyCard(record, true);
+  else remindInFeed([record], titleOf(record, false));
+}
+
+/** «Разобрать» в вечерней сводке: Стивенс присылает в чат дела, которые ещё не разобраны */
+async function showDigest(ids: number[]): Promise<void> {
+  const last = store.get().messages.at(-1);
+  if (last?.kind === 'answer' && last.response.kind === 'overdue'
+    && ids.every((id) => last.response.records.some((r) => r.id === id))) return;
+  const found = await Promise.all(ids.map(findRecord));
+  const records = found.filter((r): r is RecordItem => !!r && r.status !== 'done' && !r.marks.includes('deleted'));
+  if (!records.length) return;
+  remindInFeed(records, records.length === 1 ? T.remind_digest_one : T.remind_digest, 'overdue');
 }
 
 /** «Через 10 минут», когда пуша с сервера нет: откладывает сама вкладка */
@@ -379,10 +389,10 @@ export async function disableNotify(): Promise<void> {
 
 export async function handlePushMessage(data: PushMessage): Promise<void> {
   const id = typeof data.recordId === 'number' ? data.recordId : null;
-  if (data.type === 'stevens-reminder' && data.overdue && id !== null) await showRecord(id, true, true);
+  if (data.type === 'stevens-digest') await showDigest((data.recordIds ?? []).filter(Number.isInteger));
   else if (data.type === 'stevens-reminder' && data.snoozed && id !== null) await showRecord(id, true);
   else if (data.type === 'stevens-reminder') await remindMissed(Date.now() - 15 * 60 * 1000, false);
-  else if (data.type === 'stevens-open' && id !== null) await showRecord(id, false, !!data.overdue);
+  else if (data.type === 'stevens-open' && id !== null) await showRecord(id);
   else if (data.type === 'stevens-snooze' && id !== null) snoozeHere(id);
 }
 
@@ -425,11 +435,13 @@ export function initNotify(): void {
   navigator.serviceWorker?.addEventListener('message', (event: MessageEvent<PushMessage>) => {
     void handlePushMessage(event.data ?? {});
   });
-  // Приложение открыли кнопкой «Посмотреть» из пуша: /?remind=<номер записи>
-  const remindParam = typeof location !== 'undefined' ? new URLSearchParams(location.search).get('remind') : null;
-  const remindOverdue = typeof location !== 'undefined' && new URLSearchParams(location.search).get('overdue') === '1';
+  // Приложение открыли кнопкой «Посмотреть» из пуша: /?remind=<номер записи>; «Разобрать» из сводки: /?overdue=1,2,3
+  const params = new URLSearchParams(typeof location !== 'undefined' ? location.search : '');
+  const remindParam = params.get('remind');
+  const overdueParam = params.get('overdue');
   let remindId = remindParam && /^\d+$/.test(remindParam) ? Number(remindParam) : null;
-  if (remindParam !== null) {
+  let digestIds = (overdueParam ?? '').split(',').filter((v) => /^\d+$/.test(v)).map(Number);
+  if (remindParam !== null || overdueParam !== null) {
     const url = new URL(location.href);
     url.searchParams.delete('remind');
     url.searchParams.delete('overdue');
@@ -443,8 +455,12 @@ export function initNotify(): void {
     if (!booted) {
       booted = true;
       const id = remindId;
+      const digest = digestIds;
       remindId = null;
-      void remindMissed(previous).then(() => (id === null ? undefined : showRecord(id, false, remindOverdue)));
+      digestIds = [];
+      void remindMissed(previous)
+        .then(() => (id === null ? undefined : showRecord(id)))
+        .then(() => (digest.length ? showDigest(digest) : undefined));
     }
     // Вошли в аккаунт или вернулись в песочницу — пуши и таймеры переезжают к новому владельцу
     if (owner !== `${mode}:${userId}`) {

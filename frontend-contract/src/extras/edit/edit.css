@@ -48,3 +48,4 @@
 .pill--compact { padding: 0 var(--sp-5); }
 @media (max-width: 760px) { .edit-form__input, .edit-form__textarea { font-size: 16px; } }
 .edit-form__created { font-size: var(--fs-small); color: var(--c-text-2); }
+.edit-form__types { display: flex; flex-wrap: wrap; gap: var(--sp-2); }

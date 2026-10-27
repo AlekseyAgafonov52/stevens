@@ -15,6 +15,11 @@ const recordSchema = z.object({
   created_at: z.string().nullable(),
   repeat: z.object({ weekdays: z.array(z.number()), until: z.string().nullable() }).nullable().optional().default(null),
   demo: z.boolean().optional().default(false),
+  stash: z.object({
+    date: z.string().optional(), time: z.string().optional(), end_time: z.string().optional(),
+    remind_before: z.number().optional(), date_kind: z.enum(['exact', 'deadline', 'none']).optional(),
+    status: z.enum(['open', 'done']).optional(),
+  }).nullable().optional().default(null),
   marks: z.array(z.string()).default([]),
   highlight: z.enum(['date', 'time', 'text']).nullable().default(null),
 });

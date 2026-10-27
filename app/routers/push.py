@@ -47,6 +47,7 @@ async def subscribe(
     sub.p256dh = keys["p256dh"][:200]
     sub.auth = keys["auth"][:100]
     sub.timezone = str(tz)[:64]
+    sub.seen_at = datetime.now(timezone.utc)
     await db.commit()
     return Response(status_code=204)
 

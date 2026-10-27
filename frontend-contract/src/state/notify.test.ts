@@ -40,31 +40,37 @@ describe('включение уведомлений на iPhone', () => {
   });
 });
 
-describe('повторный push о просроченном событии', () => {
+describe('вечерняя сводка о просроченном', () => {
   const record: RecordItem = { id: 42, type: 'meeting', text: 'Старая встреча', date: '2020-01-01', time: '13:00',
     date_kind: 'exact', status: null, created_at: null, repeat: null, demo: false, marks: [], highlight: null };
+  const lastAnswer = () => {
+    const last = store.get().messages.at(-1);
+    return last?.kind === 'answer' ? last.response : null;
+  };
 
-  it('получает старое событие по ID и показывает причину повтора', async () => {
-    vi.mocked(api.record).mockResolvedValue(record);
-    await handlePushMessage({ type: 'stevens-reminder', recordId: 42, overdue: true });
+  it('«Разобрать» присылает в чат дела из сводки по ID', async () => {
+    store.set({ screen: 'app', messages: [] });
+    vi.mocked(api.record).mockImplementation(async (id) => ({ ...record, id, text: `Дело ${id}` }));
+    await handlePushMessage({ type: 'stevens-digest', recordIds: [42, 43] });
     expect(api.record).toHaveBeenCalledWith(42);
     expect(api.records).not.toHaveBeenCalled();
-    expect(notifyStore.get().card?.title).toBe(T.remind_overdue);
+    expect(lastAnswer()?.kind).toBe('overdue');
+    expect(lastAnswer()?.text).toBe(T.remind_digest);
+    expect(lastAnswer()?.records.map((r) => r.id)).toEqual([42, 43]);
+    // Повторное нажатие не дублирует сообщение
+    await handlePushMessage({ type: 'stevens-digest', recordIds: [42, 43] });
+    expect(store.get().messages).toHaveLength(1);
   });
 
-  it('не показывает уже выполненное событие из запоздавшего push', async () => {
-    vi.mocked(api.record).mockResolvedValue({ ...record, status: 'done' });
-    await handlePushMessage({ type: 'stevens-reminder', recordId: 42, overdue: true });
-    expect(notifyStore.get().card).toBeNull();
-  });
-
-  it('после клика не говорит, что прошедшая встреча начнётся через 15 минут', async () => {
+  it('уже выполненное и удалённое в чат не попадает', async () => {
     store.set({ screen: 'app', messages: [] });
-    vi.mocked(api.record).mockResolvedValue(record);
-    await handlePushMessage({ type: 'stevens-open', recordId: 42, overdue: true });
-    const last = store.get().messages.at(-1);
-    expect(last?.kind === 'answer' && last.response.text).toBe(T.remind_overdue);
-    await handlePushMessage({ type: 'stevens-reminder', recordId: 42, overdue: true });
-    expect(notifyStore.get().card?.record.id).toBe(42);
+    vi.mocked(api.record).mockImplementation(async (id) => (id === 42 ? { ...record, status: 'done' } : { ...record, id }));
+    await handlePushMessage({ type: 'stevens-digest', recordIds: [42, 44] });
+    expect(lastAnswer()?.records.map((r) => r.id)).toEqual([44]);
+    expect(lastAnswer()?.text).toBe(T.remind_digest_one);
+    store.set({ messages: [] });
+    vi.mocked(api.record).mockResolvedValue({ ...record, status: 'done' });
+    await handlePushMessage({ type: 'stevens-digest', recordIds: [42] });
+    expect(store.get().messages).toHaveLength(0);
   });
 });
