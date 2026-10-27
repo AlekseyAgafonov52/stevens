@@ -138,6 +138,7 @@ class Result(Model):
     items: list[Item] = Field(default_factory=list, max_length=100)
     period: Period | None = None
     filter_type: Literal["task", "reminder", "meeting", "busy"] | None = None
+    query_mode: Literal["list", "count", "workload", "summary"] | None = None
     query: Query | None = None
     target: Target | None = None
     change: Change | None = None
@@ -179,3 +180,4 @@ class Input(Model):
     awaiting: Awaiting | None = None
     focus: dict | None = None
     last_query: dict | None = None
+    history: list[dict[str, str]] = Field(default_factory=list, max_length=5)

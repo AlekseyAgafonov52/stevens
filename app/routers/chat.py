@@ -9,7 +9,7 @@ import asyncio
 import os
 import re
 import time as clock
-from collections import OrderedDict
+from collections import OrderedDict, deque
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from uuid import uuid4
@@ -46,6 +46,16 @@ HELP_EXAMPLES = EXAMPLES + ["Поставь встречу с Иваном за�
 FOUND_LIMIT = 50
 WHICH_LIMIT = 5
 
+# A question about existing plans must never be turned into a new record.
+# Route ambiguous schedule questions to the language model, even if the
+# deterministic parser has falsely identified an imperative creation.
+SCHEDULE_QUESTION_RE = re.compile(
+    r"^\s*(?:(?:а|ну|и)\s+)?(?:"
+    r"сколько\b|расскажи(?:те)?\b|"
+    r"какие\s+(?:у\s+меня\s+)?планы\b|"
+    r"что\s+у\s+меня\b|"
+    r"у\s+меня\s+.+?\bмного\s+(?:дел|встреч|задач)\b)", re.I)
+
 
 # ── Память диалога: незавершённое уточнение по conversation_id (Р-45) ──
 
@@ -64,6 +74,7 @@ class Conversation:
     bulk_deleted: list[int] = field(default_factory=list)  # «Вернуть все» после массового удаления
     undo: dict | None = None       # кнопка «Отменить»/«Вернуть» последнего ответа: «отмени», «верни» голосом
     choices: dict | None = None    # «Какую из них?»: действие и записи на выбор — «первую», «ту, что в субботу»
+    history: deque = field(default_factory=lambda: deque(maxlen=5))  # последние пять реплик пользователя
     last_query: object | None = None  # прошлый запрос про планы, поиск или досье: «а встречи?», «а с Машей?»
     touched: float = field(default_factory=clock.time)
 
@@ -1160,7 +1171,8 @@ async def ai_context(ctx: Ctx, payload: ChatRequest, pending: Pending | None) ->
     focus = await owned_record(ctx, ctx.conv.focus)
     return AIInput(text=payload.text.strip(), now=moment, timezone=payload.timezone, source=payload.source,
                    awaiting=awaiting, focus=focus.to_contract() if focus and focus.deleted_at is None else None,
-                   last_query=query_context(ctx.conv.last_query))
+                   last_query=query_context(ctx.conv.last_query),
+                   history=list(ctx.conv.history))
 
 
 async def llm_parse(text: str, now: datetime, *, context: AIInput | None = None,
@@ -1176,7 +1188,9 @@ async def llm_parse(text: str, now: datetime, *, context: AIInput | None = None,
     try:
         result = await understand(context or AIInput(text=text, now=now), force_llm=True)
     except Exception as error:  # provider or schema failure: retain the rules fallback
-        _llm_down_until = clock.time() + LLM_PAUSE
+        # Malformed model output is not a provider outage. No global cooldown.
+        if isinstance(error, (Unavailable, TimeoutError)):
+            _llm_down_until = clock.time() + LLM_PAUSE
         reason = str(error) if isinstance(error, (InvalidResponse, Unavailable)) else type(error).__name__
         trace.update(llm_status="invalid_response" if isinstance(error, InvalidResponse) else "unavailable",
                      error="LLM: " + reason)
@@ -1260,6 +1274,8 @@ async def answer_list(ctx: Ctx, p: nlu.Parse) -> dict:
         return await offer_undated(ctx, p, period, reply("list", text, speech, records=[r.to_contract() for r in busy_rows],
                                                          total=0))
     if rows:
+        if p.query_mode in ("count", "workload", "summary"):
+            return answer_list_insight(ctx, p, rows, busy_rows, shown, period)
         if p.ask == "exists" and p.filter_type:
             text, speech = ctx.say("list_type_yes", values, speech_values, count_forms=TYPE_FORMS[p.filter_type])
         else:
@@ -1274,6 +1290,9 @@ async def answer_list(ctx: Ctx, p: nlu.Parse) -> dict:
         remember_shown(ctx, shown)
         return await offer_undated(ctx, p, period,
                                    reply("list", text, speech, records=[r.to_contract() for r in shown], total=len(rows)))
+
+    if p.query_mode in ("count", "workload", "summary"):
+        return answer_list_insight(ctx, p, [], busy_rows, shown, period)
 
     # Пусто — ближайшая будущая запись (того же типа, если спрашивали про тип) (Р-17)
     after = max(period.end + timedelta(days=1), ctx.today).isoformat()
@@ -1294,6 +1313,45 @@ async def answer_list(ctx: Ctx, p: nlu.Parse) -> dict:
         text, speech = ctx.say("list_empty_nearest" if nearest else "list_empty_none", values, speech_values)
     return await offer_undated(ctx, p, period,
                                reply("list", text, speech, nearest=nearest.to_contract() if nearest else None, total=0))
+
+
+def answer_list_insight(ctx: Ctx, p: nlu.Parse, rows: list[Record], busy_rows: list[Record],
+                        shown: list[Record], period: nlu.Period) -> dict:
+    """Answer natural-language schedule questions from real DB records only.
+
+    Never ask a generative model to invent events or estimate free time without
+    known durations. A workload estimate is by number of scheduled items.
+    """
+    count = len(rows)
+    scope = period.label
+    noun = plural(count, "дело", "дела", "дел")
+    if p.filter_type == "meeting":
+        noun = plural(count, "встреча", "встречи", "встреч")
+    elif p.filter_type == "task":
+        noun = plural(count, "задача", "задачи", "задач")
+    elif p.filter_type == "reminder":
+        noun = plural(count, "напоминание", "напоминания", "напоминаний")
+    if p.query_mode == "workload":
+        evaluation = ("Дел пока нет" if count == 0 else
+                      "По числу записей день выглядит не слишком загруженным" if count <= 2 else
+                      "По числу записей загруженность умеренная" if count <= 5 else
+                      "По числу записей день выглядит загруженным")
+        text = f"{scope.capitalize()}: {noun}. {evaluation}."
+        if count:
+            text += " Оценка только по числу записей: продолжительность дел неизвестна."
+    elif p.query_mode == "summary":
+        text = f"{scope.capitalize()}: {noun}."
+        if rows:
+            details = "; ".join(f"{r.time + ' — ' if r.time else ''}{r.text}" for r in rows[:5])
+            text += f" Основные планы: {details}."
+            if count > 5:
+                text += f" И ещё {count - 5}."
+    else:
+        text = f"{scope.capitalize()}: {noun}."
+    if busy_rows:
+        text += f" Также есть {len(busy_rows)} интервал(ов) занятости."
+    remember_shown(ctx, shown)
+    return reply("list", text, text, records=[r.to_contract() for r in shown[:FOUND_LIMIT]], total=count)
 
 
 def busy_items(rows: list[Record], single_day: bool) -> str:
@@ -2658,6 +2716,8 @@ async def chat_endpoint(
         answer = reply("error", text, speech)
     ctx.conv.undo = next((b["send"]["action"] for b in answer.get("buttons") or []
                           if b["send"].get("action", {}).get("id") in UNDO_ACTIONS), None)
+    if payload.text and payload.text.strip():
+        ctx.conv.history.append({"role": "user", "text": payload.text.strip()[:300]})
     # Журнал пишем уже после ответа: пользователь его не ждёт
     background.add_task(chatlog.write, owner, payload, answer, ctx.trace, waiting,
                         int((clock.perf_counter() - started) * 1000))
@@ -2679,7 +2739,7 @@ KEEP_BOTH_RE = re.compile(r"^(?:(?:да|ну)[\s,]+)?(?:оставь|остав�
 FOLLOW_MOVE_RE = re.compile(r"^(?:(?:а|ну|ой|нет|не)[\s,]+)*(?:(?:лучше|тогда|теперь|давай|можно|пусть)[\s,]+)+(?:будет\s+)?"
                             r"(?=(?:на|в|во|завтра|послезавтра|сегодня)\b)", re.I)
 # «Нет, в 11», «не, на пятницу» сразу после записи — поправка времени или дня
-FOLLOW_FIX_RE = re.compile(r"^(?:(?:а|ну|ой)[\s,]+)*(?:нет|не|неа)[\s,.!—-]+(?:а\s+|лучше\s+)?"
+FOLLOW_FIX_RE = re.compile(r"^(?:(?:а|ну|ой)[\s,]+)*(?:нет|не|неа|ошибся|ошиблась)[\s,.!—-]+(?:а\s+|лучше\s+)?"
                            r"(?=(?:на|в|во|завтра|послезавтра|сегодня)\b)", re.I)
 # «А на час раньше», «на полчаса позже»
 FOLLOW_SHIFT_RE = re.compile(r"^(?:(?:а|ну|и|тогда|давай)[\s,]+)*(?=на\s+(?:полчаса|\d*\s*час\w*|\d+\s*минут\w*)\s+(?:позже|раньше)\b)",
@@ -3051,6 +3111,11 @@ async def respond(ctx: Ctx, payload: ChatRequest) -> dict:
     pending = ctx.conv.pending
     rule_result = await understand(await ai_context(ctx, payload, pending), allow_llm=False)
     p = to_parses(rule_result, ctx.today)[0]
+    if p.intent == "create" and SCHEDULE_QUESTION_RE.match(raw):
+        # Fail closed: if the provider cannot classify a question, ask for
+        # clarification instead of silently creating an unwanted task.
+        p = nlu.Parse()
+        rule_result = AIResult(intent="unknown", layer="rules", confidence=0.0)
     ctx.trace.update(layer="rules", confidence=rule_result.confidence,
                      intent=rule_result.intent,
                      doubts=[d.model_dump(exclude_none=True) for d in rule_result.doubts],
@@ -3194,10 +3259,19 @@ async def respond(ctx: Ctx, payload: ChatRequest) -> dict:
     if p.intent in ("unknown", "create") and ctx.conv.focus and (
             follow := FOLLOW_MOVE_RE.match(raw) or FOLLOW_FIX_RE.match(raw) or FOLLOW_SHIFT_RE.match(raw)):
         # «А теперь на 12», «лучше в субботу» — переносим запись, о которой шла речь
-        moved = nlu.parse("перенеси её " + raw[follow.end():], ctx.now)
+        moved = nlu.parse("перенеси её " + re.sub(r"(\d{1,2})\s+час(?:ов|а)?\b", r"\1:00", raw[follow.end():], flags=re.I), ctx.now)
         if moved.intent == "move" and (moved.date or moved.time or moved.shift) and not moved.keywords:
             ctx.trace["intent"] = "move"
             return await answer_move(ctx, moved)
+    # Контекстные исправления: не создаём новую запись при «не завтра, а в пятницу».
+    if ctx.conv.focus and not asked and re.match(r"^(?:ошибся|ошиблась|нет|неа)[,!.\s]+", raw, re.I):
+        correction = re.search(r"\bне\s+.+?[,\s]+а\s+(.+)$", raw, re.I)
+        if correction:
+            candidate_text = correction.group(1)
+            changed = nlu.parse("перенеси её " + candidate_text, ctx.now)
+            if changed.intent == "move" and (changed.date or changed.time) and not changed.keywords:
+                ctx.trace["intent"] = "move"
+                return await answer_move(ctx, changed)
     refine = nlu.needs_llm_review(p)
     if refine and not any(d.get("why") == "unclear" for d in p.doubt):
         p.doubt.append({"why": "unclear"})

@@ -16,10 +16,12 @@ def refine(request: Input, result: Result) -> Result:
     if last.get("intent") == "list" and last.get("period") and re.fullmatch(
             r"(?:а\s+)?(?:встречи|задачи|напоминания)[\s?!.]*", raw, re.I):
         contextual = Result.model_validate(dict(intent="list", layer="rules", confidence=0.95,
-                            period=Period.model_validate(last["period"]), filter_type=nlu._filter_type(raw.lower())))
+                            period=Period.model_validate(last["period"]), filter_type=nlu._filter_type(raw.lower()),
+                            query_mode=last.get("query_mode")))
     elif result.intent == "list" and last.get("intent") == "list" and result._rule_parses \
             and result._rule_parses[0].only_when and not result.filter_type:
-        contextual = Result.model_validate({**result.model_dump(), "filter_type": last.get("filter_type")})
+        contextual = Result.model_validate({**result.model_dump(), "filter_type": last.get("filter_type"),
+                                            "query_mode": last.get("query_mode")})
     if cancellation and not nlu.CREATE_VERB_RE.search(cancellation["body"].lower()):
         body = cancellation["body"]
         named = bool(re.search(r"\bрепетитор[а-яё]*\b", body, re.I))
