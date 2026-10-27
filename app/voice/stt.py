@@ -62,6 +62,11 @@ async def transcribe(
             response = await client.post(STT_URL, params=params, content=audio, headers=headers)
         response.raise_for_status()
         return {"text": (response.json().get("result") or "").strip()}
-    except Exception as error:  
+    except httpx.HTTPStatusError as error:
+        # Код ответа отличает «нет прав или не тот каталог» (4xx) от сбоя службы (5xx).
+        # Тело не пишем — та же политика, что в app/ai/provider.py.
+        logger.error("Yandex STT: HTTP %s", error.response.status_code)
+        return JSONResponse(status_code=503, content={"error": "stt_unavailable"})
+    except Exception as error:
         logger.error("Yandex STT error: %s", type(error).__name__)
         return JSONResponse(status_code=503, content={"error": "stt_unavailable"})

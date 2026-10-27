@@ -508,7 +508,7 @@ export const voice = {
       if (event.error === 'no-speech') return; // сообщим в onend
       if (event.error === 'aborted') return;
       cancelled = true;
-      if (ERRORS[event.error] === 'service' && serverSttReady()) {
+      if ((ERRORS[event.error] === 'service' || ERRORS[event.error] === 'network') && serverSttReady()) {
         // Safari отказал в русской речи — переходим на распознавание на сервере
         release(rec);
         try { rec.abort(); } catch { /* уже остановлена */ }
