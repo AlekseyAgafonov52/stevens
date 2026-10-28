@@ -271,12 +271,9 @@ function maybeOffer(): void {
   const s = store.get();
   const status = tourStore.get().status;
   if (s.mode === 'account' && s.screen === 'app') {
-    // Только что зарегистрировался — предлагаем один раз, пока ничего не отправил
-    const offer = storage.tourOffer() === String(s.userId);
-    const sent = s.messages.some((m) => m.kind === 'user');
-    if (offer && sent) storage.setTourOffer(null);
-    if (status === 'off' && offer && !sent) tourStore.set({ status: 'offer', again: false, account: true });
-    else if (status === 'offer' && (!offer || sent)) tourStore.set({ status: 'off', account: false });
+    // В аккаунте обучение не предлагаем: оно в меню «Пройти обучение», на старте — примеры фраз
+    if (storage.tourOffer() !== null) storage.setTourOffer(null);
+    if (status === 'offer') tourStore.set({ status: 'off', account: false });
     return;
   }
   if (s.mode !== 'sandbox') {

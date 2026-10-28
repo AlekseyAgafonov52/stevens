@@ -143,7 +143,7 @@ async def main():
                 check("ошибка доставки не считается успехом", await db.get(PushSent, key) is None)
             with patch("app.push.send", return_value=True) as sender:
                 await push.tick(); await push.tick()
-                deliveries = [call for call in sender.call_args_list if json.loads(call.args[1])["record_id"] == rid]
+                deliveries = [call for call in sender.call_args_list if json.loads(call.args[1]).get("record_id") == rid]
                 check("повтор доставки затем единственная отправка", len(deliveries) == 1)
             await c.post("/api/push/snooze", json={"endpoint": endpoint, "record_id": rid})
             async with AsyncSessionLocal() as db:

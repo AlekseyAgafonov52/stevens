@@ -132,7 +132,8 @@
 .start__subtitle,
 .start__examples { position: relative; top: -40px; max-width: 560px; }
 .start__subtitle { font-size: 18px; line-height: 1.4; text-align: center; color: var(--c-text); }
-.start__examples { display: flex; flex-wrap: wrap; justify-content: center; gap: var(--sp-3); margin-top: var(--sp-11); }
+.start__examples { display: flex; flex-wrap: wrap; justify-content: center; gap: var(--sp-3); margin-top: var(--sp-7); }
+.start__caption { width: 100%; padding-bottom: var(--sp-1); text-align: center; font-size: var(--fs-small); font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--c-placeholder); }
 /* На телефоне примеры не помещаются по высоте: подъём на 40px уводил подпись под шапку */
 @media (max-width: 600px) { .start__subtitle, .start__examples { top: 0; } }
 
@@ -240,9 +241,14 @@
 .pill--selected { border-color: var(--c-text); background: var(--c-text); color: var(--c-on-dark); cursor: default; }
 .pill--dimmed { border-color: var(--c-ghost); background: transparent; color: var(--c-placeholder); cursor: default; }
 .pill:disabled { cursor: default; }
+/* Пример фразы (старт, «Что ты умеешь?», «Не понял») — тихая пилюля */
+.pill--example.pill--primary { border-color: var(--c-ghost); background: transparent; color: var(--c-text-2); font-weight: 400; }
+.pill--example.pill--primary:disabled { opacity: 0.5; }
+.pill--example.pill--primary:not(:disabled):active { color: var(--c-text); border-color: var(--c-draft-line); }
 .pill--action { cursor: pointer; }
 @media (hover: hover) {
   .pill--primary:not(:disabled):hover, .pill--secondary:not(:disabled):hover { background: var(--c-bubble); }
+  .pill--example.pill--primary:not(:disabled):hover { background: var(--c-surface); color: var(--c-text); border-color: var(--c-draft-line); }
 }
 @media (max-width: 760px) {
   /* Длинная подпись переносится — пилюля растёт по высоте, текст не вылезает за рамку */

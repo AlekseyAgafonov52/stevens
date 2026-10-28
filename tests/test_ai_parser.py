@@ -173,8 +173,9 @@ class TransportTests(unittest.TestCase):
 
     def test_plain_json_response_validates(self):
         response = SimpleNamespace(output=[], output_text=json.dumps(creation()), status="completed")
+        # The returned title must be grounded in the user's actual request.
         with patch.object(brain.client.responses, "create", return_value=response):
-            self.assertEqual(brain.parse_user_input("test").items[0].text, "Подготовить отчёт 25")
+            self.assertEqual(brain.parse_user_input("Подготовить отчёт 25").items[0].text, "Подготовить отчёт 25")
 
 
 class DialogueTests(unittest.IsolatedAsyncioTestCase):
@@ -184,7 +185,7 @@ class DialogueTests(unittest.IsolatedAsyncioTestCase):
     def tearDown(self):
         chat._llm_down_until = 0
 
-    async def test_invalid_response_starts_cooldown(self):
+    async def test_invalid_response_does_not_start_provider_cooldown(self):
         trace = {}
         with patch("brain.parse_user_input", side_effect=provider.InvalidResponse("invalid_parse_schema")) as parse:
             result = await chat.llm_parse("test", NOW, trace=trace)
@@ -192,9 +193,9 @@ class DialogueTests(unittest.IsolatedAsyncioTestCase):
             await chat.llm_parse("another", NOW, trace=other_trace)
         self.assertEqual(result.intent, "unknown")
         self.assertEqual(trace["llm_status"], "invalid_response")
-        self.assertEqual(other_trace["llm_status"], "cooldown")
+        self.assertEqual(other_trace["llm_status"], "invalid_response")
         self.assertIn("llm_ms", trace)
-        parse.assert_called_once()
+        self.assertEqual(parse.call_count, 2)
 
     async def test_context_uses_owner_checked_focus_and_original_offset(self):
         from app.owner import Owner

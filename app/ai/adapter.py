@@ -45,6 +45,7 @@ def to_parses(result: Result, today: date) -> list[nlu.Parse]:
         return [nlu.Parse()]
     value = nlu.Parse(intent=result.intent)
     value.filter_type = result.filter_type
+    value.query_mode = result.query_mode
     if result.period:
         start, end = date.fromisoformat(result.period.start), date.fromisoformat(result.period.end)
         value.period = nlu.describe_period(start, end, today)
@@ -77,6 +78,7 @@ def query_context(value: object) -> dict | None:
     period = ({"start": value.period.start.isoformat(), "end": value.period.end.isoformat(),
                "label": value.period.label} if value.period else None)
     return {"intent": value.intent, "period": period, "filter_type": value.filter_type,
+            "query_mode": value.query_mode,
             "query": {"keywords": value.keywords, "person": value.person, "ask": value.ask,
                       "tense": value.tense, "type": value.filter_type,
                       "date": value.date.isoformat() if value.date else None}}

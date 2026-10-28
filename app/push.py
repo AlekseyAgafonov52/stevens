@@ -29,6 +29,8 @@ TICK_SECONDS = 30
 LATE_LIMIT = timedelta(minutes=15)
 CLAIMS = {"sub": "mailto:stevens@example.com"}
 SNOOZE = timedelta(minutes=10)
+# «Напомнить позже» в чате: не дальше чем на двое суток
+SNOOZE_MAX_MINUTES = 2 * 24 * 60
 # Вечерняя сводка о просроченном: с этого часа, раз в день; дела старше недели в неё не попадают
 DIGEST_AT = time(19, 0)
 DIGEST_LOOKBACK_DAYS = 7

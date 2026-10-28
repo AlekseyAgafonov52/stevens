@@ -49,6 +49,13 @@ async def main():
             async with AsyncSessionLocal() as db:
                 rows = (await db.execute(select(PushSnooze).where(PushSnooze.record_id == rid))).scalars().all()
                 check("одна отложка через ~10 минут", len(rows) == 1 and timedelta(minutes=9) < rows[0].at - datetime.now(timezone.utc) <= timedelta(minutes=10))
+            # «Напомнить позже» в чате: другое время заменяет прежнее
+            check("плохие минуты", (await c.post("/api/push/snooze", json={"endpoint": endpoint, "record_id": rid, "minutes": 0})).status_code == 422)
+            check("больше двух суток нельзя", (await c.post("/api/push/snooze", json={"endpoint": endpoint, "record_id": rid, "minutes": 2881})).status_code == 422)
+            check("через 3 часа", (await c.post("/api/push/snooze", json={"endpoint": endpoint, "record_id": rid, "minutes": 180})).status_code == 204)
+            async with AsyncSessionLocal() as db:
+                rows = (await db.execute(select(PushSnooze).where(PushSnooze.record_id == rid))).scalars().all()
+                check("одна отложка через ~3 часа", len(rows) == 1 and timedelta(minutes=179) < rows[0].at - datetime.now(timezone.utc) <= timedelta(minutes=180))
             await push.tick()
             check("раньше срока не шлёт", not [s for s in sent if s[0] == endpoint])
             async with AsyncSessionLocal() as db:

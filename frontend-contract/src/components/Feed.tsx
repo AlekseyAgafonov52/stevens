@@ -4,6 +4,7 @@ import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } fr
 import { serverFeatures } from '../config/server';
 import { T } from '../content/texts';
 import { feedBottomInsetClass, waitingWithDots } from '../extensions/flags';
+import { useMedia } from '../lib/install';
 import { useBriefingOffer } from '../state/briefing';
 import { retry, send } from '../state/chat';
 import { emitActivity } from '../state/events';
@@ -81,19 +82,22 @@ function FeedItem({ message, isLast, lastError }: { message: FeedMessage; isLast
 function StartScreen() {
   const waiting = useApp((s) => s.waiting);
   const offer = useBriefingOffer();
+  const phone = useMedia('(max-width: 760px)');
+  const examples = phone ? T.examples_phone : T.examples_desktop;
   return (
     <div className="start">
-      <div className="start__subtitle">{T.start_subtitle}</div>
+      <div className="start__subtitle">{T.start_lead}</div>
       {offer ? (
         <BriefingOffer className="start__offer" />
       ) : (
-      <div className="start__examples">
-        {T.examples.map((example) => (
-          <Pill key={example} disabled={waiting} onClick={() => { emitActivity('button-press'); send(example, 'button'); }}>
-            {example}
-          </Pill>
-        ))}
-      </div>
+        <div className="start__examples">
+          <div className="start__caption">{T.examples_caption}</div>
+          {examples.map((example) => (
+            <Pill key={example} className="pill--example" disabled={waiting} onClick={() => { emitActivity('button-press'); send(example, 'button'); }}>
+              {example}
+            </Pill>
+          ))}
+        </div>
       )}
     </div>
   );

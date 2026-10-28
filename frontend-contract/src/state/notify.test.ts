@@ -1,10 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('./chat', () => ({ setHint: vi.fn() }));
-vi.mock('../api', () => ({ api: { records: vi.fn(async () => []), record: vi.fn() } }));
+vi.mock('../api', () => ({ api: { records: vi.fn(async () => []), record: vi.fn(), pushSnooze: vi.fn(async () => undefined) } }));
 
 const { setHint } = await import('./chat');
-const { enableNotify, notifyStore, handlePushMessage, closeNotifyCard } = await import('./notify');
+const { enableNotify, notifyStore, handlePushMessage, closeNotifyCard, snoozeRecord } = await import('./notify');
 const { api } = await import('../api');
 const { store } = await import('./store');
 const { T } = await import('../content/texts');
@@ -72,5 +72,16 @@ describe('вечерняя сводка о просроченном', () => {
     vi.mocked(api.record).mockResolvedValue({ ...record, status: 'done' });
     await handlePushMessage({ type: 'stevens-digest', recordIds: [42] });
     expect(store.get().messages).toHaveLength(0);
+  });
+});
+
+describe('«Напомнить позже» в чате', () => {
+  it('просит сервер напомнить через выбранное время по подписке браузера', async () => {
+    const getSubscription = vi.fn(async () => ({ endpoint: 'https://push.example/1' }));
+    vi.stubGlobal('navigator', { serviceWorker: { getRegistration: async () => ({ pushManager: { getSubscription } }) } });
+    await snoozeRecord(42, 15);
+    await snoozeRecord(42, 180);
+    expect(api.pushSnooze).toHaveBeenNthCalledWith(1, 'https://push.example/1', 42, 15);
+    expect(api.pushSnooze).toHaveBeenNthCalledWith(2, 'https://push.example/1', 42, 180);
   });
 });

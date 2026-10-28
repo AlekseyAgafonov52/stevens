@@ -124,8 +124,6 @@ export async function authenticate(kind: 'login' | 'register', login: string, pa
   storage.setLogin(result.user.login);
   storage.setUserId(result.user.id);
   storage.setMode(null);
-  // Новому пользователю один раз предлагаем обучение
-  if (kind === 'register') storage.setTourOffer(result.user.id);
   enterApp('account', result.user.login, result.user.id);
 }
 

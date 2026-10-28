@@ -26,7 +26,13 @@ DIALOG = [
     ("Стив, очисти 5 января 2031", "confirm", None),
     ("да, удаляй", "deleted", lambda r: r["total"] == 2 and r["buttons"][0]["send"]["action"]["id"] == "restore_all"),
     (("", "restore_all"), "created", lambda r: r["total"] == 2),
-    ("удали все встречи на 5 января 2031", "deleted", lambda r: first(r)["text"] == "Встреча с Иваном"),
+    # An explicitly bulk delete needs confirmation even if there is only one matching event.
+    ("удали все встречи на 5 января 2031", "confirm", lambda r: r["total"] == 1 and
+        "1 встречу" in r["text"] and "Вот она" in r["text"]),
+    # The same repeated request must not delete a pending record or reset its snapshot.
+    ("удали все встречи на 5 января 2031", "confirm", lambda r: r["total"] == 1 and
+        "1 встречу" in r["text"]),
+    (("", "confirm_yes"), "deleted", lambda r: first(r)["text"] == "Встреча с Иваном"),
     ("удали все встречи на 5 января 2031", "found", lambda r: "нечего" in r["text"]),
     ("убери все дела за все дни", "confirm", lambda r: r["total"] > 900 and "за все дни" in r["text"]),
     (("", "confirm_yes"), "deleted", lambda r: r["total"] > 900),

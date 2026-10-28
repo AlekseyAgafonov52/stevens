@@ -8,6 +8,7 @@ import { useApp, type AnswerMessage } from '../state/store';
 import { AnswerExtraButtons, RecordCardOverride, cardEditHandler } from '../extensions/points';
 import { NotifyOffer } from './NotifyOffer';
 import { OverdueActions } from './OverdueActions';
+import { ReminderActions } from './ReminderActions';
 import { undoImport } from '../state/imports';
 import { Pill, type PillVariant } from './Pill';
 import { RecordCard } from './RecordCard';
@@ -48,14 +49,19 @@ export function Answer({ message, isLast }: Props) {
         onClick={cardEditHandler(message, record, isLast && !message.restored && !waiting && !editing)}
       />
     );
-    if (response.kind !== 'overdue') return view;
+    if (response.kind !== 'overdue' && response.kind !== 'reminder') return view;
     return (
       <div className="overdue-item" key={`${record.id ?? 'd'}-${index}`}>
         {view}
-        <OverdueActions message={message} record={record} />
+        {response.kind === 'overdue'
+          ? <OverdueActions message={message} record={record} />
+          : <ReminderActions message={message} record={record} />}
       </div>
     );
   };
+
+  /** «Что ты умеешь?» и «Не понял»: кнопки — примеры фраз, тихие, как на стартовом экране */
+  const examples = response.kind === 'help' || response.kind === 'not_understood';
 
   const buttonVariant = (index: number, style: string | undefined): PillVariant => {
     if (message.pressed === index) return 'selected';
@@ -118,6 +124,7 @@ export function Answer({ message, isLast }: Props) {
             <Pill
               key={index}
               variant={buttonVariant(index, button.style)}
+              className={examples ? 'pill--example' : ''}
               onClick={() => pressButton(message.id, button, index)}
             >
               {button.label}

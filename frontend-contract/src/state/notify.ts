@@ -169,16 +169,24 @@ export async function snoozeNotifyCard(): Promise<void> {
   closeNotifyCard();
   const id = card?.record.id;
   if (id === undefined || id === null) return;
+  await snoozeRecord(id, SNOOZE_MS / 60000);
+}
+
+/** Напомнить о записи ещё раз через minutes минут; новое время заменяет прежнее.
+ *  Есть подписка — пуш придёт и при закрытом сайте, нет — откладывает сама вкладка */
+export async function snoozeRecord(id: number, minutes: number): Promise<void> {
   try {
     const subscription = await (await navigator.serviceWorker?.getRegistration())?.pushManager.getSubscription();
     if (subscription) {
-      await api.pushSnooze(subscription.endpoint, id);
+      await api.pushSnooze(subscription.endpoint, id, minutes);
+      clearTimeout(snoozeTimers.get(id));
+      snoozeTimers.delete(id);
       return;
     }
   } catch {
     /* сервер не принял — отложим здесь */
   }
-  snoozeHere(id);
+  snoozeHere(id, minutes * 60 * 1000);
 }
 
 function fire(record: RecordItem, key: string): void {
@@ -228,9 +236,13 @@ async function showDigest(ids: number[]): Promise<void> {
   remindInFeed(records, records.length === 1 ? T.remind_digest_one : T.remind_digest, 'overdue');
 }
 
-/** «Через 10 минут», когда пуша с сервера нет: откладывает сама вкладка */
-function snoozeHere(id: number): void {
-  setTimeout(() => {
+const snoozeTimers = new Map<number, ReturnType<typeof setTimeout>>();
+
+/** Отложенное, когда пуша с сервера нет: откладывает сама вкладка */
+function snoozeHere(id: number, wait = SNOOZE_MS): void {
+  clearTimeout(snoozeTimers.get(id));
+  snoozeTimers.set(id, setTimeout(() => {
+    snoozeTimers.delete(id);
     void findRecord(id).then((record) => {
       if (!record || record.status === 'done' || record.marks.includes('deleted')) return;
       if (document.visibilityState === 'visible') showNotifyCard(record, true);
@@ -239,7 +251,7 @@ function snoozeHere(id: number): void {
         if (notifyGranted()) void systemNotify(record.text, '', keyOf(record), id);
       }
     });
-  }, SNOOZE_MS);
+  }, wait));
 }
 
 /** Подписка на пуш с сервера: нужен service worker и разрешение на уведомления */

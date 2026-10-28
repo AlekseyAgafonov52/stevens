@@ -218,7 +218,7 @@ class ChatLog(Base):
     text: Mapped[str] = mapped_column(String(300), default="")
     raw_text: Mapped[str | None] = mapped_column(String(600), nullable=True)  # голос: что распознал браузер до поправок
     action: Mapped[str | None] = mapped_column(String(32), nullable=True)
-    waiting: Mapped[str | None] = mapped_column(String(16), nullable=True)   # чего Stevens ждал до запроса
+    waiting: Mapped[str | None] = mapped_column(String(64), nullable=True)   # чего Stevens ждал до запроса
     intent: Mapped[str | None] = mapped_column(String(16), nullable=True)
     llm: Mapped[bool] = mapped_column(Boolean, default=False)
     layer: Mapped[str | None] = mapped_column(String(8), nullable=True)

@@ -196,8 +196,8 @@ export const api = {
     await request('/api/push/unsubscribe', { method: 'POST', body: { endpoint }, auth: false });
   },
 
-  async pushSnooze(endpoint: string, recordId: number): Promise<void> {
-    await request('/api/push/snooze', { method: 'POST', body: { endpoint, record_id: recordId }, auth: false });
+  async pushSnooze(endpoint: string, recordId: number, minutes?: number): Promise<void> {
+    await request('/api/push/snooze', { method: 'POST', body: { endpoint, record_id: recordId, minutes }, auth: false });
   },
 
   async resetSandbox(): Promise<void> {

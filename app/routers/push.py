@@ -1,7 +1,7 @@
 """Подписка на пуш-уведомления: ключ сервера, подписаться, отписаться, отложить на 10 минут."""
 from fastapi import APIRouter, Body, Depends
 from fastapi.responses import JSONResponse, Response
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import hmac
 
 from sqlalchemy import delete, select
@@ -63,10 +63,14 @@ async def unsubscribe(body: dict = Body(...), db: AsyncSession = Depends(get_db)
 
 @router.post("/snooze", status_code=204)
 async def snooze(body: dict = Body(...), db: AsyncSession = Depends(get_db)):
-    """Кнопка «Через 10 минут» в пуше. Service worker не знает токена входа,
-    поэтому браузер узнаём по адресу его подписки — он есть только у него самого."""
+    """Кнопка «Через 10 минут» в пуше и «Напомнить позже» в чате (minutes — через сколько, по умолчанию 10).
+    Service worker не знает токена входа, поэтому браузер узнаём по адресу его подписки — он есть только у него самого.
+    Новое время заменяет прежнее отложенное по этой записи."""
     endpoint, record_id = body.get("endpoint"), body.get("record_id")
+    minutes = body.get("minutes", int(push.SNOOZE.total_seconds() // 60))
     if not isinstance(endpoint, str) or isinstance(record_id, bool) or not isinstance(record_id, int) or not 1 <= record_id <= 2147483647:
+        return JSONResponse(status_code=422, content={"error": "invalid_snooze"})
+    if isinstance(minutes, bool) or not isinstance(minutes, int) or not 1 <= minutes <= push.SNOOZE_MAX_MINUTES:
         return JSONResponse(status_code=422, content={"error": "invalid_snooze"})
     sub = (await db.execute(select(PushSubscription).where(PushSubscription.endpoint == endpoint))).scalars().first()
     record = await db.get(Record, record_id)
@@ -75,7 +79,7 @@ async def snooze(body: dict = Body(...), db: AsyncSession = Depends(get_db)):
     await db.execute(delete(PushSnooze).where(PushSnooze.record_id == record_id))
     db.add(PushSnooze(
         account_id=sub.account_id, sandbox_id=sub.sandbox_id, record_id=record_id,
-        at=datetime.now(timezone.utc) + push.SNOOZE,
+        at=datetime.now(timezone.utc) + timedelta(minutes=minutes),
     ))
     await db.commit()
     return Response(status_code=204)
