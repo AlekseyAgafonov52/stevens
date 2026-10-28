@@ -32,7 +32,7 @@ class ProjectSafetyTests(unittest.TestCase):
         response = SimpleNamespace(output=[output], output_text="")
         with patch.dict(os.environ, {"YANDEX_API_KEY": "fake", "YANDEX_FOLDER_ID": "fake"}), \
                 patch.object(brain.client.responses, "create", return_value=response) as create:
-            result = brain.parse_user_input("Check")
+            result = brain.parse_user_input("Check 09:00")
         self.assertIsNotNone(result)
         assert result is not None
         self.assertEqual(result.intent, "create")

@@ -146,7 +146,7 @@ class TransportTests(unittest.TestCase):
         self.assertEqual(request["timezone"], "Europe/Moscow")
         self.assertNotIn("2026-11-06", create.call_args.kwargs["instructions"])
         self.assertNotIn("synthetic-key", create.call_args.kwargs["input"])
-        self.assertEqual(set(request), {"text", "now", "timezone", "source", "awaiting", "focus", "last_query"})
+        self.assertEqual(set(request), {"text", "now", "timezone", "source", "awaiting", "focus", "last_query", "history"})
 
     def test_missing_credentials_make_no_request(self):
         with patch.dict(os.environ, {"YANDEX_API_KEY": ""}), patch.object(brain.client.responses, "create") as create:

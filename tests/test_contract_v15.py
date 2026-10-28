@@ -19,6 +19,21 @@ OVERRIDE = {
     ("Т6-6", 1): {"kind": "clarify", "awaiting_reply": True, "record": None},
     # Снято на аккаунте, где уже была задача без срока: на пустом аккаунте предложения нет
     ("Т7-16", 0): {"awaiting_reply": False},
+    # Одобрено Матвеем 28.10: после вопроса о свободном времени и несуществующей даты Стивенс ждёт ответ
+    ("Т16-1", 0): {"awaiting_reply": True},
+    ("Т16-2", 0): {"awaiting_reply": True},
+    ("Т16-3", 0): {"awaiting_reply": True},
+    ("Т16-4", 0): {"awaiting_reply": True},
+    ("Т16-5", 1): {"awaiting_reply": True},
+    ("Т16-6", 0): {"awaiting_reply": True},
+    ("Т16-7", 0): {"awaiting_reply": True},
+    ("Т16-8", 0): {"awaiting_reply": True},
+    ("Т16-9", 1): {"awaiting_reply": True},
+    ("Т16-10", 1): {"awaiting_reply": True},
+    ("Т16-12", 0): {"awaiting_reply": True},
+    ("Т5-37", 0): {"awaiting_reply": True},
+    # «нет» на «Записать все?» — поправить черновики, а не отменить
+    ("Т15-3", 34): {"kind": "clarify", "awaiting_reply": True},
 }
 ONLY = [a for a in sys.argv[1:] if not a.startswith("-")]
 
