@@ -3,11 +3,4 @@ frontend
 **/__pycache__
 .env
 .env.*
-**/node_modules
-**/dist
 .venv
-venv
-audit-results
-audit-results-v2
-fix-results
-contract-v16-analysis

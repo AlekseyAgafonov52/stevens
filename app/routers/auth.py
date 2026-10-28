@@ -60,7 +60,7 @@ async def register(payload: object = Body(default=None), db: AsyncSession = Depe
     exists = (await db.execute(select(Account).where(Account.login_lower == login.lower()))).scalars().first()
     if exists:
         return error(409, "login_taken")
-    # bcrypt считает ~0,2 с: в отдельном потоке, чтобы чат других не ждал
+    # argon2 считает ~0,2 с: в отдельном потоке, чтобы чат других не ждал
     account = Account(login=login, login_lower=login.lower(), password_hash=await asyncio.to_thread(hash_password, password))
     db.add(account)
     try:

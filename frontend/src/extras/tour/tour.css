@@ -1,0 +1,27 @@
+/* Д15 Обучение в песочнице Вид как у плашки уведомлений, над строкой статуса */
+.tour {
+  display: flex; flex-direction: column; gap: var(--sp-3);
+  margin-bottom: var(--sp-3);
+  padding: var(--sp-5); border-radius: var(--r-card);
+  background: var(--c-surface); border: 1px solid var(--c-line);
+}
+.tour__head { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3); }
+.tour__progress { font-size: var(--fs-meta); color: var(--c-text-2); }
+.tour__dots { display: flex; gap: var(--sp-1); }
+.tour__dot { width: 6px; height: 6px; border-radius: var(--r-pill); background: var(--c-ghost); }
+.tour__dot--done { background: var(--c-accent); }
+.tour__dot--now:not(.tour__dot--done) { background: var(--c-text-2); }
+.tour__title { font-weight: 600; color: var(--c-text); }
+.tour__text { font-size: var(--fs-meta); line-height: 1.4; color: var(--c-text-2); }
+.tour__hint { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-3); }
+.tour__label { font-size: var(--fs-meta); color: var(--c-text-2); }
+.tour__actions { display: flex; flex-wrap: wrap; gap: var(--sp-3); }
+.tour__done { display: flex; align-items: center; gap: var(--sp-2); color: var(--c-accent); font-weight: 600; }
+/* Персонаж (Д14) стоит на строке ввода и заходит на низ панели: нижние ряды обходят его справа.
+   Ширина — место персонажа из mascot.css (right 22 + width 96; на телефоне 18 + 72) за вычетом отступа панели */
+.bottom__column:has(.stevens-perch) .tour__hint,
+.bottom__column:has(.stevens-perch) .tour__actions { padding-right: 106px; }
+@media (max-width: 760px) {
+  .bottom__column:has(.stevens-perch) .tour__hint,
+  .bottom__column:has(.stevens-perch) .tour__actions { padding-right: 78px; }
+}

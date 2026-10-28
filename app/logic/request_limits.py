@@ -47,7 +47,7 @@ class RequestLimits:
             if forwarded and "," not in forwarded:
                 ip = forwarded.strip()
         auth = path in ("/api/auth/login", "/api/auth/register")
-        group, limit = ("auth", 30) if auth else ("transfer", 20) if "/import" in path or "/transfer" in path or path.endswith("/export") else (
+        group, limit = ("auth", 30) if auth else ("import", 20) if "/import" in path or path.endswith("/export") else (
             ("stt", 30) if path == "/api/stt" else ("reset", 10) if path in ("/api/sandbox/reset", "/api/sandbox/clear") else ("api", 180))
         if os.getenv("STEVENS_RATE_LIMIT", "1") != "0":
             wait = self.hit((ip, group), limit)
@@ -79,7 +79,7 @@ class RequestLimits:
         try:
             if scope["method"] not in ("POST", "PATCH", "PUT"):
                 return await self.app(scope, receive, send)
-            max_size = 1024 * 1024 if path == "/api/stt" else 8 * 1024 * 1024 if "import" in path or "/transfer" in path else 4096 if auth else 65536
+            max_size = 1024 * 1024 if path == "/api/stt" else 8 * 1024 * 1024 if "import" in path else 4096 if auth else 65536
             status, error = (413, "audio_too_long") if path == "/api/stt" else (422, "invalid_request")
             try:
                 if int(headers.get(b"content-length", b"0")) > max_size:

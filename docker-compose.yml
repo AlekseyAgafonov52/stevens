@@ -1,11 +1,8 @@
-# Весь Stevens одной командой: docker compose up --build
-# Откройте http://localhost:8081 (или 8080 — тот же фронт): прототип по контракту v1.4 с допами.
-# Бэк в этой ветке переделан под контракт, поэтому старый frontend/ здесь не собирается.
+# Весь Stevens одной командой: docker compose up --build → http://localhost:8080
 services:
   postgres:
     image: postgres:16-alpine
     restart: unless-stopped
-    container_name: voice_assistant_db
     environment:
       POSTGRES_DB: taskapp
       POSTGRES_USER: postgres
@@ -30,7 +27,7 @@ services:
       YANDEX_GPT_MODEL: ${YANDEX_GPT_MODEL:-yandexgpt}
       # Удалять песочницы, в которые не заходили N дней (по умолчанию 30, 0 — не удалять)
       STEVENS_SANDBOX_DAYS: ${STEVENS_SANDBOX_DAYS:-30}
-      STEVENS_CORS_ORIGINS: ${STEVENS_CORS_ORIGINS:-http://localhost:5173,http://localhost:8080,http://localhost:8081}
+      STEVENS_CORS_ORIGINS: ${STEVENS_CORS_ORIGINS:-http://localhost:8080}
       STEVENS_RATE_LIMIT: ${STEVENS_RATE_LIMIT:-1}
       STEVENS_TRUSTED_PROXIES: ${STEVENS_TRUSTED_PROXIES:-}
     ports:
@@ -67,14 +64,13 @@ services:
           sleep 86400
         done
 
-  frontend-contract:
+  frontend:
     build:
-      context: ./frontend-contract
+      context: ./frontend
       args:
-        VITE_API_URL: ""
+        VITE_API_URL: ${VITE_API_URL:-}
     restart: unless-stopped
     ports:
-      - "8081:80"
       - "8080:80"
     depends_on:
       - backend

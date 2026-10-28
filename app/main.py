@@ -1,4 +1,4 @@
-"""Stevens API по контракту v1.4 с допами (d2, d3, d10)."""
+"""Stevens API: FastAPI-приложение, таблицы, фоновые пуши и очистка песочниц."""
 import asyncio
 import os
 from contextlib import asynccontextmanager
@@ -14,7 +14,7 @@ from app.database import Base, engine, get_db
 from app.owner import CLIENT_ID_RE, clean_loop, clear_sandbox, ensure_sandbox, seed_sandbox
 from app import push
 from app import features
-from app.routers import auth, chat, client, imports, records, transfer
+from app.routers import auth, chat, client, imports, records
 from app.routers import push as push_router
 from app.logic.request_limits import RequestLimits
 from app.voice.stt import router as stt_router
@@ -24,32 +24,6 @@ from app.voice.stt import router as stt_router
 async def lifespan(app: FastAPI):
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-    # Тип «заметка» появился позже таблицы: в старой базе его нет в перечислении
-    async with engine.connect() as conn:
-        conn = await conn.execution_options(isolation_level="AUTOCOMMIT")
-        await conn.exec_driver_sql("ALTER TYPE record_type ADD VALUE IF NOT EXISTS 'note'")
-        await conn.exec_driver_sql("ALTER TYPE record_type ADD VALUE IF NOT EXISTS 'busy'")
-        # Колонки, которых не было в старой таблице: повторы и пометка демо-записей
-        await conn.exec_driver_sql("ALTER TABLE records ADD COLUMN IF NOT EXISTS series_id INTEGER REFERENCES series(id)")
-        await conn.exec_driver_sql("ALTER TABLE records ADD COLUMN IF NOT EXISTS repeat VARCHAR(24)")
-        await conn.exec_driver_sql("ALTER TABLE records ADD COLUMN IF NOT EXISTS end_time VARCHAR(5)")
-        await conn.exec_driver_sql("ALTER TABLE series ADD COLUMN IF NOT EXISTS end_time VARCHAR(5)")
-        await conn.exec_driver_sql("ALTER TABLE records ADD COLUMN IF NOT EXISTS remind_before INTEGER")
-        await conn.exec_driver_sql("ALTER TABLE records ADD COLUMN IF NOT EXISTS stash JSON")
-        await conn.exec_driver_sql("ALTER TABLE chat_log ADD COLUMN IF NOT EXISTS raw_text VARCHAR(600)")
-        await conn.exec_driver_sql("ALTER TABLE chat_log ALTER COLUMN waiting TYPE VARCHAR(64)")
-        await conn.exec_driver_sql("ALTER TABLE chat_log ADD COLUMN IF NOT EXISTS layer VARCHAR(8)")
-        await conn.exec_driver_sql("ALTER TABLE chat_log ADD COLUMN IF NOT EXISTS confidence DOUBLE PRECISION")
-        await conn.exec_driver_sql("ALTER TABLE push_subscriptions ADD COLUMN IF NOT EXISTS seen_at TIMESTAMPTZ DEFAULT now()")
-        await conn.exec_driver_sql("ALTER TABLE chat_log ADD COLUMN IF NOT EXISTS doubts TEXT")
-        await conn.exec_driver_sql("ALTER TABLE chat_log ADD COLUMN IF NOT EXISTS parsed TEXT")
-        await conn.exec_driver_sql("ALTER TABLE chat_log ADD COLUMN IF NOT EXISTS llm_ms INTEGER")
-        await conn.exec_driver_sql("ALTER TABLE records ADD COLUMN IF NOT EXISTS demo BOOLEAN NOT NULL DEFAULT false")
-        await conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_records_series_id ON records (series_id)")
-        await conn.exec_driver_sql("ALTER TABLE sandboxes ADD COLUMN IF NOT EXISTS seen_at TIMESTAMPTZ NOT NULL DEFAULT now()")
-        # Время создания у всех записей: старым демо-записям песочницы без него ставим «сейчас»
-        await conn.exec_driver_sql(
-            "UPDATE records SET demo = true, created_at = now() WHERE sandbox_id IS NOT NULL AND created_at IS NULL")
     print("✅ База данных готова.")
     pusher = asyncio.create_task(push.loop())
     cleaner = asyncio.create_task(clean_loop())
@@ -67,7 +41,7 @@ app.add_middleware(RequestLimits)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[s.strip() for s in os.getenv("STEVENS_CORS_ORIGINS", "http://localhost:5173,http://localhost:8080,http://localhost:8081,http://127.0.0.1:8081").split(",") if s.strip()],
+    allow_origins=[s.strip() for s in os.getenv("STEVENS_CORS_ORIGINS", "http://localhost:8080").split(",") if s.strip()],
     allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
@@ -91,7 +65,6 @@ app.include_router(imports.router)
 app.include_router(records.router)
 app.include_router(push_router.router)
 app.include_router(client.router)
-app.include_router(transfer.router)
 app.include_router(stt_router)
 
 
@@ -122,7 +95,3 @@ async def sandbox_clear(x_client_id: str | None = Header(default=None), db: Asyn
     chat.forget(f"s:{client_id}")
     return Response(status_code=204)
 
-
-@app.get("/")
-async def root():
-    return {"message": "Stevens API is running"}

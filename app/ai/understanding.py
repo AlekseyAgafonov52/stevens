@@ -5,7 +5,7 @@ import time
 
 from app.ai.rules import parse as parse_rules
 from app.ai.schema import Input, Result
-from app.ai.provider import InvalidResponse, Unavailable
+from app.ai.provider import InvalidResponse, Unavailable, parse as parse_llm
 from app.ai.quality import DamagedInput, validate_input
 
 _blocked_until = 0.0
@@ -27,8 +27,7 @@ async def understand(request: Input, *, allow_llm: bool = True, force_llm: bool 
         if time.monotonic() < _blocked_until or not (os.getenv("YANDEX_API_KEY") and os.getenv("YANDEX_FOLDER_ID")):
             return fallback
     try:
-        from brain import parse_user_input
-        candidate = await asyncio.wait_for(asyncio.to_thread(parse_user_input, request.text, context=request), timeout=16)
+        candidate = await asyncio.wait_for(asyncio.to_thread(parse_llm, request), timeout=16)
         if not isinstance(candidate, Result):
             raise InvalidResponse("invalid_parse_schema")
         candidate = Result.model_validate(candidate.model_dump(mode="json", by_alias=True))

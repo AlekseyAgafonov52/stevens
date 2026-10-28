@@ -10,7 +10,7 @@ from app.database import get_db
 from app.models import DateKind, Record, TaskStatus, TaskType
 from app import series
 from app.owner import Owner, get_owner
-from app.logic.record_validation import DATE_RE, TIME_RE, apply_patch, valid_date
+from app.logic.record_validation import apply_patch, valid_date
 
 router = APIRouter(prefix="/api/records", tags=["records"])
 

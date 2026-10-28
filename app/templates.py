@@ -683,8 +683,3 @@ def render(
     text = _fill(variants[index], values, count_forms)
     spoken = _fill(speech, {**values, **(speech_values or {})}, count_forms) if speech else None
     return text, spoken
-
-
-def get_template(key: str, **kwargs) -> str:
-    """Совместимость со старым кодом: только text."""
-    return render(key, kwargs)[0]

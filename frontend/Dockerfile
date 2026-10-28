@@ -1,0 +1,24 @@
+FROM node:24-slim AS build
+WORKDIR /app
+
+RUN npm install --global pnpm@11.25.0
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+RUN pnpm install --frozen-lockfile
+
+COPY index.html tsconfig.json vite.config.ts ./
+COPY src ./src
+COPY public ./public
+
+# Пусто — фронт ходит в API по тому же адресу (nginx проксирует /api на бэк)
+ARG VITE_API_URL
+ENV VITE_API_URL=${VITE_API_URL}
+
+RUN node -e "if (!process.env.VITE_API_URL) process.exit(0); const u = new URL(process.env.VITE_API_URL); if (!['http:', 'https:'].includes(u.protocol) || u.username || u.password) throw new Error('VITE_API_URL must be a public HTTP(S) backend URL without credentials');"
+RUN pnpm run build
+
+FROM nginx:stable-alpine AS runtime
+COPY nginx.conf /etc/nginx/conf.d/default.conf
+COPY --from=build /app/dist /usr/share/nginx/html
+EXPOSE 80
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+    CMD wget -q -O /dev/null http://127.0.0.1/healthz || exit 1
