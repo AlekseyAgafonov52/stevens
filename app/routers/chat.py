@@ -26,6 +26,7 @@ from app.schemas import ChatPayload, ChatRequest
 from app.ai.schema import Awaiting as AIAwaiting, Input as AIInput, Result as AIResult
 from app.logic import ai_actions, ai_replies
 from app.ai.adapter import query_context, supported as ai_supported, to_parses
+from app.ai.contextual import whole_series_cancellation
 from app.ai.provider import InvalidResponse, Unavailable
 from app.ai.understanding import understand
 from app.ai.search import rank as rank_records
@@ -3260,6 +3261,8 @@ async def respond(ctx: Ctx, payload: ChatRequest) -> dict:
             return await ai_actions.execute(ctx)
         return reply("clarify", *ctx.say("yes_no_again"), awaiting=True,
                      buttons=[button_action("Да, верно", "confirm_yes"), button_action("Нет", "cancel", style="secondary")])
+    if cancellation := whole_series_cancellation(raw, ctx.now):
+        return await ai_actions.propose(ctx, cancellation)
     if cancelled := await cancel_named_occurrence(ctx, raw):
         return cancelled
     if pending is None and not choices and (corrected := await correct_series_until(ctx, raw)):

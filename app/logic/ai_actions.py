@@ -92,8 +92,9 @@ async def propose(ctx: Ctx, result: Result, selected: list[Record] | None = None
         rows = ordered[index:index + 1] if index >= 0 else ordered[-1:]
         if not rows:
             return chat.reply("found", *ctx.say("found_none"), total=0)
-    if len(rows) > 1 and not (target and (target.all or target.ref == "shown")) and result.intent != "undo":
-        answer = chat.which_one(ctx, rows, "ai_select")
+    selection = chat.one_per_series(rows, ctx.now) if target and target.series == "all" else rows
+    if len(selection) > 1 and not (target and (target.all or target.ref == "shown")) and result.intent != "undo":
+        answer = chat.which_one(ctx, selection, "ai_select")
         assert ctx.conv.choices is not None
         ctx.conv.pending = chat.Pending("ai_select", {"result": result.model_dump(mode="json", by_alias=True),
                                                        "ids": ctx.conv.choices["ids"]})
@@ -102,9 +103,11 @@ async def propose(ctx: Ctx, result: Result, selected: list[Record] | None = None
         if not features.on("f15"):
             return chat.examples("not_understood", "not_understood", ctx, chat.EXAMPLES)
         expanded = []
-        for row in rows:
+        for row in chat.one_per_series(rows, ctx.now):
             expanded += await series.upcoming(ctx.db, ctx.owner, row.series_id, ctx.today) if row.series_id else [row]
         rows = list({r.id: r for r in expanded}.values())
+        if not rows:
+            return chat.reply("found", *ctx.say("found_none"), total=0)
     updates: dict[int, dict] = {}
     previews = []
     for record in rows:
@@ -152,7 +155,9 @@ async def propose(ctx: Ctx, result: Result, selected: list[Record] | None = None
             "before": {r.id: snapshot(r) for r in rows}, "updates": updates, "undo": undo}
     ctx.conv.pending = chat.Pending("ai_confirm", data)
     template = {"delete": "confirm_ai_delete", "complete": "confirm_ai_complete", "undo": "confirm_ai_undo"}.get(result.intent, "confirm_ai_change")
-    return chat.reply("confirm", *ctx.say(template), total=len(rows), awaiting=True,
+    if result.intent == "delete" and target and target.series == "all" and any(r.series_id for r in rows):
+        template = "confirm_ai_delete_series"
+    return chat.reply("confirm", *ctx.say(template, {"count": len(rows)}), total=len(rows), awaiting=True,
                       records=[r.to_contract() for r in rows[:chat.FOUND_LIMIT]] + previews[:chat.FOUND_LIMIT],
                       buttons=[chat.button_action("Да, верно", "confirm_yes"), chat.button_action("Нет", "cancel", style="secondary")])
 
@@ -164,7 +169,7 @@ async def execute(ctx: Ctx) -> dict:
         return chat.reply("clarify", *ctx.say("clarify_generic"), buttons=[chat.CANCEL])
     data = pending.draft
     result = Result.model_validate(data["result"])
-    ctx.trace.update(intent=result.intent, layer="llm", confidence=result.confidence,
+    ctx.trace.update(intent=result.intent, layer=result.layer, confidence=result.confidence,
                      parse=result.model_dump(mode="json", by_alias=True),
                      doubts=[d.model_dump(exclude_none=True) for d in result.doubts])
     if not permitted(ctx, result):
