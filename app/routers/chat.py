@@ -2131,7 +2131,10 @@ async def answer_move(ctx: Ctx, p: nlu.Parse) -> dict:
         text, speech = ctx.say("edit_ask", {"text": one.text})
         return reply("clarify", text, speech, records=[one.to_contract()], awaiting=True, buttons=[CANCEL])
     if not found and p.keywords:
-        found = await find(ctx, nlu.Parse(keywords=p.keywords, required=p.required, filter_type=p.filter_type))
+        found = await find(ctx, nlu.Parse(keywords=p.keywords, required=p.required,
+                                        filter_type=p.filter_type, date=p.source))
+    if p.source:
+        found = [r for r in found if r.date == p.source.isoformat()]
     if not found:
         if p.ref:
             text, speech = ctx.say("clarify_generic")

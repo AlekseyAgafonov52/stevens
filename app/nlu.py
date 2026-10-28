@@ -99,7 +99,7 @@ class Parse:
     new_type: str | None = None  # edit: «сделай её напоминанием»
     note: str | None = None      # edit: «добавь к встрече с Машей заметку взять ноутбук»
     all: bool = False           # move: «перенеси все встречи» — все записи дня source
-    source: date | None = None  # move all: с какого дня переносим (по умолчанию сегодня)
+    source: date | None = None  # move: исходный день; у массового переноса по умолчанию сегодня
     repeat_days: list[int] | None = None  # create: «каждый вторник» → [1]; пн = 0
     until: date | None = None   # create: повтор «до конца года» — последний день; None — без конца
     series_all: bool = False    # delete: «убери планёрку вообще» — все предстоящие дни повтора
@@ -1484,6 +1484,28 @@ def parse(raw: str, now: datetime) -> Parse:
     if MOVE_RE.search(lower):
         result.intent = "move"
         result.filter_type = _filter_type(lower)
+        # In "репетитора завтра на послезавтра", the first day selects
+        # the existing record, while the day after на/по is the destination.
+        for destination in re.finditer(r"\b(?:на|по)\s+", text, I):
+            tail = text[destination.end():]
+            _, _, _, target_info = parse_when("на " + tail, now)
+            if not target_info.date:
+                continue
+            prefix = text[:destination.start()]
+            prefix = re.sub(r"\bзавтрашн\w*\s+д(?:ня|ень)\b", "завтра", prefix, flags=I)
+            prefix = re.sub(r"\bсегодняшн\w*\s+д(?:ня|ень)\b", "сегодня", prefix, flags=I)
+            _, _, source_times, source_info = parse_when(prefix, now)
+            if not source_info.date and (source_word := SOURCE_RE.search(prefix)):
+                word = source_word.group(1) or source_word.group(2)
+                if word and any(word.lower().startswith(stem) for stem in WEEKDAYS):
+                    source_info.date = now.date() + timedelta(days=(_weekday_index(word.lower()) - now.weekday()) % 7)
+                    source_info.spans.append(source_word.span())
+            if not source_info.date:
+                continue
+            result.source = source_info.date
+            text = _cut(prefix, source_info.spans + source_times) + " на " + tail
+            time, _, time_spans, info = parse_when(text, now)
+            break
         spans = info.spans + time_spans
         shift = SHIFT_RE.search(text)
         if shift:
