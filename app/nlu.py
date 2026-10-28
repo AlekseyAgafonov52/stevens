@@ -132,6 +132,23 @@ _HOUR_GEN = ("первого", "второго", "третьего", "четв[�
              "девятого", "десятого", "одиннадцатого", "двенадцатого")
 _HOUR_NOM = {"час": 1, "один": 1, "два": 2, "три": 3, "четыре": 4, "пять": 5, "шесть": 6, "семь": 7, "восемь": 8,
              "девять": 9, "десять": 10, "одиннадцать": 11, "двенадцать": 12}
+_CLOCK_SMALL = ("ноль", "один", "два", "три", "четыре", "пять", "шесть", "семь", "восемь", "девять",
+                "десять", "одиннадцать", "двенадцать", "тринадцать", "четырнадцать", "пятнадцать",
+                "шестнадцать", "семнадцать", "восемнадцать", "девятнадцать")
+_CLOCK_NUMBERS = {word: value for value, word in enumerate(_CLOCK_SMALL)}
+for _value, _word in ((20, "двадцать"), (30, "тридцать"), (40, "сорок"), (50, "пятьдесят")):
+    _CLOCK_NUMBERS[_word] = _value
+    _CLOCK_NUMBERS.update({f"{_word} {_CLOCK_SMALL[digit]}": _value + digit for digit in range(1, 10)})
+_CLOCK_NUMBERS.update({"нуль": 0, "одна": 1, "две": 2, "час": 1})
+_CLOCK_HOURS = "|".join(word.replace(" ", r"\s+") for word in sorted(_CLOCK_NUMBERS, key=len, reverse=True)
+                       if _CLOCK_NUMBERS[word] < 24)
+_CLOCK_MINUTES = "|".join(word.replace(" ", r"\s+") for word in sorted(_CLOCK_NUMBERS, key=len, reverse=True)
+                         if word != "час")
+_CLOCK_DIGITS = "|".join(_CLOCK_SMALL[:10]) + "|нуль"
+WORD_CLOCK_RE = re.compile(
+    rf"(?P<prefix>\b(?:в|на|к|ко)\s+|^)(?P<hour>{_CLOCK_HOURS}|\d{{1,2}})\b"
+    rf"(?:\s+час(?:а|ов)?)?(?:\s+(?P<minute>(?:ноль|нуль|0)\s+(?:{_CLOCK_DIGITS}|\d)|{_CLOCK_MINUTES}|\d{{1,2}})\b"
+    r"(?:\s+минут(?:а|ы)?)?)?(?:\s+(?P<part>утра|дня|вечера|ночи))?(?=\s|$|[,.!?])", I)
 _HOUR_GEN_ALT = "|".join(_HOUR_GEN) + r"|\d{1,2}-?го"
 _MIN_WORDS = {"двадцати пяти": 25, "пяти": 5, "десяти": 10, "пятнадцати": 15, "четверти": 15, "двадцати": 20}
 _MIN_ALT = "|".join(w.replace(" ", r"\s+") for w in _MIN_WORDS)
@@ -178,6 +195,24 @@ def _spoken_time(text: str) -> tuple[int, int, str, tuple[int, int], bool] | Non
 def _parse_time(text: str) -> tuple[str | None, bool, list[tuple[int, int]]]:
     """Время HH:MM, признак «утро или вечер — неясно» и куски фразы, где оно было."""
     spans: list[tuple[int, int]] = []
+    clock = next((match for match in WORD_CLOCK_RE.finditer(text)
+                  if (match["prefix"] or not text[match.end():].strip(" \t\n,.!?"))
+                  and (not match["hour"].isdigit() or (match["minute"] and not match["minute"].isdigit())
+                       or "минут" in match[0].lower())), None)
+    if clock:
+        hour = clock["hour"].lower()
+        hour = hour if hour.isdigit() else str(_CLOCK_NUMBERS[" ".join(hour.split())])
+        minute = " ".join((clock["minute"] or "ноль").lower().split())
+        if minute.startswith(("ноль ", "нуль ", "0 ")):
+            minute = minute.split(" ", 1)[1]
+        minute = int(minute) if minute.isdigit() else _CLOCK_NUMBERS[minute]
+        part = clock["part"] or ""
+        if not part and (word := TIME_WORDS.search(text)):
+            part = {"утром": "утра", "вечером": "вечера", "днём": "дня", "днем": "дня"}[word[1].lower()]
+        # Reuse numeric clock rules, but cut the complete original spoken phrase.
+        value, ambiguous, _ = _parse_time(f"в {hour}:{minute:02d} {part}")
+        if value:
+            return value, ambiguous, [clock.span()]
     spoken = _spoken_time(text)
     if spoken:
         h, mm, part, span, _ = spoken

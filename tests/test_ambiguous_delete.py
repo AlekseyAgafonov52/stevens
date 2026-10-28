@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 import sys
 import unittest
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 os.environ.setdefault("DATABASE_URL", "postgresql+asyncpg://postgres@localhost/unused")
@@ -13,6 +13,7 @@ from app import nlu
 from app.models import DateKind, Record, TaskStatus, TaskType
 from app.owner import Owner
 from app.routers import chat
+from app.schemas import ChatRequest
 
 NOW = datetime(2026, 10, 28, 10)
 
@@ -51,6 +52,14 @@ class AmbiguousDeleteTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(self.rows[0].deleted_at)
         self.assertIsNone(self.rows[1].deleted_at)
 
+    async def test_completed_record_can_still_be_deleted_by_name(self):
+        self.rows[0].status = TaskStatus.done
+        result = await self.answer("Удали репетитора по математике завтра")
+        self.assertEqual(result["kind"], "deleted")
+        self.assertIsNotNone(self.rows[0].deleted_at)
+        self.assertIsNone(self.rows[1].deleted_at)
+        self.assertEqual(self.rows[0].status, TaskStatus.done)
+
     async def test_explicit_hour_selects_only_matching_record(self):
         result = await self.answer("Удали репетитора завтра в 14:00")
         self.assertEqual(result["kind"], "deleted")
@@ -75,6 +84,33 @@ class AmbiguousDeleteTests(unittest.IsolatedAsyncioTestCase):
         result = await self.answer("Удали репетитора завтра")
         self.assertEqual(result["kind"], "clarify")
         self.db.commit.assert_not_awaited()
+
+    async def test_delete_all_tomorrow_includes_completed_even_after_open_only_list(self):
+        self.rows[0].status = TaskStatus.done
+        self.ctx.conv.found = [2]  # Previous list showed only the open record.
+        self.ctx.conv.focus = None
+        query = MagicMock()
+        query.scalars.return_value.all.return_value = self.rows
+        self.db.execute.return_value = query
+        with patch.object(chat.series, "extend", new=AsyncMock()):
+            proposed = await chat.respond(self.ctx, ChatRequest(conversation_id="test",
+                text="Удали все задачи на завтра", client_time=NOW.isoformat()))
+            self.assertEqual(proposed["kind"], "confirm")
+            self.assertEqual(proposed["total"], 2)
+            assert self.ctx.conv.pending is not None
+            self.assertEqual(set(self.ctx.conv.pending.draft["ids"]), {1, 2})
+            self.assertTrue(all(row.deleted_at is None for row in self.rows))
+            self.db.commit.assert_not_awaited()
+            # Check the actual ORM query too: the DB must not omit done records.
+            assert self.db.execute.await_args is not None
+            sql = str(self.db.execute.await_args.args[0])
+            where = sql.split("WHERE", 1)[1]
+            self.assertNotIn("status", where)
+            result = await chat.respond(self.ctx, ChatRequest(conversation_id="test",
+                text="Да, удалить все", client_time=NOW.isoformat()))
+        self.assertEqual(result["kind"], "deleted")
+        self.assertEqual(result["total"], 2)
+        self.assertTrue(all(row.deleted_at is not None for row in self.rows))
 
 
 if __name__ == "__main__":
