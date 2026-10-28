@@ -13,7 +13,11 @@ _blocked_until = 0.0
 
 async def understand(request: Input, *, allow_llm: bool = True, force_llm: bool = False) -> Result:
     global _blocked_until
-    validate_input(request)
+    try:
+        validate_input(request)
+    except DamagedInput:
+        # Broken encoding must never become an unhandled /api/chat exception.
+        return Result(intent="unknown", layer="rules", confidence=0.0)
     fallback = parse_rules(request)
     if not allow_llm:
         return fallback

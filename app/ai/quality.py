@@ -8,7 +8,7 @@ class DamagedInput(ValueError):
 def validate_input(request):
     text = request.text
     # Windows PowerShell can replace Cyrillic with '?' when piping a here-string to docker.
-    if "\ufffd" in text or re.search(r"\?{3,}", text):
+    if "\ufffd" in text:
         raise DamagedInput("input_encoding_damaged: use a UTF-8 .py file or ASCII Unicode escapes")
 
 
@@ -35,6 +35,13 @@ def validate_candidate(request, result):
     if result.intent not in ("create", "note"):
         return result
     source = _tokens(request.text)
+    if request.awaiting and request.awaiting.about:
+        source |= _tokens(" ".join(str(v) for v in request.awaiting.about.values() if isinstance(v, str)))
+    if request.focus:
+        source |= _tokens(str(request.focus.get("text") or ""))
+    for turn in request.history[-3:]:
+        if isinstance(turn, dict):
+            source |= _tokens(" ".join(str(v) for v in turn.values() if isinstance(v, str)))
     # A title has to overlap the actual request rather than a prompt example.
     # Allow common verb normalization (позвонить / звонок etc.) via stem prefixes.
     for item in result.items:

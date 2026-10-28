@@ -530,7 +530,7 @@ def _parse_date(text: str, now: datetime, time: str | None) -> _DateInfo:
             found(m, today + timedelta(days=shift))
     if not info.date:
         # «Во вторник», «в следующую пятницу», сокращённо «во вт», «в пт»
-        m = re.search(rf"\b(?:в|во|на)\s+(прошл(?:ый|ую|ое)|следующ(?:ий|ую|ее)|эт(?:от|у|о))?\s*(?:{WEEKDAY_RE}|(пн|вт|ср|чт|пт|сб|вс))\b", text, I)
+        m = re.search(rf"\b(?:в|во|на)\s+(прошл(?:ый|ую|ое)|следующ(?:ий|ую|ее)|ближайш(?:ий|ую|ее)|эт(?:от|у|о))?\s*(?:{WEEKDAY_RE}|(пн|вт|ср|чт|пт|сб|вс))\b", text, I)
         if m:
             target = _weekday_index(m.group(2)) if m.group(2) else WEEKDAY_SHORT.index(m.group(3).lower())
             which = (m.group(1) or "").lower()
@@ -539,6 +539,10 @@ def _parse_date(text: str, now: datetime, time: str | None) -> _DateInfo:
                 day = today - timedelta(days=delta)
             elif which.startswith("следующ"):
                 day = week_bounds(today + timedelta(days=7))[0] + timedelta(days=target)
+            elif which.startswith("ближайш"):
+                day = today + timedelta(days=(target - today.weekday()) % 7)
+                if day == today and time and time <= now.strftime("%H:%M"):
+                    day += timedelta(days=7)
             else:
                 day = today + timedelta(days=(target - today.weekday()) % 7)
                 # Сегодняшний день недели, но время уже прошло — значит, через неделю
@@ -1278,12 +1282,19 @@ def needs_llm_review(result: Parse) -> bool:
     if result.intent != "create" or result.type not in ("task", "meeting", "reminder"):
         return False
     return (any(d.get("why") == "unclear" for d in result.doubt)
-            or re.search(r"\b(?:в|к|ко|на)\s+\d{1,2}(?:[:.]\d{2})?\b|^(?:будь(?:те)?\s+добр[аы]?|помоги(?:те)?|организуй(?:те)?)\b|[,;]\s*организуй(?:те)?\b",
+            or re.search(r"\b(?:в|к|ко|на)\s+\d{1,2}(?:[:.]\d{2})?\b(?!\s*(?:минут\w*|час\w*|дн\w*|недел\w*))|^(?:будь(?:те)?\s+добр[аы]?|помоги(?:те)?|организуй(?:те)?)\b|[,;]\s*организуй(?:те)?\b",
                          result.text or "", I) is not None)
 
 
 def parse(raw: str, now: datetime) -> Parse:
     text, typos = fix_typos(strip_lead(" ".join(raw.strip().split())))
+    # A self-correction inside a fresh create command is still a creation,
+    # not a reply to a previous question. Keep the last time mentioned.
+    # Example: «напомни завтра не в 10, а в 11 позвонить маме».
+    if CREATE_VERB_RE.search(text):
+        text = re.sub(
+            r"\bне\s+в\s+\d{1,2}(?:[:.]\d{2})?\s*,?\s*а\s+в\s+(\d{1,2}(?:[:.]\d{2})?)\b",
+            lambda m: "в " + m.group(1), text, flags=I)
     # A forgotten event is background; the explicit reminder clause supplies its schedule.
     forgotten = re.fullmatch(
         r"(?:(?:я|мы)\s+)?(?:(?:позавчера|вчера|сегодня)\s+)?"
@@ -1311,6 +1322,9 @@ def parse(raw: str, now: datetime) -> Parse:
     if repeated := _with_repeat(text, now):
         return repeated
     result = Parse()
+    if re.search(r"\b(?:встреча|созвон)\b.*\b(?:прошл[аои]|состоял[ао]сь)\b.*\bотметь\b", text, I):
+        return parse("отметь " + re.sub(r"\s+(?:прошл[аои]|состоял[ао]сь)\b.*$", "", text, flags=I)
+                     + " выполненной", now)
 
     # «Пока», «до свидания», «спокойной ночи» — целиком, как благодарность
     if re.fullmatch(r"(?:(?:ну|ладно|всё|все|ок)[\s,]+)*(?:пока(?:-пока)?|до\s+свидания|до\s+завтра|спокойной\s+ночи|бывай)"
@@ -1352,8 +1366,9 @@ def parse(raw: str, now: datetime) -> Parse:
     interval = parse_interval(text)
     if interval:
         text = " ".join(_cut(text, [interval[3]]).split()).strip(" ,.")
-    busy_word = bool(BUSY_WORD_RE.search(text) or re.search(
-        r"\b(?:учусь|учиться|работаю|работать|тренируюсь|тренироваться|на\s+парах|на\s+работе)\b", text, I))
+    busy_word = bool(BUSY_WORD_RE.search(text) or (
+        not CREATE_VERB_RE.search(text) and re.search(
+        r"\b(?:учусь|учиться|работаю|работать|тренируюсь|тренироваться|на\s+парах|на\s+работе)\b", text, I)))
 
     lower = text.lower()
     time, ambiguous, time_spans, info = parse_when(text, now)
@@ -1455,6 +1470,22 @@ def parse(raw: str, now: datetime) -> Parse:
         result.keywords, result.required = search_keywords(_cut(text, spans), result.filter_type)
         result.ref = bool(REF_RE.search(lower)) or not result.keywords
         result.date, result.time = info.date, time
+        return result
+
+    # Read-only questions must not become calendar records merely because
+    # they contain the noun "встреча". Keep the answer inside the existing
+    # search/list handlers, including when YandexGPT is not configured.
+    if re.match(r"^(?:есть\s+ли\s+(?:у\s+меня\s+)?(?:встреч[иа]|дел[ао]|задач[иа])|есть\s+что(?:-нибудь)?|у\s+меня\s+.+?\bмного\s+дел|сколько\s+(?:у\s+меня\s+)?(?:(?:сегодня|завтра|послезавтра)\s+)?(?:дел|встреч|задач))\b", lower, I):
+        result.intent = "list"
+        result.filter_type = _filter_type(lower)
+        result.ask = "exists" if lower.startswith("есть ли") else None
+        result.period = info.period or _day_period(info.date or now.date(), now.date())
+        return result
+    if re.match(r"^во\s+сколько\s+(?:у\s+меня\s+)?(?:встреч[а-яё]*|созвон|совещани[ея])\b", lower, I):
+        result.intent, result.ask = "search", "when"
+        result.filter_type = _filter_type(lower) or "meeting"
+        result.keywords, result.required = search_keywords(
+            re.sub(r"^во\s+сколько\s+", "", _cut(text, info.spans + time_spans), flags=I), result.filter_type)
         return result
 
     # «Покажи задачи без срока», «что у меня без даты»
@@ -1597,7 +1628,7 @@ def parse(raw: str, now: datetime) -> Parse:
     has_need = bool(re.search(r"\b(нужно|надо|необходимо|не\s+забыть|должен|должна|должны|пора)\b", lower))
     # «Задача: диплом», «сделай задачу: диплом», «задача почитать книгу», «новая задача — отчёт»
     is_task_word = bool(re.search(r"^(?:(?:поставь|запиши|добавь|создай|сделай|заведи)\s+)?(?:нов\w+\s+)?задач[уа]?\b", lower))
-    if text.rstrip().endswith("?") and not (has_verb or has_need or is_meeting):
+    if text.rstrip().endswith("?") and not (has_verb or has_need):
         return result  # вопрос без «напомни/запиши» — не создаём задачу «Сколько дел ?»
     # «Купить хлеб», «позвонить в банк» — голое дело без срока, как в списке покупок
     bare_todo = bool(re.match(r"^[а-яё]{3,}(?:ть|ться|чь|сти|зти)\s+\S", lower)) and len(keywords(text)) >= 2 \

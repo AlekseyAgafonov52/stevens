@@ -13,9 +13,7 @@ DATA = json.load(open(os.path.join(os.path.dirname(__file__), "data", "contract_
 VERBOSE = "-v" in sys.argv
 # Снятые на сайте диалоги, которые расходятся с правилами контракта — правило важнее (сообщено в тред контракта)
 OVERRIDE = {
-    # Новое требование пользователя 26.10: встречи также отмечаются выполненными.
-    ("Т12-15", 0): {"kind": "completed", "awaiting_reply": False, "record": None},
-    ("Т12-6", 1): {"kind": "completed", "awaiting_reply": False, "record": None},
+    # Meetings are not completable; keep original clarify/delete-offer scenarios.
     # Ф6: пока Стивенс переспрашивает о записи, новую не делаем — hold_reask (раздел 7, Ф6)
     ("Т6-4", 1): {"kind": "clarify", "awaiting_reply": True, "record": None},
     ("Т6-6", 1): {"kind": "clarify", "awaiting_reply": True, "record": None},

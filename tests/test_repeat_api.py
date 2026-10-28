@@ -72,7 +72,8 @@ DIALOG = [
     ("ммм ну это", "clarify", lambda r: r["awaiting_reply"]),
     ("да записать всё", "created", lambda r: len(r["records"]) == 2),
     ("завтра в 11 созвон с Олегом потом купить корм", "confirm", None),
-    ("нет", "cancelled", None),
+    # Under the current multi-item contract "нет" means "What should I fix?".
+    ("нет", "clarify", lambda r: r["awaiting_reply"]),
     # Заметки не предлагаются как задачи без срока, но находятся
     ("покажи все заметки", "found", lambda r: texts(r) == ["Идея для стартапа"]),
     ("найди заметку про стартап", "found", lambda r: texts(r) == ["Идея для стартапа"]),

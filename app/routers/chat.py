@@ -51,7 +51,7 @@ WHICH_LIMIT = 5
 # deterministic parser has falsely identified an imperative creation.
 SCHEDULE_QUESTION_RE = re.compile(
     r"^\s*(?:(?:а|ну|и)\s+)?(?:"
-    r"сколько\b|расскажи(?:те)?\b|"
+    r"сколько\b|есть\s+ли\b|во\s+сколько\b|есть\s+что(?:-нибудь)?\b|"
     r"какие\s+(?:у\s+меня\s+)?планы\b|"
     r"что\s+у\s+меня\b|"
     r"у\s+меня\s+.+?\bмного\s+(?:дел|встреч|задач)\b)", re.I)
@@ -356,6 +356,12 @@ async def process_draft(ctx: Ctx, draft: dict) -> dict:
         ctx.conv.pending = None
         text, speech = ctx.say("clarify_generic")
         return reply("clarify", text, speech, awaiting=True, buttons=[CANCEL])
+    # An adapter/LLM may omit has_subject even though "Встреча с Машей"
+    # already contains an explicit participant. Never ask "С кем встреча?"
+    # when the title answers that question.
+    if kind == "meeting" and not draft.get("has_subject", True) and re.search(
+            r"\b(?:встреча|созвон|встречу)\s+(?:с|со)\s+[^\s,.!?]+", draft["text"], re.I):
+        draft["has_subject"] = True
     if kind == "meeting" and not draft.get("has_subject", True):
         return clarify(ctx, "clarify_meeting_person", draft)
     if kind == "busy":
@@ -1769,6 +1775,10 @@ async def answer_delete(ctx: Ctx, p: nlu.Parse) -> dict:
         text, speech = ctx.say("found_none")
         return reply("found", text, speech, total=0)
     candidates = exact(found, p) or found
+    # A recurring series is one logical object, even when it has many occurrences.
+    # Process explicit "всё/вообще" before ambiguous matching of separate days.
+    if one := only_series(ctx, candidates):
+        return await delete_record(ctx, one, p)
     # Несколько встреч «с Иваном» на разные дни — нельзя удалять последнюю по фокусу.
     if not (p.date or p.time or p.ref) and len({(r.date, r.time) for r in candidates}) > 1:
         return which_one(ctx, candidates, "delete")
@@ -1935,6 +1945,24 @@ def bulk_scope(ctx: Ctx, p: nlu.Parse) -> str:
     return "" if p.filter_type == "note" else "за все дни"
 
 
+def bulk_delete_prompt(ctx: Ctx, count: int, scope: str,
+                       forms: tuple[str, str, str] | None, kind: str | None) -> tuple[str, str | None]:
+    """Correct accusative case for one entry; do not render '1 встреча'."""
+    if count == 1:
+        noun, pronoun = {
+            "meeting": ("встречу", "она"), "task": ("задачу", "она"),
+            "reminder": ("напоминание", "оно"), "note": ("заметку", "она"),
+            "busy": ("занятость", "она"),
+        }.get(kind, ("дело", "оно"))
+        location = f" {scope}" if scope else ""
+        return (f"Удалить 1 {noun}{location}? Вот {pronoun}:",
+                f"Удалить 1 {noun}{location}? Скажите «да» или «нет».")
+    text, speech = ctx.say("bulk_delete_confirm", {"count": count, "scope": scope}, count_forms=forms)
+    if not scope:
+        text, speech = (re.sub(r"\s+\?", "?", x) if x else x for x in (text, speech))
+    return text, speech
+
+
 async def answer_bulk_delete(ctx: Ctx, p: nlu.Parse) -> dict:
     """Сначала показываем, что удалится, и спрашиваем; одну запись удаляем сразу (с «Вернуть»)."""
     rows = await focused(ctx, p) if p.ref and ctx.found else []
@@ -1960,10 +1988,12 @@ async def answer_bulk_delete(ctx: Ctx, p: nlu.Parse) -> dict:
         text, speech = ctx.say("bulk_none", {"scope": scope})
         return reply("found", text, speech, total=0)
     ordered = sorted(rows, key=lambda r: (r.date or "9999-99-99", r.time or "99:99", r.id))
-    ctx.conv.pending = Pending("bulk_delete", {"ids": [r.id for r in ordered], "forms": forms})
-    text, speech = ctx.say("bulk_delete_confirm", {"count": len(rows), "scope": scope}, count_forms=forms)
-    if not scope:  # «удали все заметки»: у заметок нет дней
-        text, speech = (re.sub(r"\s+\?", "?", x) if x else x for x in (text, speech))
+    ctx.conv.pending = Pending("bulk_delete", {
+        "ids": [r.id for r in ordered], "forms": forms,
+        "request_text": " ".join(ctx.raw.lower().split()), "scope": scope,
+        "filter_type": p.filter_type,
+    })
+    text, speech = bulk_delete_prompt(ctx, len(rows), scope, forms, p.filter_type)
     return reply("confirm", text, speech, records=[r.to_contract() for r in ordered[:FOUND_LIMIT]], total=len(rows),
                  awaiting=True, buttons=[button_action("Да, удалить все", "confirm_yes"),
                                          button_action("Нет", "cancel", style="secondary")])
@@ -2237,13 +2267,8 @@ async def answer_move_when(ctx: Ctx, pending: Pending, raw: str) -> dict | None:
     changes = move_changes(p)
     changes["time"] = changes["time"] or pending.draft.get("time")
     changes["date"] = changes["date"] or pending.draft.get("date")
-    # После «перенеси её» мы сначала спрашивали день, затем должны спросить час.
-    # Для самостоятельной команды «перенеси её на пятницу» старый час сохраняем.
-    if (changes["date"] and not changes["time"] and record.time
-            and needs_time(record) and not pending.draft.get("date")):
-        day = parse_date(changes["date"])
-        if day is not None:
-            return await ask_move_time(ctx, record, day)
+    # A date-only reply to "На какой день?" preserves the original hour.
+    # Explicit time in the next reply uses the date retained in pending.
     queue = pending.draft.get("queue") or []
     answer = await move_one(ctx, record, changes)
     if answer["kind"] != "updated" or not queue:
@@ -2521,6 +2546,37 @@ async def answer_fix(ctx: Ctx, wrong: str, right: str, verb: bool = False) -> di
     return None
 
 
+async def remove_word_from_focus(ctx: Ctx, word: str) -> dict:
+    """«Убери слово молоко» edits the focused title, never deletes a record.
+
+    Only an explicitly focused record or a unique record among recently shown
+    matches. A bare word must never select and modify an unrelated record.
+    """
+    rows = []
+    if ctx.found:
+        rows = await owner_records(ctx, Record.id.in_(ctx.found))
+    else:
+        record = await owned_record(ctx, ctx.conv.focus)
+        if record and record.deleted_at is None:
+            rows = [record]
+    pattern = re.compile(rf"(?<!\w){re.escape(word)}(?!\w)", re.I)
+    matched = [r for r in rows if pattern.search(r.text)]
+    if len(matched) != 1:
+        return examples("not_understood", "not_understood", ctx, EXAMPLES)
+    record = matched[0]
+    title = " ".join(pattern.sub("", record.text).split()).strip(" ,.!?:—-")
+    if not title:
+        return examples("not_understood", "not_understood", ctx, EXAMPLES)
+    record.text = title[:300]
+    ctx.conv.focus = record.id
+    ctx.conv.pending = None
+    await ctx.db.commit()
+    data = record.to_contract(marks=["new"])
+    values, speech_values = ctx.record_values(data)
+    text, speech = ctx.say("fixed", values, speech_values)
+    return reply("updated", text, speech, records=[data])
+
+
 def fix_which(ctx: Ctx, found: list[Record], wrong: str, right: str) -> dict:
     answer = which_one(ctx, found, "edit")
     ctx.conv.pending = Pending("edit", {"replace": [wrong, right]})
@@ -2724,6 +2780,23 @@ def is_new_request(p: nlu.Parse, raw: str) -> bool:
         return bool(nlu.CREATE_VERB_RE.search(raw.strip().lower()) or (p.text and len(nlu.keywords(p.text)) >= 2)
                     or p.repeat_days)
     return False
+
+
+def is_new_event_after_free_choice(p: nlu.Parse, raw: str) -> bool:
+    """Don't mistake a standalone calendar command for a free-slot selection.
+
+    Bare replies such as "давай в 16" and "в субботу в 16" still use the
+    offered slot, but a full event with its own title must be parsed afresh.
+    A meeting with one person's name has just ONE content keyword, so the
+    general is_new_request() heuristic is insufficient for this case.
+    """
+    if is_new_request(p, raw):
+        return True
+    if p.intent != "create" or p.only_when or not p.text or raw.rstrip().endswith("?"):
+        return False
+    if p.date and p.time:
+        return True
+    return bool(p.type == "meeting" and p.has_subject and (p.date or p.time))
 
 
 @router.post("/chat")
@@ -3158,6 +3231,16 @@ async def respond(ctx: Ctx, payload: ChatRequest) -> dict:
                      intent=rule_result.intent,
                      doubts=[d.model_dump(exclude_none=True) for d in rule_result.doubts],
                      parse=rule_result.model_dump(mode="json", by_alias=True))
+    # The next full user command is independent of free-slot selection. In
+    # particular "в субботу встреча с Машей с 16 до 17:30" must not get
+    # interpreted as a reply to a previous question about Friday slots.
+    if pending and pending.kind == "free_choice":
+        explicit = nlu.parse(raw, ctx.now)
+        if explicit.intent == "create" and explicit.type in ("meeting", "reminder", "task", "busy") and (
+                explicit.date or explicit.time or explicit.end_time) and is_new_event_after_free_choice(explicit, raw):
+            ctx.conv.pending = None
+            pending = None
+            p = explicit
     if pending and pending.kind == "ai_confirm":
         if NO_RE.match(raw) or nlu.is_cancel_reply(raw):
             return await handle_action(ctx, "cancel", None) or reply("cancelled", *ctx.say("cancelled"))
@@ -3173,11 +3256,24 @@ async def respond(ctx: Ctx, payload: ChatRequest) -> dict:
         return corrected
     if pending is None and not choices and (cancelled := await cancel_focused_occurrence(ctx, raw)):
         return cancelled
-    if choices and raw:
+    if choices and raw and not is_new_request(p, raw):
         rows = await records_by_ids(ctx, choices["ids"])
         if (pick := pick_choice(raw, rows, ctx.now)) and (answer := await handle_action(ctx, choices["action"], pick.id)):
             return answer
     if pending and pending.kind == "bulk_delete" and "d2" in ctx.features:
+        # Repeating the exact deletion request is NOT consent to delete.
+        # Preserve the original pending snapshot and repeat the same prompt.
+        if " ".join(raw.lower().split()) == pending.draft.get("request_text"):
+            rows = await records_by_ids(ctx, pending.draft["ids"])
+            if rows:
+                text, speech = bulk_delete_prompt(
+                    ctx, len(rows), pending.draft.get("scope", ""),
+                    pending.draft.get("forms"), pending.draft.get("filter_type"))
+                return reply("confirm", text, speech,
+                             records=[r.to_contract() for r in rows[:FOUND_LIMIT]],
+                             total=len(rows), awaiting=True, buttons=[
+                                 button_action("Да, удалить все", "confirm_yes"),
+                                 button_action("Нет", "cancel", style="secondary")])
         if NO_RE.match(raw):
             ctx.conv.pending = None
             text, speech = ctx.say("cancelled")
@@ -3226,8 +3322,18 @@ async def respond(ctx: Ctx, payload: ChatRequest) -> dict:
     if pending and pending.kind in ("multi", "confirm") and NO_RE.match(raw):
         if answer := await handle_action(ctx, "multi_no" if pending.kind == "multi" else "confirm_no", None):
             return answer
-    if (fix := fix_words(raw, ctx.now)) and (answer := await answer_fix(ctx, *fix)):
-        return answer
+    # «Убери слово молоко» is a *title edit*, not record deletion. We
+    # require an explicit context rather than guessing a global target.
+    if remove := re.fullmatch(r"(?:убери|удали|вычеркни)\s+слово\s+([А-Яа-яЁёA-Za-z-]+)[\s.!?]*", raw, re.I):
+        return await remove_word_from_focus(ctx, remove.group(1))
+    # A literal word replacement MUST match an existing record or an unfinished
+    # draft.  Falling through to generic edit routing could mutate an unrelated
+    # focused record ("исправь вертолёт на самолёт" after "Купить кефир").
+    if fix := fix_words(raw, ctx.now):
+        if answer := await answer_fix(ctx, *fix):
+            return answer
+        ctx.trace["intent"] = "unknown"
+        return examples("not_understood", "not_understood", ctx, EXAMPLES)
     ctx.trace["intent"] = p.intent
 
     # Ответ на уточнение (Р-45); не ответ — новый запрос, уточнение забываем (Р-33)
@@ -3240,7 +3346,8 @@ async def respond(ctx: Ctx, payload: ChatRequest) -> dict:
         return await answer_note(ctx, nlu.Parse(text=nlu.capitalize(raw.strip(" ,.!?:—-")) or None))
     # После показа свободных окон фраза «давай в 16» продолжает этот запрос.
     # Новая явная команда не перехватывается: пользователь может сменить тему.
-    if pending and pending.kind == "free_choice" and not nlu.is_cancel_reply(raw) and not is_new_request(p, raw):
+    if (pending and pending.kind == "free_choice" and not nlu.is_cancel_reply(raw)
+            and not is_new_request(p, raw) and not raw.rstrip().endswith("?")):
         chosen_time, _, _, when = nlu.parse_when(raw, ctx.now)
         if not chosen_time:
             chosen_time, _ = nlu.reply_time(raw)
@@ -3265,6 +3372,9 @@ async def respond(ctx: Ctx, payload: ChatRequest) -> dict:
                     "window": request.window, "subject": request.subject})
             return answer
 
+    if pending and pending.kind == "multi_fix" and is_new_request(p, raw):
+        ctx.conv.pending = None
+        pending = None
     if pending and pending.kind == "multi_fix" and not nlu.is_cancel_reply(raw):
         # «Нет» в групповом подтверждении означает желание поправить черновики,
         # а не отменить без возможности выбора.
@@ -3329,6 +3439,11 @@ async def respond(ctx: Ctx, payload: ChatRequest) -> dict:
         ctx.conv.pending = None
         text, speech = ctx.say("cancelled")
         return reply("cancelled", text, speech)
+    if pending and pending.kind in ("draft", "new_time", "confirm_no", "multi_ask") and re.fullmatch(r"ладно[.!\s]*", raw, re.I):
+        if pending.kind == "multi_ask":
+            return await ask_many(ctx, pending.draft["drafts"])
+        if answer := ask_again(ctx, pending):
+            return answer
     if pending and pending.kind in ("draft", "new_time", "confirm_no", "multi_ask") and (
             not is_new_request(p, raw) or answers_time(pending, raw, ctx.now, p)):
         if pending.kind == "multi_ask":

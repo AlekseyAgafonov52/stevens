@@ -37,6 +37,7 @@ async def lifespan(app: FastAPI):
         await conn.exec_driver_sql("ALTER TABLE records ADD COLUMN IF NOT EXISTS remind_before INTEGER")
         await conn.exec_driver_sql("ALTER TABLE records ADD COLUMN IF NOT EXISTS stash JSON")
         await conn.exec_driver_sql("ALTER TABLE chat_log ADD COLUMN IF NOT EXISTS raw_text VARCHAR(600)")
+        await conn.exec_driver_sql("ALTER TABLE chat_log ALTER COLUMN waiting TYPE VARCHAR(64)")
         await conn.exec_driver_sql("ALTER TABLE chat_log ADD COLUMN IF NOT EXISTS layer VARCHAR(8)")
         await conn.exec_driver_sql("ALTER TABLE chat_log ADD COLUMN IF NOT EXISTS confidence DOUBLE PRECISION")
         await conn.exec_driver_sql("ALTER TABLE push_subscriptions ADD COLUMN IF NOT EXISTS seen_at TIMESTAMPTZ DEFAULT now()")
