@@ -353,9 +353,7 @@ async def process_draft(ctx: Ctx, draft: dict) -> dict:
     if not draft.get("text") and kind == "busy":
         return clarify(ctx, "clarify_busy_what", draft)
     if not draft.get("text"):
-        ctx.conv.pending = None
-        text, speech = ctx.say("clarify_generic")
-        return reply("clarify", text, speech, awaiting=True, buttons=[CANCEL])
+        return clarify(ctx, "clarify_generic", draft)
     # An adapter/LLM may omit has_subject even though "Встреча с Машей"
     # already contains an explicit participant. Never ask "С кем встреча?"
     # when the title answers that question.
@@ -1079,6 +1077,12 @@ def merge_reply(pending: Pending, raw: str, now: datetime) -> dict | None:
     repeat_spans = repeat.spans if repeat else []
     rest = " ".join(nlu._cut(raw, info.spans + time_spans + repeat_spans).split()).strip(" ,.!?")
     changed = False
+    if not draft.get("text"):
+        parsed = nlu.parse(raw, now)
+        if answers_subject(pending, raw, parsed):
+            draft["text"] = parsed.text
+            draft["has_subject"] = parsed.has_subject
+            changed = True
     if repeat:
         until = repeat.until.isoformat() if repeat.until else (
             draft.get("repeat", {}).get("until") or draft.get("repeat_until"))
@@ -2738,6 +2742,14 @@ async def undo_series(ctx: Ctx, record: Record) -> dict:
 INFINITIVE_RE = re.compile(r"\b[а-яё]{3,}(?:ть|ться|тись|чь)\b", re.I)
 
 
+def answers_subject(pending: Pending, raw: str, p: nlu.Parse) -> bool:
+    """A title supplied after an empty-title prompt belongs to that draft."""
+    return bool(pending.kind == "draft" and not pending.draft.get("text")
+                and p.intent == "create" and p.text and not p.only_when
+                and not ACK_RE.match(raw.strip()) and not QUESTION_RE.match(raw.strip())
+                and not nlu.CREATE_VERB_RE.search(raw.strip().lower()))
+
+
 def answers_time(pending: Pending, raw: str, now: datetime, p: nlu.Parse | None = None) -> bool:
     """Ждём время, а в ответе оно есть без глагола «запиши/напомни»: «не слушай 13:00» — это ответ, мусор отбросим."""
     if pending.kind == "multi_ask":
@@ -3448,7 +3460,8 @@ async def respond(ctx: Ctx, payload: ChatRequest) -> dict:
         if answer := ask_again(ctx, pending):
             return answer
     if pending and pending.kind in ("draft", "new_time", "confirm_no", "multi_ask") and (
-            not is_new_request(p, raw) or answers_time(pending, raw, ctx.now, p)):
+            not is_new_request(p, raw) or answers_time(pending, raw, ctx.now, p)
+            or answers_subject(pending, raw, p)):
         if pending.kind == "multi_ask":
             answer = await answer_multi_ask(ctx, pending, raw)
         else:
