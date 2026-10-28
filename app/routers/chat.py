@@ -1774,7 +1774,7 @@ async def answer_delete(ctx: Ctx, p: nlu.Parse) -> dict:
         return reply("clarify", text, speech, awaiting=True, buttons=[CANCEL])
     found = clear_matches(await find(ctx, p), p)
     if p.time:
-        found = [r for r in found if r.time == p.time] or found
+        found = [r for r in found if r.time == p.time]
     if not found:
         text, speech = ctx.say("found_none")
         return reply("found", text, speech, total=0)
@@ -1783,14 +1783,11 @@ async def answer_delete(ctx: Ctx, p: nlu.Parse) -> dict:
     # Process explicit "всё/вообще" before ambiguous matching of separate days.
     if one := only_series(ctx, candidates):
         return await delete_record(ctx, one, p)
-    # Несколько встреч «с Иваном» на разные дни — нельзя удалять последнюю по фокусу.
-    if not (p.date or p.time or p.ref) and len({(r.date, r.time) for r in candidates}) > 1:
-        return which_one(ctx, candidates, "delete")
-    if one := only_series(ctx, candidates):
-        return await delete_record(ctx, one, p)
-    if one := single(ctx, candidates):
-        return await delete_record(ctx, one, p)
-    return which_one(ctx, found, "delete")
+    # An explicit search must not silently prefer the last discussed record.
+    # Pronouns/ordinals are handled above; one recurring series is handled separately.
+    if len(candidates) == 1:
+        return await delete_record(ctx, candidates[0], p)
+    return which_one(ctx, candidates, "delete")
 
 
 def only_series(ctx: Ctx, rows: list[Record]) -> Record | None:
