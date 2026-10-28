@@ -1,4 +1,4 @@
-"""Серверное распознавание речи через Yandex SpeechKit (контракт v1.6, раздел 4.3)."""
+"""Серверное распознавание речи через Yandex SpeechKit."""
 import logging
 import os
 

@@ -1,4 +1,4 @@
-/** Одно хранилище состояния первого варианта. */
+/** Одно хранилище состояния приложения. */
 import { useSyncExternalStore } from 'react';
 import type { ChatRequest, ChatResponse, RecordItem } from '../api/types';
 

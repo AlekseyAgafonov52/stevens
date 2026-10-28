@@ -1,4 +1,4 @@
-"""Вход по логину и паролю — раздел 14 контракта v1.4."""
+"""Вход по логину и паролю."""
 import asyncio
 import re
 import secrets
@@ -68,7 +68,7 @@ async def register(payload: object = Body(default=None), db: AsyncSession = Depe
     except IntegrityError:  # двойной клик «Зарегистрироваться»: логин занял соседний запрос
         await db.rollback()
         return error(409, "login_taken")
-    # Аккаунт создаётся пустым: песочница не переносится (Р-181)
+    # Аккаунт создаётся пустым: песочница не переносится
     return await _issue(db, account)
 
 

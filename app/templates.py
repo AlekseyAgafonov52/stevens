@@ -1,4 +1,4 @@
-"""Шаблоны ответов — разделы 9 и 15.6 контракта v1.4, слово в слово.
+"""Шаблоны ответов.
 
 Для ответа выбирается ID, затем случайный вариант (подряд один и тот же
 не повторяем). Переменные: {text} {date} {time} {when} {period} {type}
@@ -110,7 +110,7 @@ TEMPLATES: dict[str, tuple[list[str], str | None]] = {
         "{Period} {types_gen} не запланировано. Следующее — «{text}», {when}.",
         "{Period} у вас нет {types_gen}. Ближайшее — {when}: «{text}».",
     ], "{Period} {types_gen} нет."),
-    # Без nearest вторая фраза list_type_empty не нужна (раздел 9)
+    # Без nearest вторая фраза list_type_empty не нужна
     "list_type_empty_alone": ([
         "{Period} {types_gen} нет.",
         "{Period} {types_gen} не запланировано.",

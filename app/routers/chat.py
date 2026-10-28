@@ -1,7 +1,7 @@
-"""POST /api/chat — контракт v1.6; диалог, проверки и выполнение подтверждённых действий.
+"""POST /api/chat: диалог, проверки и выполнение подтверждённых действий.
 
 Единый стык разбора — app/ai/understanding.py; внутренний Parse сохранён адаптером.
-Даты, проверки, действия и тексты ответов — здесь, по шаблонам раздела 9.
+Даты, проверки, действия и тексты ответов — здесь, тексты по шаблонам app/templates.py.
 """
 from __future__ import annotations
 
@@ -42,7 +42,7 @@ EXAMPLES = [
     "В пятницу в 15:00 созвон с Аней",
     "Что у меня на этой неделе?",
 ]
-HELP_EXAMPLES = EXAMPLES + ["Каждый день в 11 пить воду"]  # контракт v1.5, 6.3: те же три + ещё одно умение (повтор)
+HELP_EXAMPLES = EXAMPLES + ["Каждый день в 11 пить воду"]  # те же три + ещё одно умение (повтор)
 FOUND_LIMIT = 50
 WHICH_LIMIT = 5
 
@@ -57,7 +57,7 @@ SCHEDULE_QUESTION_RE = re.compile(
     r"у\s+меня\s+.+?\bмного\s+(?:дел|встреч|задач)\b)", re.I)
 
 
-# ── Память диалога: незавершённое уточнение по conversation_id (Р-45) ──
+# ── Память диалога: незавершённое уточнение по conversation_id ──
 
 @dataclass
 class Pending:
@@ -154,7 +154,7 @@ class Ctx:
     hold: "Pending | None" = None                   # незаконченная запись ждёт, пока отвечаем на вопрос про планы
 
     def greeting(self) -> str:
-        """{greeting} по времени суток (контракт v1.5, 6.2)."""
+        """{greeting} по времени суток."""
         hour = self.now.hour
         if 6 <= hour < 12:
             return "Доброе утро"
@@ -187,7 +187,7 @@ class Ctx:
 # ── Записи ────────────────────────────────────────────
 
 def draft_record(draft: dict, marks: list[str]) -> dict:
-    """Черновик в формате Record: id null, метка draft (раздел 6)."""
+    """Черновик в формате Record: id null, метка draft."""
     return {
         "id": None, "type": draft["type"], "text": draft["text"], "date": draft.get("date"),
         "time": draft.get("time"), "end_time": draft.get("end_time"), "date_kind": draft["date_kind"],
@@ -273,7 +273,7 @@ def by_keywords(rows: list[Record], p: nlu.Parse) -> list[Record]:
     return rank_records(rows, p.keywords, p.required)
 
 
-# ── Создание: проверки раздела 8 ──────────────────────
+# ── Создание: проверки ──────────────────────────────
 
 def clarify(ctx: Ctx, template_id: str, draft: dict, quick: list[tuple[str, str]] | None = None,
             values: dict | None = None) -> dict:
@@ -384,7 +384,7 @@ async def process_draft(ctx: Ctx, draft: dict) -> dict:
     elif draft.get("date_kind") == "none":
         draft["date_kind"] = "exact"
 
-    # Дата или время в прошлом (Р-36)
+    # Дата или время в прошлом
     today = ctx.today.isoformat()
     # Занятость уже идёт («сегодня с 9 до 18», а сейчас 10) — не прошлое, пока не кончилась
     start_time = draft.get("time")
@@ -417,7 +417,7 @@ async def process_draft(ctx: Ctx, draft: dict) -> dict:
                                values={"when": values["when"], "next": said})
         return clarify(ctx, "clarify_date_past", past, quick, values={"when": values["when"]})
 
-    # Высокий риск ошибки — «правильно понял?» (Р-19); разбор неуверенный — «верно понял?» с причиной
+    # Высокий риск ошибки — «правильно понял?»; разбор неуверенный — «верно понял?» с причиной
     if (draft.get("ambiguous") or draft.get("doubt")) and not draft.get("confirmed"):
         ctx.conv.pending = Pending("confirm", draft)
         values, speech_values = ctx.record_values(draft_record(draft, []))
@@ -457,7 +457,7 @@ async def process_draft(ctx: Ctx, draft: dict) -> dict:
                 CANCEL,
             ])
 
-    # Совпадение встреч: только встречи, по точному времени начала (Р-26)
+    # Совпадение встреч: только встречи, по точному времени начала
     if kind == "meeting" and not draft.get("keep_both"):
         busy = await owner_records(ctx, Record.type == TaskType.meeting, Record.date == draft["date"],
                                    Record.time == draft["time"])
@@ -470,7 +470,7 @@ async def process_draft(ctx: Ctx, draft: dict) -> dict:
                 values, _ = ctx.record_values(draft_record(draft, []))
                 text, speech = ctx.say("conflict_many", {"time": draft["time"], "count": len(busy),
                                                          "when": values["when"]})
-            # «Перенести существующую» — только если встреча на это время одна (контракт v1.5, 6.3)
+            # «Перенести существующую» — только если встреча на это время одна
             buttons = [button_action("Другое время для новой", "change_new_time")]
             if len(busy) == 1:
                 buttons.append(button_action("Перенести существующую", "move_existing", busy[0].id))
@@ -989,7 +989,7 @@ async def answer_free_days(ctx: Ctx, p: nlu.Parse) -> dict:
 
 
 def undo_button(ctx: Ctx, record: Record) -> list[dict]:
-    """Д10: «Отменить» под каждым created с одной сохранённой записью (15.4)."""
+    """Д10: «Отменить» под каждым created с одной сохранённой записью."""
     return [button_action("Отменить", "undo", record.id, style="secondary")]
 
 
@@ -1294,7 +1294,7 @@ async def answer_list(ctx: Ctx, p: nlu.Parse) -> dict:
         if p.ask == "exists" and p.filter_type:
             text, speech = ctx.say("list_type_yes", values, speech_values, count_forms=TYPE_FORMS[p.filter_type])
         else:
-            # Про один тип — его формы вместо «дело|дела|дел» (раздел 9)
+            # Про один тип — его формы вместо «дело|дела|дел»
             forms = TYPE_FORMS[p.filter_type] if p.filter_type else None
             text, speech = ctx.say("list_some", values, speech_values, count_forms=forms)
         if busy_rows:
@@ -1309,7 +1309,7 @@ async def answer_list(ctx: Ctx, p: nlu.Parse) -> dict:
     if p.query_mode in ("count", "workload", "summary"):
         return answer_list_insight(ctx, p, [], busy_rows, shown, period)
 
-    # Пусто — ближайшая будущая запись (того же типа, если спрашивали про тип) (Р-17)
+    # Пусто — ближайшая будущая запись (того же типа, если спрашивали про тип)
     after = max(period.end + timedelta(days=1), ctx.today).isoformat()
     later = [r for r in await owner_records(ctx, Record.date.is_not(None), Record.date >= after,
                                             Record.type == TaskType(p.filter_type) if p.filter_type
@@ -2117,7 +2117,7 @@ async def answer_move(ctx: Ctx, p: nlu.Parse) -> dict:
     changes = move_changes(p)
     found = await focused(ctx, p)
     if EDIT_ASK_RE.match(ctx.raw) and not (p.date or p.time or p.shift) and found and (one := single(ctx, found)):
-        # «Измени последнюю запись» без того, что менять — спрашиваем, запись держим (контракт v1.5, Ф12)
+        # «Измени последнюю запись» без того, что менять — спрашиваем, запись держим
         ctx.conv.focus = one.id
         ctx.conv.pending = Pending("edit_ask", {"record_id": one.id})
         text, speech = ctx.say("edit_ask", {"text": one.text})
@@ -2582,7 +2582,7 @@ def fix_which(ctx: Ctx, found: list[Record], wrong: str, right: str) -> dict:
     return answer
 
 
-# ── Кнопки-действия (раздел 6, 15.3) ──────────────────
+# ── Кнопки-действия ──────────────────
 
 async def owned_record(ctx: Ctx, record_id: int | None) -> Record | None:
     if record_id is None:
@@ -3320,7 +3320,7 @@ async def respond(ctx: Ctx, payload: ChatRequest) -> dict:
         return examples("not_understood", "not_understood", ctx, EXAMPLES)
     ctx.trace["intent"] = p.intent
 
-    # Ответ на уточнение (Р-45); не ответ — новый запрос, уточнение забываем (Р-33)
+    # Ответ на уточнение; не ответ — новый запрос, уточнение забываем
     pending = ctx.conv.pending
     if pending and pending.kind == "move_all" and not is_new_request(p, raw):
         if answer := await answer_move_all_reply(ctx, pending, raw):
@@ -3453,7 +3453,7 @@ async def respond(ctx: Ctx, payload: ChatRequest) -> dict:
     asked = ctx.conv.pending
     ctx.conv.pending = None
     if asked and asked.kind in HOLD_KINDS and asked.draft.get("ask") and asked.draft.get("text"):
-        # Незаконченная запись держится (контракт v1.5, Ф6): новое не записываем, на вопросы отвечаем
+        # Незаконченная запись держится: новое не записываем, на вопросы отвечаем
         if p.intent in HOLD_BLOCK:
             return hold_reask(ctx, asked)
         if p.intent in HOLD_PASS:

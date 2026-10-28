@@ -93,7 +93,7 @@
 .cal__deleted { height: 40px; padding: 0 var(--sp-5); display: flex; align-items: center; font-size: var(--fs-meta); color: var(--c-text-2); white-space: pre; }
 .cal__restore { border: 0; background: transparent; padding: 0; font-size: var(--fs-meta); font-weight: 500; color: var(--c-text); cursor: pointer; }
 
-/* Карточка в панели: отступ 10 12, мета 12, текст 14 (07, 2.4) */
+/* Карточка в панели: отступ 10 12, мета 12, текст 14 */
 .card--compact { padding: var(--sp-4) var(--sp-5); gap: var(--sp-4); }
 .card--compact .card__meta { font-size: var(--fs-small); }
 .card--compact .card__text { font-size: var(--fs-button); }

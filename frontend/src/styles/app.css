@@ -1,11 +1,11 @@
 /* Первый вариант. Числа без токена — из этих документов. */
 
-/* ── Каркас (02, 2) ─────────────────────────────────── */
+/* ── Каркас ─────────────────────────────────── */
 .app { height: 100dvh; display: flex; flex-direction: column; padding: 0 env(safe-area-inset-right) 0 env(safe-area-inset-left); }
 .app__body { flex: 1; display: flex; min-height: 0; position: relative; }
 .app__main { flex: 1; min-width: 0; display: flex; flex-direction: column; position: relative; background: var(--c-bg); }
 
-/* ── Шапка (02, 2.1) ────────────────────────────────── */
+/* ── Шапка ────────────────────────────────── */
 .header {
   height: var(--header-h);
   flex-shrink: 0;
@@ -77,7 +77,7 @@
   cursor: pointer;
 }
 
-/* Меню (02, 2.1): скругление 12, отступ 6, минимум 220, пункт 36 */
+/* Меню: скругление 12, отступ 6, минимум 220, пункт 36 */
 .menu { position: relative; }
 .menu__list {
   position: absolute;
@@ -123,7 +123,7 @@
   .new-dialog:not(:disabled):hover, .sandbox-badge:hover { background: var(--c-bubble); }
 }
 
-/* ── Лента (02, 2.2–2.3) ────────────────────────────── */
+/* ── Лента ────────────────────────────── */
 .feed-wrap { flex: 1; min-height: 0; position: relative; }
 .feed { height: 100%; overflow-y: auto; padding: var(--sp-9) var(--gutter) var(--sp-5); overscroll-behavior: contain; }
 .feed__column { max-width: var(--column); margin: 0 auto; display: flex; flex-direction: column; gap: var(--sp-7); }
@@ -190,7 +190,7 @@
 .to-new { position: absolute; left: 0; right: 0; bottom: var(--sp-5); display: flex; justify-content: center; pointer-events: none; }
 .to-new__pill { pointer-events: auto; box-shadow: var(--shadow-float); }
 
-/* ── Карточка (02, 3) ───────────────────────────────── */
+/* ── Карточка ───────────────────────────────── */
 .card {
   padding: var(--sp-5) var(--sp-6);
   border-radius: var(--r-card);
@@ -220,7 +220,7 @@
 .card--busy .card__icon { color: var(--c-text-2); }
 .card--busy.card--conflict { background: var(--c-alarm-bg); border-color: var(--c-alarm-line); }
 
-/* ── Пилюли (02, 4) ─────────────────────────────────── */
+/* ── Пилюли ─────────────────────────────────── */
 .pill {
   height: var(--pill-h);
   padding: 0 var(--sp-6);
@@ -255,7 +255,7 @@
   .pill { white-space: normal; text-align: left; height: auto; min-height: var(--pill-h); padding-block: var(--sp-2); }
 }
 
-/* ── Низ: статус и строка ввода (02, 2.4–2.6) ───────── */
+/* ── Низ: статус и строка ввода ───────── */
 /* На iPhone со скруглённым экраном (радиус углов ≈ 55) поле стоит на 26 от низа и боков:
    26 + радиус «таблетки» 28 ≈ 55, поэтому её закругления идут параллельно углам экрана.
    Отступ считаем от высоты полоски «домой» (34), у экранов без неё она 0 — там обычные отступы */
@@ -428,7 +428,7 @@
 .rec-text span { direction: ltr; unicode-bidi: plaintext; }
 .rec-timer { font-size: var(--fs-button); color: var(--c-text-2); font-variant-numeric: tabular-nums; }
 
-/* ── Окна подтверждения (02, 2.7) ───────────────────── */
+/* ── Окна подтверждения ───────────────────── */
 .overlay { position: fixed; inset: 0; background: var(--c-overlay); display: flex; align-items: center; justify-content: center; z-index: 50; padding: var(--sp-10); }
 .modal { width: 360px; max-width: 100%; padding: var(--sp-12); border-radius: 16px; background: var(--c-surface); box-shadow: var(--shadow-float); }
 .modal__title { font-size: var(--fs-body); font-weight: 600; color: var(--c-text); }
@@ -459,7 +459,7 @@
   .transfer__item { grid-template-columns: 1fr; }
 }
 
-/* ── Экран входа (02, 1) ────────────────────────────── */
+/* ── Экран входа ────────────────────────────── */
 .auth { min-height: 100dvh; background: var(--c-bg); padding: 110px var(--sp-10) var(--sp-12); display: flex; justify-content: center; }
 .auth__column { width: 400px; max-width: 100%; display: flex; flex-direction: column; }
 .auth__title-row { display: flex; align-items: baseline; justify-content: center; gap: var(--sp-3); }
@@ -562,7 +562,7 @@
 
 .crash { min-height: 100dvh; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: var(--sp-4); }
 
-/* ── Телефон (02, 5) ────────────────────────────────── */
+/* ── Телефон ────────────────────────────────── */
 @media (max-width: 760px) {
   .new-dialog { width: 36px; padding: 0; justify-content: center; }
   .header__right, .header__left { gap: var(--sp-2); }

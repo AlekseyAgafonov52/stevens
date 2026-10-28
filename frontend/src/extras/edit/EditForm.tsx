@@ -33,7 +33,7 @@ export function draftRecord(date: string): RecordItem {
   };
 }
 
-/** Встреча: за сколько напомнить — 5, 10, 15, 30 минут или 1 час (контракт v1.5, Ф5) */
+/** Встреча: за сколько напомнить — 5, 10, 15, 30 минут или 1 час */
 const REMIND_DEFAULT = 15;
 const REMIND_CHOICES = [5, 10, 15, 30, 60];
 const remindOptions = (current: number | null | undefined) =>

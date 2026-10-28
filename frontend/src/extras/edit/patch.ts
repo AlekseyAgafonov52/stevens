@@ -1,4 +1,4 @@
-/** Проверка формы правки и изменённые поля; контракт v1.4, 15.5. */
+/** Проверка формы правки и изменённые поля. */
 import type { RecordItem, RecordPatch } from '../../api/types';
 
 export type EditValues = { text: string; date: string; time: string; end?: string; remindBefore?: number };

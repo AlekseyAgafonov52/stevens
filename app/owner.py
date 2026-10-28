@@ -1,4 +1,4 @@
-"""Заголовок режима (раздел 14): Authorization: Bearer <token> в аккаунте или
+"""Заголовок режима: Authorization: Bearer <token> в аккаунте или
 X-Client-Id: <uuid> в песочнице. Пришли оба — используется Authorization.
 Не пришло ни одного — общая демо-база.
 """

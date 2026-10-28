@@ -53,7 +53,7 @@ export function CalendarToggle() {
   const open = useApp((s) => s.calendarOpen);
   const layout = useLayout();
   const previous = useRef(layout);
-  // Сменилась ширина окна: на широком панель открыта, на остальных закрыта (07, 2.1)
+  // Сменилась ширина окна: на широком панель открыта, на остальных закрыта
   useEffect(() => {
     if (previous.current === layout) return;
     previous.current = layout;

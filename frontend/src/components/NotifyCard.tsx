@@ -1,4 +1,4 @@
-/** Карточка уведомления сверху на открытой вкладке (контракт v1.5, Ф10): уходит сама через 10 с. */
+/** Карточка уведомления сверху на открытой вкладке: уходит сама через 10 с. */
 import { Bell, X } from 'lucide-react';
 import { useSyncExternalStore } from 'react';
 import { T } from '../content/texts';

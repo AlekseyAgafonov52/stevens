@@ -1,7 +1,7 @@
-"""Даты и числа для текстов ответа — по разделу 9 контракта v1.4.
+"""Даты и числа для текстов ответа.
 
 Все функции получают «сегодня» явно: бэк берёт его из client_time запроса,
-а не из часов сервера (раздел 3).
+а не из часов сервера.
 """
 from __future__ import annotations
 
@@ -28,7 +28,7 @@ TYPE_FORMS = {
 
 
 def plural(n: int, f1: str, f2: str, f3: str) -> str:
-    """{count:ф1|ф2|ф3} — число цифрами и нужная форма (Р-126)."""
+    """{count:ф1|ф2|ф3} — число цифрами и нужная форма."""
     tail100, tail10 = n % 100, n % 10
     if tail10 == 1 and tail100 != 11:
         form = f1
@@ -69,7 +69,7 @@ def short_date(value: date, today: date) -> str:
 
 
 def date_speech(value: date, today: date) -> str:
-    """{date} в speech: без дня недели и сокращений (Р-127)."""
+    """{date} в speech: без дня недели и сокращений."""
     diff = (value - today).days
     if diff == 0:
         return "сегодня"

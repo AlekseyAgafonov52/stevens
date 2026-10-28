@@ -49,7 +49,7 @@ app.add_middleware(
 
 @app.exception_handler(HTTPException)
 async def http_error(request: Request, exc: HTTPException):
-    # Ошибки по контракту — {"error": "<код>"}
+    # Ошибки — всегда {"error": "<код>"}
     content = exc.detail if isinstance(exc.detail, dict) else {"error": str(exc.detail)}
     return JSONResponse(status_code=exc.status_code, content=content)
 

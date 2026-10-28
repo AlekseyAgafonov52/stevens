@@ -1,5 +1,5 @@
-"""Таблицы по контракту v1.4: аккаунты по логину (раздел 14), песочницы по
-X-Client-Id, записи с мягким удалением (15.4).
+"""Таблицы: аккаунты по логину, песочницы по
+X-Client-Id, записи с мягким удалением.
 
 Имена таблиц новые (accounts, records…): старые таблицы прежней версии
 (users, tasks) в той же базе не мешают и не используются.
@@ -39,7 +39,7 @@ class Account(Base):
     __tablename__ = "accounts"
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    # Храним как ввели, сравниваем в нижнем регистре (Р-189)
+    # Храним как ввели, сравниваем в нижнем регистре
     login: Mapped[str] = mapped_column(String(32), nullable=False)
     login_lower: Mapped[str] = mapped_column(String(32), unique=True, index=True, nullable=False)
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
@@ -57,7 +57,7 @@ class AuthToken(Base):
 
 
 class Sandbox(Base):
-    """Песочница: своя копия демо-данных на устройство (раздел 14)."""
+    """Песочница: своя копия демо-данных на устройство."""
     __tablename__ = "sandboxes"
 
     client_id: Mapped[str] = mapped_column(String(64), primary_key=True)
@@ -121,7 +121,7 @@ class Record(Base):
     stash: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
     def remind_minutes(self) -> int:
-        """За сколько минут до встречи уведомление (контракт v1.5: по умолчанию 15)."""
+        """За сколько минут до встречи уведомление (по умолчанию 15)."""
         return self.remind_before if self.remind_before is not None else REMIND_BEFORE_DEFAULT
 
     def repeat_contract(self) -> dict | None:
@@ -131,7 +131,7 @@ class Record(Base):
         return {"weekdays": [int(d) for d in days.split(",")], "until": until or None}
 
     def to_contract(self, marks: list[str] | None = None, highlight: str | None = None) -> dict:
-        """Record из раздела 6 контракта."""
+        """Запись в формате ответа API."""
         return {
             "id": self.id,
             "type": self.type.value if self.type else None,

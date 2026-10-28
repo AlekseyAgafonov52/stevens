@@ -1,4 +1,4 @@
-"""REST для календаря и правки — раздел 15.5 контракта v1.4."""
+"""REST для календаря и правки."""
 from datetime import date, datetime, timezone
 
 from fastapi import APIRouter, Body, Depends, Query

@@ -214,7 +214,7 @@ def _parse_time(text: str) -> tuple[str | None, bool, list[tuple[int, int]]]:
             if ampm and ampm.group(1).lower() in ("вечера", "дня") and h < 12:
                 h += 12
             elif not ampm and not word and len(m.group(1)) == 1 and 1 <= h <= 7:
-                # «в 2:00» — как «в 2»: ставим день и переспрашиваем (Р-19). «в 02:00» — точно ночь
+                # «в 2:00» — как «в 2»: ставим день и переспрашиваем. «в 02:00» — точно ночь
                 h += 12
                 ambiguous = True
             return f"{h:02d}:{mm:02d}", ambiguous, spans
@@ -237,7 +237,7 @@ def _parse_time(text: str) -> tuple[str | None, bool, list[tuple[int, int]]]:
             elif word and word.group(1).lower() in ("днём", "днем") and h < 8:
                 h += 12
             elif not word and 1 <= h <= 7:
-                # «в 7» — утро или вечер? Ставим вечер и переспрашиваем (Р-19)
+                # «в 7» — утро или вечер? Ставим вечер и переспрашиваем
                 h += 12
                 ambiguous = True
         return f"{h:02d}:00", ambiguous, spans
@@ -1365,7 +1365,7 @@ def parse(raw: str, now: datetime) -> Parse:
         result.intent = "bye"
         return result
 
-    # Благодарность: одна — thanks; с просьбой — выполняем просьбу (Р-124)
+    # Благодарность: одна — thanks; с просьбой — выполняем просьбу
     thanks = THANKS_RE.search(text)
     if thanks:
         result.thanks = True

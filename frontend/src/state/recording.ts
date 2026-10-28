@@ -11,7 +11,7 @@ import { offerWakeTip } from './wake';
 /** Быстро меняющееся — отдельно, чтобы не перерисовывать всё приложение */
 export const recordingStore = createStore({ transcript: '', level: 0, startedAt: 0 });
 
-/** Ф9: столько ждём первого слова после вопроса (контракт v1.5) */
+/** Ф9: столько ждём первого слова после вопроса */
 const AUTO_SILENCE_MS = 4000;
 
 let prefix = '';

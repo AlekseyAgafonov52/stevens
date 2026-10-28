@@ -26,7 +26,7 @@ export interface ChatRequest {
   client_time: IsoMoment;
   /** IANA, например "Europe/Moscow" — Intl.DateTimeFormat().resolvedOptions().timeZone */
   timezone: string;
-  /** Голос: что распознал браузер до поправок ослышки — только для журнала (контракт v1.5, Ф4) */
+  /** Голос: что распознал браузер до поправок ослышки — только для журнала */
   raw_text?: string | null;
 }
 
@@ -45,7 +45,7 @@ export type ResponseKind =
   | 'help'
   | 'thanks'
   | 'error'
-  // допы (контракт v1.4, раздел 15.3): deleted — Д2 и «Отменить» Д10, completed — Д3
+  // допы: deleted — Д2 и «Отменить» Д10, completed — Д3
   | 'deleted'
   | 'completed'
   // резерв: Д1 (изменение фразой) не делаем, бэк его не присылает; если придёт — рисовать по общим полям
@@ -95,7 +95,7 @@ export interface RecordItem {
   demo: boolean;
   marks: RecordMark[];
   highlight: HighlightField | null;
-  /** Только у встреч: за сколько минут прислать уведомление, по умолчанию 15 (контракт v1.5, Ф10) */
+  /** Только у встреч: за сколько минут прислать уведомление, по умолчанию 15 */
   remind_before?: number | null;
   /** Поля, спрятанные при смене типа: вернутся, если тип сменят обратно */
   stash?: RecordStash | null;

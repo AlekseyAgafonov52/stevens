@@ -1,4 +1,4 @@
-/** Ф23 Обучение в демо-режиме: шаги идут по ответам Stevens (контракт v1.5, Ф23). */
+/** Ф23 Обучение в демо-режиме: шаги идут по ответам Stevens. */
 import type { ChatResponse, RecordItem } from '../../api/types';
 import { api, errorKey } from '../../api';
 import { TOUR_STEPS } from '../../content/texts';
