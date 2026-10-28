@@ -13,11 +13,11 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from uuid import uuid4
 
-from fastapi import APIRouter, BackgroundTasks, Depends, Header
+from fastapi import APIRouter, BackgroundTasks, Depends
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app import chatlog, features, nlu, push, series
+from app import chatlog, nlu, push, series
 from app.database import get_db
 from app.models import REMIND_BEFORE_DEFAULT, DateKind, Record, TaskStatus, TaskType
 from app.owner import Owner, get_owner
@@ -148,7 +148,6 @@ class Ctx:
     db: AsyncSession
     conv: Conversation
     now: datetime
-    features: set[str]
     found: list[int] = field(default_factory=list)  # найденное прошлым ответом
     trace: dict = field(default_factory=dict)       # для журнала: разбор, шаблон, LLM
     raw: str = ""                                   # фраза как есть
@@ -329,10 +328,6 @@ def night_morning(ctx: Ctx, draft: dict) -> bool:
 
 
 async def process_draft(ctx: Ctx, draft: dict) -> dict:
-    if draft.get("type") == "note" and not features.on("f24"):
-        return examples("not_understood", "not_understood", ctx, EXAMPLES)
-    if (draft.get("type") == "busy" and not features.on("f25")) or (draft.get("repeat") and not features.on("f15")):
-        return examples("not_understood", "not_understood", ctx, EXAMPLES)
     if draft.get("repeat"):
         # Повтор: первый день — ближайший подходящий, сегодняшний только если время ещё впереди
         start = max(parse_date(draft.get("date")) or ctx.today, ctx.today)
@@ -995,7 +990,7 @@ async def answer_free_days(ctx: Ctx, p: nlu.Parse) -> dict:
 
 def undo_button(ctx: Ctx, record: Record) -> list[dict]:
     """Д10: «Отменить» под каждым created с одной сохранённой записью (15.4)."""
-    return [button_action("Отменить", "undo", record.id, style="secondary")] if "d10" in ctx.features else []
+    return [button_action("Отменить", "undo", record.id, style="secondary")]
 
 
 DOUBT_HINTS = {
@@ -1650,7 +1645,7 @@ async def delete_one(ctx: Ctx, record: Record, template: str = "deleted") -> dic
 def meeting_not_done(ctx: Ctx, meetings: list[Record]) -> dict:
     """Встречу не отмечают выполненной — предлагаем удалить; «да» голосом или кнопка удаляют её."""
     text, speech = ctx.say("completed_meeting_no")
-    if len(meetings) != 1 or "d2" not in ctx.features:
+    if len(meetings) != 1:
         return reply("clarify", text, speech, awaiting=True, buttons=[CANCEL])
     ctx.conv.focus = meetings[0].id
     ctx.conv.pending = Pending("meeting_delete", {"id": meetings[0].id})
@@ -2597,20 +2592,8 @@ async def owned_record(ctx: Ctx, record_id: int | None) -> Record | None:
 
 
 async def handle_action(ctx: Ctx, action_id: str, record_id: int | None) -> dict | None:
-    """Ответ на нажатие. None — действие не наше или доп выключен: разбираем текст."""
+    """Ответ на нажатие. None — действие не наше: разбираем текст."""
     pending = ctx.conv.pending
-    gate = {"delete": "f12", "complete": "f12", "restore": "f12", "restore_all": "f12", "edit": "f12",
-            "undo": "f5", "briefing": "f18", "move": "f17", "move_all_same": "f17", "move_all_each": "f17",
-            "delete_occurrence": "f15", "delete_series": "f15", "show_undated": "f7", "skip_undated": "f7",
-            "edit_existing": "f25"}.get(action_id)
-    if gate and not features.on(gate):
-        return examples("not_understood", "not_understood", ctx, EXAMPLES)
-    if action_id in ("delete_occurrence", "delete_series", "edit_existing") and not features.on("f12"):
-        return examples("not_understood", "not_understood", ctx, EXAMPLES)
-    if pending and pending.kind != "ai_confirm" and action_id in ("confirm_yes", "keep_both", "change_new_time", "move_existing", "edit_existing"):
-        required = "f12" if pending.kind == "bulk_delete" else "f25" if pending.draft.get("type") == "busy" else "f5"
-        if not features.on(required) or (pending.draft.get("repeat") and not features.on("f15")):
-            return examples("not_understood", "not_understood", ctx, EXAMPLES)
     if action_id == "cancel":
         ctx.conv.pending = None
         text, speech = ctx.say("cancelled")
@@ -2628,15 +2611,15 @@ async def handle_action(ctx: Ctx, action_id: str, record_id: int | None) -> dict
         return await answer_undated(ctx)
     if action_id == "skip_undated":
         return skip_undated(ctx)
-    if action_id in ("delete_occurrence", "delete_series") and "d2" in ctx.features:
+    if action_id in ("delete_occurrence", "delete_series"):
         record = await owned_record(ctx, record_id)
         if record and record.deleted_at is None:
             if action_id == "delete_series" and record.series_id:
                 return await delete_series(ctx, record)
             return await delete_one(ctx, record, "deleted_occurrence" if record.series_id else "deleted")
-    if action_id == "confirm_yes" and pending and pending.kind == "bulk_delete" and "d2" in ctx.features:
+    if action_id == "confirm_yes" and pending and pending.kind == "bulk_delete":
         return await bulk_delete(ctx, pending)
-    if action_id == "restore_all" and "d2" in ctx.features:
+    if action_id == "restore_all":
         return await restore_all(ctx)
     if action_id == "edit" and pending and pending.kind == "edit":
         record = await owned_record(ctx, record_id)
@@ -2682,8 +2665,7 @@ async def handle_action(ctx: Ctx, action_id: str, record_id: int | None) -> dict
             buttons = [button_text(label, send) for label, send in quick] + [CANCEL]
             return reply("clarify", text, speech, records=[existing.to_contract()], awaiting=True, buttons=buttons)
 
-    feature = {"undo": "d10", "restore": "d2", "delete": "d2", "complete": "d3"}.get(action_id)
-    if feature and feature in ctx.features:
+    if action_id in ("undo", "restore", "delete", "complete"):
         record = await owned_record(ctx, record_id)
         if not record:
             text, speech = ctx.say("found_none")
@@ -2817,13 +2799,9 @@ async def chat_endpoint(
     background: BackgroundTasks,
     owner: Owner = Depends(get_owner),
     db: AsyncSession = Depends(get_db),
-    x_stevens_features: str | None = Header(default=None),
 ):
-    # v1.6 не требует старого заголовка допов; явный заголовок оставлен для старого фронта.
-    features = ({"d2", "d3", "d10"} if x_stevens_features is None else
-                {f.strip().lower() for f in x_stevens_features.split(",") if f.strip()})
     ctx = Ctx(owner=owner, db=db, conv=conversation(owner, payload.conversation_id),
-              now=client_now(payload.client_time or ""), features=features)
+              now=client_now(payload.client_time or ""))
     started = clock.perf_counter()
     waiting = ctx.conv.pending.kind if ctx.conv.pending else None
     try:
@@ -3042,8 +3020,6 @@ async def cancel_named_occurrence(ctx: Ctx, raw: str) -> dict | None:
     if nlu.CREATE_VERB_RE.search(match["body"].strip().lower()):
         return None
     ctx.trace["intent"] = "delete"
-    if "d2" not in ctx.features or not features.on("f12"):
-        return examples("not_understood", "not_understood", ctx, EXAMPLES)
     time, ambiguous, time_spans, info = nlu.parse_when(match["body"], ctx.now)
     title = nlu._cut(match["body"], info.spans + time_spans)
     title = re.sub(r"\b(?:заняти[а-яё]*|урок[а-яё]*|репетитор[а-яё]*)\b", " ", title, flags=re.I)
@@ -3091,8 +3067,6 @@ async def cancel_focused_occurrence(ctx: Ctx, raw: str) -> dict | None:
     if match is None:
         return None
     ctx.trace["intent"] = "delete"
-    if "d2" not in ctx.features or not features.on("f15") or not features.on("f12"):
-        return examples("not_understood", "not_understood", ctx, EXAMPLES)
     _, _, _, info = nlu.parse_when(match["day"], ctx.now)
     if info.date is None and info.period is None:
         return reply("clarify", *ctx.say("clarify_generic"), awaiting=True, buttons=[CANCEL])
@@ -3139,8 +3113,6 @@ async def correct_series_until(ctx: Ctx, raw: str) -> dict | None:
     rest = nlu._cut(raw, [span]).strip(" ,.!?")
     if rest and not re.fullmatch(r"впер[её]д", rest, re.I):
         return None
-    if not features.on("f12") or not features.on("f15"):
-        return examples("not_understood", "not_understood", ctx, EXAMPLES)
     focus = await owned_record(ctx, ctx.conv.focus)
     if not focus or not focus.series_id or focus.deleted_at:
         return reply("clarify", *ctx.say("clarify_generic"), awaiting=True, buttons=[CANCEL])
@@ -3184,8 +3156,6 @@ async def correct_series_weekdays(ctx: Ctx, raw: str) -> dict | None:
     repeat = nlu.parse_repeat(rest, ctx.now)
     if not repeat or nlu._cut(rest, repeat.spans).strip(" ,.!?"):
         return None
-    if not features.on("f12") or not features.on("f15"):
-        return examples("not_understood", "not_understood", ctx, EXAMPLES)
     focus = await owned_record(ctx, ctx.conv.focus)
     if not focus or not focus.series_id or focus.deleted_at:
         return reply("clarify", *ctx.say("clarify_generic"), awaiting=True, buttons=[CANCEL])
@@ -3274,7 +3244,7 @@ async def respond(ctx: Ctx, payload: ChatRequest) -> dict:
         rows = await records_by_ids(ctx, choices["ids"])
         if (pick := pick_choice(raw, rows, ctx.now)) and (answer := await handle_action(ctx, choices["action"], pick.id)):
             return answer
-    if pending and pending.kind == "bulk_delete" and "d2" in ctx.features:
+    if pending and pending.kind == "bulk_delete":
         # Repeating the exact deletion request is NOT consent to delete.
         # Preserve the original pending snapshot and repeat the same prompt.
         if " ".join(raw.lower().split()) == pending.draft.get("request_text"):
@@ -3513,7 +3483,7 @@ async def respond(ctx: Ctx, payload: ChatRequest) -> dict:
                 return await answer_move(ctx, changed)
     # «Купил хлеб» — безопасно отмечаем найденную задачу до обращения к LLM,
     # чтобы неопределённый модельный ответ не подменял однозначное действие.
-    if p.intent == "unknown" and ctx.conv.pending is None and "d3" in ctx.features:
+    if p.intent == "unknown" and ctx.conv.pending is None:
         if answer := await answer_did(ctx, raw):
             return answer
     refine = nlu.needs_llm_review(p)
@@ -3555,15 +3525,9 @@ async def respond(ctx: Ctx, payload: ChatRequest) -> dict:
         return reply("clarify", text, speech, awaiting=True, buttons=[
             button_action("Да", "confirm_yes"), button_action("Нет", no, style="secondary")])
 
-    if (feature := features.BY_INTENT.get(p.intent)) and not features.on(feature):
-        p.intent = "unknown"  # фича выключена на сервере (STEVENS_FEATURES) — как будто её нет
     if p.intent == "cancel":
         ctx.conv.pending = None
         return reply("cancelled", *ctx.say("cancelled"))
-    if p.intent == "delete" and "d2" not in ctx.features:
-        p.intent = "unknown"
-    if p.intent == "complete" and "d3" not in ctx.features:
-        p.intent = "unknown"
 
     if p.intent == "create":
         many = ctx.trace.pop("_llm_items", None) or nlu.parse_many(raw, ctx.now)
@@ -3645,7 +3609,7 @@ async def respond(ctx: Ctx, payload: ChatRequest) -> dict:
         return reply("thanks", text, speech)
     if p.intent == "off_topic":
         return examples("off_topic", "off_topic", ctx, EXAMPLES)
-    if "d3" in ctx.features and (answer := await answer_did(ctx, raw)):
+    if answer := await answer_did(ctx, raw):
         return answer
     return examples("not_understood", "not_understood", ctx, EXAMPLES)
 

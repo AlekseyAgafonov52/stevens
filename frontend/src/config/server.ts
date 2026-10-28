@@ -1,13 +1,12 @@
 /**
- * Что включено на сервере (контракт v1.5, 1.1): список из GET /api/health.
- * Фичи, которой нет в списке, на экране нет совсем: ни кнопки, ни пункта меню, ни шага обучения.
- * Список держим до перезагрузки. Сервер не прислал список (старая версия) — считаем, что есть всё.
+ * Что сервер умеет сверх основного: список из GET /api/health. Сейчас там бывает только `stt` —
+ * распознавание речи на сервере, когда есть ключ Yandex Cloud. Список держим до перезагрузки.
  */
 import { createStore } from '../state/store';
 
-export type ServerFeature = `f${number}` | 'stt';
+export type ServerFeature = 'stt';
 
-export const serverFeatures = createStore<{ list: string[] | null }>({ list: null });
+const serverFeatures = createStore<{ list: string[] | null }>({ list: null });
 
 export function setServerFeatures(list: string[] | null): void {
   if (list === null && serverFeatures.get().list !== null) return;
@@ -15,7 +14,5 @@ export function setServerFeatures(list: string[] | null): void {
 }
 
 export function serverHas(key: ServerFeature): boolean {
-  const { list } = serverFeatures.get();
-  if (key === 'stt') return !!list?.includes('stt');
-  return list === null || list.includes(key);
+  return !!serverFeatures.get().list?.includes(key);
 }

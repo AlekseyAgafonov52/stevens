@@ -1,7 +1,6 @@
 /** Ф23 Обучение в демо-режиме: шаги идут по ответам Stevens (контракт v1.5, Ф23). */
 import type { ChatResponse, RecordItem } from '../../api/types';
 import { api, errorKey } from '../../api';
-import { serverHas, type ServerFeature } from '../../config/server';
 import { TOUR_STEPS } from '../../content/texts';
 import { briefingStore, declineBriefing } from '../../state/briefing';
 import { pressButton, resetSandbox, send } from '../../state/chat';
@@ -18,40 +17,35 @@ type Kind = ChatResponse['kind'];
 export type TourStatus = 'off' | 'offer' | 'running' | 'done';
 
 /**
- * Шаги обучения (контракт v1.5, Ф23): фича шага, флажок и какими ответами закрываются подсказки —
- * последний ответ закрывает шаг. Шаг 16 («Уведомление») и 17 («Календарь») закрывает сам фронт:
+ * Какими ответами закрываются подсказки шагов обучения: последний ответ закрывает шаг.
+ * Шаг 16 («Уведомление») и 17 («Календарь») закрывает сам фронт:
  * «Посмотреть» на карточке уведомления и перенос перетаскиванием в календаре.
- * Шаг выключенной на сервере фичи (нет в GET /api/health) не показывается.
  */
-type StepRule = { feature: ServerFeature; on: boolean; expect: (Kind | 'notify-viewed' | 'calendar-moved')[] };
-const RULES: StepRule[] = [
-  { feature: 'f5', on: true, expect: ['created'] },
-  { feature: 'f5', on: true, expect: ['created'] },
-  { feature: 'f5', on: true, expect: ['created'] },
-  { feature: 'f7', on: true, expect: ['list'] },
-  { feature: 'f8', on: true, expect: ['found'] },
-  { feature: 'f6', on: true, expect: ['clarify', 'created'] },
-  { feature: 'f11', on: true, expect: ['conflict', 'clarify', 'created'] },
-  { feature: 'f12', on: true, expect: ['completed'] },
-  { feature: 'f12', on: true, expect: ['found', 'updated', 'deleted', 'created'] },
-  { feature: 'f14', on: true, expect: ['confirm', 'created'] },
-  { feature: 'f8', on: true, expect: ['found'] },
-  { feature: 'f25', on: true, expect: ['created'] },
-  { feature: 'f16', on: true, expect: ['clarify'] },
-  { feature: 'f19', on: true, expect: ['person'] },
-  { feature: 'f24', on: true, expect: ['created', 'found'] },
-  { feature: 'f10', on: true, expect: ['notify-show', 'notify-viewed'] as StepRule['expect'] },
-  { feature: 'f13', on: true, expect: ['calendar-open', 'calendar-moved'] as StepRule['expect'] },
-];
+type Expect = (Kind | 'notify-viewed' | 'calendar-moved')[];
+const EXPECT: Expect[] = [
+  ['created'],
+  ['created'],
+  ['created'],
+  ['list'],
+  ['found'],
+  ['clarify', 'created'],
+  ['conflict', 'clarify', 'created'],
+  ['completed'],
+  ['found', 'updated', 'deleted', 'created'],
+  ['confirm', 'created'],
+  ['found'],
+  ['created'],
+  ['clarify'],
+  ['person'],
+  ['created', 'found'],
+  ['notify-show', 'notify-viewed'],
+  ['calendar-open', 'calendar-moved'],
+] as Expect[];
 
-export type TourStep = (typeof TOUR_STEPS)[number] & { expect: StepRule['expect'] };
+export type TourStep = (typeof TOUR_STEPS)[number] & { expect: Expect };
 
-/** Включённые шаги: флажок в коде и фича на сервере */
 export function tourSteps(): TourStep[] {
-  return TOUR_STEPS.flatMap((step, i) => {
-    const rule = RULES[i];
-    return rule && rule.on && serverHas(rule.feature) ? [{ ...step, expect: rule.expect }] : [];
-  });
+  return TOUR_STEPS.map((step, i) => ({ ...step, expect: EXPECT[i] }));
 }
 
 const STEP_DONE_MS = 1400;

@@ -148,7 +148,7 @@ function MonthGrid() {
 
 type Ghost = { record: RecordItem; timer: ReturnType<typeof setTimeout> };
 
-function DayList({ canComplete, canDelete }: { canComplete: boolean; canDelete: boolean }) {
+function DayList() {
   const { selected, records, loading, failed } = useSyncExternalStore(calendar.subscribe, calendar.get);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [adding, setAdding] = useState(false);
@@ -295,12 +295,12 @@ function DayList({ canComplete, canDelete }: { canComplete: boolean; canDelete: 
                   calendar.set((c) => ({ records: c.records.map((r) => (r.id === saved.id ? saved : r)) }));
                   void load();
                 }}
-                onDelete={canDelete ? () => void remove(record) : undefined}
+                onDelete={() => void remove(record)}
               />
             );
           }
           const checkable = record.type === 'task' || record.type === 'reminder' || record.type === 'meeting' || record.type === null;
-          const leading = !canComplete ? undefined : checkable ? (
+          const leading = checkable ? (
             <button
               type="button"
               className={`cal__check ${record.status === 'done' ? 'cal__check--done' : ''}`}
@@ -342,7 +342,7 @@ function DayList({ canComplete, canDelete }: { canComplete: boolean; canDelete: 
   );
 }
 
-export function CalendarPanel({ canComplete, canDelete }: { canComplete: boolean; canDelete: boolean }) {
+export function CalendarPanel() {
   const open = useApp((s) => s.calendarOpen);
   const layout = useLayout();
 
@@ -374,7 +374,7 @@ export function CalendarPanel({ canComplete, canDelete }: { canComplete: boolean
       <div className="cal__scroll">
         <MonthGrid />
         <div className="cal__divider" />
-        <DayList canComplete={canComplete} canDelete={canDelete} />
+        <DayList />
       </div>
       <MoveNotice />
       <DragGhost />

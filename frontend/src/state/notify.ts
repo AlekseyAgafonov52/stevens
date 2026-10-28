@@ -13,7 +13,6 @@
  * у каждого дела кнопки «Перенести», «Выполнено», «Удалить» (components/OverdueActions.tsx).
  */
 import { api } from '../api';
-import { serverHas } from '../config/server';
 import type { RecordItem } from '../api/types';
 import { T } from '../content/texts';
 import { timezone } from '../lib/clock';
@@ -421,7 +420,7 @@ export function initNotify(): void {
     if (response.kind !== 'created') return;
     void reschedule();
     if (notifyGranted()) return;
-    if (!serverHas('f10') || !supported() || Notification.permission !== 'default' || storage.notifyDeclined()) return;
+    if (!supported() || Notification.permission !== 'default' || storage.notifyDeclined()) return;
     const record = response.records.find((r) => fireAt(r) !== null && (fireAt(r) ?? 0) > Date.now());
     const messageId = lastAnswerId(store.get().messages);
     if (record?.time && messageId) notifyStore.set({ offer: { messageId, time: record.time } });

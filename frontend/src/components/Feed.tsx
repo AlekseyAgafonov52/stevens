@@ -1,9 +1,7 @@
 /** Лента */
 import { ArrowDown, CircleAlert, Mic, RotateCw } from 'lucide-react';
-import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
-import { serverFeatures } from '../config/server';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { T } from '../content/texts';
-import { feedBottomInsetClass, waitingWithDots } from '../extensions/flags';
 import { useMedia } from '../lib/install';
 import { useBriefingOffer } from '../state/briefing';
 import { retry, send } from '../state/chat';
@@ -11,35 +9,26 @@ import { emitActivity } from '../state/events';
 import { lastAnswerId, store, useApp, type FeedMessage, type PendingMessage } from '../state/store';
 import { Answer } from './Answer';
 import { BriefingOffer } from './BriefingOffer';
-import { Dots } from './Dots';
 import { Pill } from './Pill';
 
 const NEAR_BOTTOM = 200;
-const DOTS_AFTER = 300;
 const SLOW_AFTER = 8000;
 
 function Thinking({ message }: { message: PendingMessage }) {
-  useSyncExternalStore(serverFeatures.subscribe, serverFeatures.get);
   const server = useApp((s) => s.server);
-  const [stage, setStage] = useState<'none' | 'dots' | 'slow'>('none');
+  const [slow, setSlow] = useState(false);
   useEffect(() => {
-    const elapsed = Date.now() - message.startedAt;
-    const dots = setTimeout(() => setStage('dots'), Math.max(0, DOTS_AFTER - elapsed));
-    const slow = setTimeout(() => setStage('slow'), Math.max(0, SLOW_AFTER - elapsed));
-    return () => {
-      clearTimeout(dots);
-      clearTimeout(slow);
-    };
+    const timer = setTimeout(() => setSlow(true), Math.max(0, SLOW_AFTER - (Date.now() - message.startedAt)));
+    return () => clearTimeout(timer);
   }, [message.startedAt]);
-  const withDots = waitingWithDots();
   if (server === 'waking') {
     return <div className="thinking" aria-hidden="true"><span className="thinking__text">{T.status_waking}</span></div>;
   }
-  if (stage === 'none' || (!withDots && stage !== 'slow')) return <div className="thinking thinking--empty" />;
+  // Пока ждём ответ, думает персонаж; через 8 с — подпись
+  if (!slow) return <div className="thinking thinking--empty" />;
   return (
     <div className="thinking" aria-hidden="true">
-      {withDots && <Dots />}
-      {stage === 'slow' && <span className="thinking__text">{T.thinking_slow}</span>}
+      <span className="thinking__text">{T.thinking_slow}</span>
     </div>
   );
 }
@@ -104,7 +93,6 @@ function StartScreen() {
 }
 
 export function Feed() {
-  useSyncExternalStore(serverFeatures.subscribe, serverFeatures.get);
   const messages = useApp((s) => s.messages);
   const unseen = useApp((s) => s.unseen);
   const ref = useRef<HTMLDivElement>(null);
@@ -164,7 +152,7 @@ export function Feed() {
 
   return (
     <div className="feed-wrap">
-      <div ref={ref} className={`feed ${feedBottomInsetClass()}`} role="log" aria-live="polite" onScroll={onScroll}>
+      <div ref={ref} className="feed feed--with-mascot" role="log" aria-live="polite" onScroll={onScroll}>
         {messages.length === 0 ? (
           <StartScreen />
         ) : (

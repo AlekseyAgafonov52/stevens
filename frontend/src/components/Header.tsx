@@ -1,7 +1,6 @@
 /** Шапка */
 import { ChevronDown, Plus } from 'lucide-react';
 import { useState, useSyncExternalStore } from 'react';
-import { serverFeatures, serverHas } from '../config/server';
 import { T } from '../content/texts';
 import { HeaderRightStart, tourMenuItem } from '../extensions/points';
 import { install, installHintKey, isInstalled, useCanInstall, useMedia, useTitlebarMode } from '../lib/install';
@@ -15,7 +14,6 @@ import { Modal } from './Modal';
 import { TransferScreen } from './TransferScreen';
 
 export function Header() {
-  useSyncExternalStore(serverFeatures.subscribe, serverFeatures.get);
   const mode = useApp((s) => s.mode);
   const login = useApp((s) => s.login);
   const empty = useApp((s) => s.messages.length === 0);
@@ -27,19 +25,19 @@ export function Header() {
   // На телефоне справа тесно: календарь уходит влево к «Новому диалогу», иначе «Stevens» съезжает с центра
   const phone = useMedia('(max-width: 760px)');
   // Браузер не дал установить кнопкой — пункт всё равно есть и подсказывает, как установить через меню браузера
-  const installItem = isInstalled() || !serverHas('f21')
+  const installItem = isInstalled()
     ? []
     : [{ label: T.menu_install, onSelect: () => (canInstall ? void install() : setHint(installHintKey())) }];
 
-  // Ф10: «Уведомления» с галочкой, меню не закрывается; нет f10 на сервере или браузер не умеет — пункта нет
+  // Ф10: «Уведомления» с галочкой, меню не закрывается; браузер не умеет — пункта нет
   const notifyOn = useSyncExternalStore(notifyStore.subscribe, () => notifyStore.get().on);
-  const notifyItem = serverHas('f10') && typeof window !== 'undefined' && 'Notification' in window
+  const notifyItem = typeof window !== 'undefined' && 'Notification' in window
     ? [{ label: T.menu_notify, checked: notifyOn,
          onSelect: () => void (notifyOn ? disableNotify() : enableNotify()) }]
     : [];
 
   // Импорт и выгрузка: все записи одним JSON — для обработки в другой ИИ
-  const transferItems = serverHas('f26') ? [{ label: T.menu_transfer, onSelect: () => setDialog('transfer') }] : [];
+  const transferItems = [{ label: T.menu_transfer, onSelect: () => setDialog('transfer') }];
 
   const sandboxItems = [
     ...tourMenuItem(T.menu_tour),

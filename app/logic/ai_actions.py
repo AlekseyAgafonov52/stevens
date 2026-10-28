@@ -8,7 +8,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING
 
-from app import features, nlu, series
+from app import nlu, series
 from app.ai.schema import Result
 from app.logic.record_import import snapshot
 from app.logic.record_validation import apply_patch
@@ -19,16 +19,6 @@ if TYPE_CHECKING:
     from app.routers.chat import Ctx
 
 MUTATIONS = {"delete", "complete", "move", "edit", "fix", "undo"}
-
-
-def enabled(result: Result) -> bool:
-    return (features.on("f12") and (result.intent != "move" or features.on("f17"))
-            and (not result.target or not result.target.series or features.on("f15")))
-
-
-def permitted(ctx: Ctx, result: Result) -> bool:
-    return enabled(result) and (result.intent != "delete" or "d2" in ctx.features) \
-        and (result.intent != "complete" or "d3" in ctx.features)
 
 
 def patch_record(record: Record, values: dict) -> str | None:
@@ -45,7 +35,7 @@ async def propose(ctx: Ctx, result: Result, selected: list[Record] | None = None
     ctx.trace.update(intent=result.intent, layer="llm", confidence=result.confidence,
                      parse=result.model_dump(mode="json", by_alias=True),
                      doubts=[d.model_dump(exclude_none=True) for d in result.doubts])
-    if result.intent not in MUTATIONS or result.confidence < 0.5 or not permitted(ctx, result):
+    if result.intent not in MUTATIONS or result.confidence < 0.5:
         return chat.examples("not_understood", "not_understood", ctx, chat.EXAMPLES)
     target = result.target
     undo = None
@@ -100,8 +90,6 @@ async def propose(ctx: Ctx, result: Result, selected: list[Record] | None = None
                                                        "ids": ctx.conv.choices["ids"]})
         return answer
     if target and target.series == "all":
-        if not features.on("f15"):
-            return chat.examples("not_understood", "not_understood", ctx, chat.EXAMPLES)
         expanded = []
         for row in chat.one_per_series(rows, ctx.now):
             expanded += await series.upcoming(ctx.db, ctx.owner, row.series_id, ctx.today) if row.series_id else [row]
@@ -172,8 +160,6 @@ async def execute(ctx: Ctx) -> dict:
     ctx.trace.update(intent=result.intent, layer=result.layer, confidence=result.confidence,
                      parse=result.model_dump(mode="json", by_alias=True),
                      doubts=[d.model_dump(exclude_none=True) for d in result.doubts])
-    if not permitted(ctx, result):
-        return chat.examples("not_understood", "not_understood", ctx, chat.EXAMPLES)
     found = (await ctx.db.execute(chat.select(Record).where(ctx.owner.filter(), Record.id.in_(data["ids"])).with_for_update())).scalars().all()
     rows = list(found)
     if len(rows) != len(data["ids"]) or any(snapshot(r) != data["before"].get(r.id) for r in rows):
@@ -194,8 +180,6 @@ async def execute(ctx: Ctx) -> dict:
         if not action or action["id"] not in ("undo", "restore", "restore_all"):
             return chat.reply("clarify", *ctx.say("clarify_generic"), buttons=[chat.CANCEL])
         restoring = action["id"] != "undo"
-        if ("d2" if restoring else "d10") not in ctx.features:
-            return chat.examples("not_understood", "not_understood", ctx, chat.EXAMPLES)
         stamp = datetime.now(timezone.utc)
         for record in rows:
             record.deleted_at = None if restoring else stamp

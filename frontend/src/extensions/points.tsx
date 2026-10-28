@@ -1,10 +1,9 @@
 /**
  * Точки расширения: места на экране для допов. Код допа грузится динамическим импортом;
- * фича выключена на сервере (GET /api/health) — точка пуста.
+ * пока код не загрузился, точка пуста.
  */
-import { lazy, Suspense, useSyncExternalStore, type ReactNode } from 'react';
+import { lazy, Suspense, type ReactNode } from 'react';
 import type { RecordItem } from '../api/types';
-import { serverFeatures, serverHas, type ServerFeature } from '../config/server';
 import { store, type AnswerMessage } from '../state/store';
 
 const calendar = () => import('../extras/calendar');
@@ -24,29 +23,18 @@ const DeletedLabel = lazy(() => deleted().then((m) => ({ default: m.DeletedLabel
 
 const wrap = (node: ReactNode) => <Suspense fallback={null}>{node}</Suspense>;
 
-/** Фича включена на сервере (GET /api/health): нет — места на экране не занимает */
-function useServer(key: ServerFeature): boolean {
-  useSyncExternalStore(serverFeatures.subscribe, serverFeatures.get);
-  return serverHas(key);
-}
-
 /** Д6 / Ф13: кнопка календаря в шапке */
 export function HeaderRightStart() {
-  const on = useServer('f13');
-  return on ? wrap(<CalendarToggle />) : null;
+  return wrap(<CalendarToggle />);
 }
 
 /** Д6 / Ф13: панель календаря справа */
 export function LayoutSidePanel() {
-  const on = useServer('f13');
-  const editing = useServer('f12');
-  return on ? wrap(<CalendarPanel canComplete={editing} canDelete={editing} />) : null;
+  return wrap(<CalendarPanel />);
 }
 
 /** Д10: «Исправить» первой в ряду кнопок ответа created с одной записью; активна только у последнего */
 export function AnswerExtraButtons({ message, isLast }: { message: AnswerMessage; isLast: boolean }) {
-  const on = useServer('f12');
-  if (!on) return null;
   const { response } = message;
   if (response.kind !== 'created' || response.records.length !== 1 || response.records[0].id === null) return null;
   if (response.records[0].marks.includes('deleted')) return null;
@@ -79,23 +67,28 @@ export function RecordCardState({ record }: { record: RecordItem }) {
 
 /** Д14: персонаж на строке ввода */
 export function InputBarOverlay() {
-  const on = useServer('f22');
-  return on ? wrap(<MascotPerch />) : null;
+  return wrap(<MascotPerch />);
 }
 
 /** Д14: персонаж справа от «Stevens» на экране входа */
 export function LoginTitleAside() {
-  const on = useServer('f22');
-  return on ? wrap(<MascotTitle />) : null;
+  return wrap(<MascotTitle />);
 }
 
 /** Д15: обучение в песочнице — над строкой статуса */
 export function BottomTop() {
-  const on = useServer('f23');
-  return on ? wrap(<TourBar />) : null;
+  return wrap(<TourBar />);
 }
 
 /** Д15: «Пройти обучение» в меню песочницы и аккаунта */
 export function tourMenuItem(label: string): { label: string; onSelect: () => void }[] {
-  return serverHas('f23') ? [{ label, onSelect: () => void import('../extras/tour/state').then((m) => m.startTour()) }] : [];
+  return [{ label, onSelect: () => void import('../extras/tour/state').then((m) => m.startTour()) }];
+}
+
+/** Допы без своего места на экране: Д12 озвучка, Д13 автослушание, CSS персонажа; Д15 — подписка на ответы */
+export function initExtras(): void {
+  void import('../extras/speech').then((m) => m.init());
+  void import('../extras/autolisten').then((m) => m.init());
+  void import('../styles/mascot.css');
+  void import('../extras/tour/state').then((m) => m.init());
 }

@@ -5,7 +5,6 @@ import type { RecordItem } from '../api/types';
 import { T } from '../content/texts';
 import { metaParts, repeatText } from '../lib/dates';
 import { isPast } from '../lib/dates';
-import { recordCardDeleted } from '../extensions/flags';
 import { RecordCardState } from '../extensions/points';
 
 const TYPE_ICON = { meeting: Users, task: CircleCheck, reminder: Bell, note: StickyNote, busy: Hourglass } as const;
@@ -48,7 +47,7 @@ export function RecordCard({ record, withDate, isNew = false, compact = false, c
   const fresh = useNewFlag(isNew && record.marks.includes('new'));
   const draft = record.marks.includes('draft');
   const isConflict = conflict || record.marks.includes('conflict');
-  const deleted = recordCardDeleted(record);
+  const deleted = record.marks.includes('deleted');
   const done = record.status === 'done';
   const past = !draft && isPast(record);
   const Icon = record.type ? TYPE_ICON[record.type] : null;

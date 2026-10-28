@@ -42,7 +42,7 @@ async def transcribe(
         return JSONResponse(status_code=413, content={"error": "audio_too_long"})
     if not audio:
         return {"text": ""}
-    if not features.on("stt"):
+    if not features.stt_ready():
         return JSONResponse(status_code=503, content={"error": "stt_unavailable"})
     
     try:

@@ -11,7 +11,7 @@ import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { App } from './App';
 import { ErrorBoundary } from './components/ErrorBoundary';
-import { initExtras } from './extensions/flags';
+import { initExtras } from './extensions/points';
 import './state/recording';
 import { boot } from './state/session';
 import { initBriefing } from './state/briefing';
