@@ -12,9 +12,11 @@ READY = [f"f{n}" for n in range(27)]  # Ф0…Ф26, including atomic import/expo
 def stt_ready() -> bool:
     return bool(os.getenv("YANDEX_API_KEY") and os.getenv("YANDEX_FOLDER_ID"))
 
+def tts_ready() -> bool:
+    return bool(os.getenv("YANDEX_API_KEY") and os.getenv("YANDEX_FOLDER_ID"))
 
 def enabled() -> list[str]:
-    ready = READY + (["stt"] if stt_ready() else [])
+    ready = READY + (["stt"] if stt_ready() else []) + (["tts"] if tts_ready() else [])
     raw = os.getenv("STEVENS_FEATURES", "").strip()
     if not raw:
         return ready
