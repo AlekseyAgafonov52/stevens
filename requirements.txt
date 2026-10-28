@@ -10,4 +10,4 @@ passlib==1.7.4
 argon2-cffi==25.1.0
 pymorphy3==2.0.6
 pywebpush==2.0.3
-python-multipart
+python-multipart==0.0.32

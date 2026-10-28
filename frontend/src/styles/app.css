@@ -451,18 +451,12 @@
 .transfer__item { display: grid; grid-template-columns: 76px 1fr; column-gap: var(--sp-3); padding: 8px 10px; border-radius: 10px; background: var(--c-bg); font-size: var(--fs-meta); }
 .transfer__item--delete .transfer__text { text-decoration: line-through; color: var(--c-text-2); }
 .transfer__item--error { background: var(--c-alarm-bg); }
-.transfer__action { grid-row: span 2; font-weight: 600; color: var(--c-text-2); }
-.transfer__item--add .transfer__action { color: var(--c-accent); }
-.transfer__item--error .transfer__action { color: var(--c-alarm); }
 .transfer__text { color: var(--c-text); font-size: var(--fs-body); overflow-wrap: anywhere; }
-.transfer__meta { color: var(--c-text-2); }
-.transfer__buttons { display: flex; justify-content: flex-end; gap: var(--sp-3); }
 @media (max-width: 760px) {
   .overlay--transfer { padding: 0; }
   .transfer { padding: var(--sp-10); width: 100%; height: 100dvh; max-height: 100dvh; border-radius: 0; }
   .transfer__field { min-height: 180px; }
   .transfer__item { grid-template-columns: 1fr; }
-  .transfer__action { grid-row: auto; }
 }
 
 /* ── Экран входа (02, 1) ────────────────────────────── */
