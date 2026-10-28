@@ -75,8 +75,10 @@
 .cal__day--today .cal__num { border-color: var(--c-text); }
 .cal__day--selected .cal__num { background: var(--c-text); border-color: var(--c-text); color: var(--c-on-dark); font-weight: 600; }
 @media (hover: hover) { .cal__day:not(.cal__day--selected):hover .cal__num { background: var(--c-bubble); } }
-.cal__dots { display: flex; gap: 2px; height: 4px; margin-top: 2px; }
-.cal__dot { width: 4px; height: 4px; border-radius: 50%; background: var(--c-accent); }
+.cal__dots { display: flex; align-items: center; gap: 2px; height: var(--sp-2); margin-top: 2px; }
+/* 6px leaves a visible hollow center inside the 1px border (07, 2.3). */
+.cal__dot { width: var(--sp-2); height: var(--sp-2); flex-shrink: 0; border-radius: 50%; border: 1px solid var(--c-accent); background: transparent; }
+.cal__dot--done { background: var(--c-accent); }
 .cal__busy { width: 12px; height: 4px; border-radius: 2px; background: var(--c-busy-line); }
 
 .cal__divider { height: 1px; background: var(--c-line); margin: var(--sp-10) 0; }

@@ -32,6 +32,22 @@ export function countByDate(records: RecordItem[]): Map<string, number> {
   return map;
 }
 
+/** Show unfinished events first so a filled day never hides outstanding work. */
+export function dotsByDate(records: RecordItem[]): Map<string, ('open' | 'done')[]> {
+  const map = new Map<string, ('open' | 'done')[]>();
+  for (const record of records) {
+    if (!record.date || record.type === 'busy' || record.marks.includes('deleted')) continue;
+    const dots = map.get(record.date) ?? [];
+    dots.push(record.status === 'done' ? 'done' : 'open');
+    map.set(record.date, dots);
+  }
+  for (const [day, dots] of map) {
+    dots.sort((a, b) => Number(a === 'done') - Number(b === 'done'));
+    map.set(day, dots.slice(0, dotsFor(dots.length)));
+  }
+  return map;
+}
+
 /** Дни, где есть занятость: пары, работа, учёба */
 export function busyDates(records: RecordItem[]): Set<string> {
   return new Set(records.filter((r) => r.date && r.type === 'busy' && !r.marks.includes('deleted')).map((r) => r.date as string));
