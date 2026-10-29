@@ -122,9 +122,9 @@ export const api = {
   },
 
   /** Распознавание на сервере (Ф4): аудио одной фразы → текст */
-  async stt(audio: Blob): Promise<string> {
+  async stt(audio: Blob, timeoutMs = 25000): Promise<string> {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 25000);
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
       const response = await fetch(`${base}/api/stt`, {
         method: 'POST', body: audio, signal: controller.signal,
