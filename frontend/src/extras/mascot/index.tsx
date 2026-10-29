@@ -20,7 +20,7 @@ import { recordingStore } from '../../state/recording';
 import { store, useApp } from '../../state/store';
 import {
   BOW, BOWS_BEFORE_SHAKE, CLICK_COOLDOWN_MS, GREET, SHAKE, CLICK_RESET_MS, FLASH_MS, FRAME_MS, NIGHT_FROM, NIGHT_TO, READ_MS,
-  READ_WRITE_FADE_MS, STATE_FADE_MS, THINK_FRAMES, THINK_LONG_MS, THINK_STEP_MS, TYPING_PAUSE_MS, WRITE_FRAMES, WRITE_MS,
+  READ_WRITE_FADE_MS, STATE_FADE_MS, TYPING_PAUSE_MS, WRITE_FRAMES, WRITE_MS,
 } from './timing';
 
 const SVG = {
@@ -189,16 +189,8 @@ function useFrame(mood: Mood, night: boolean): Step {
     cycle(true);
   }, []);
 
-  // «Думает» дольше 1,5 с: точки → карандаш → сверяется, по кругу
-  const thinking = useSequence(mood === 'think', (set, after) => {
-    set({ frame: 'think', fade: STATE_FADE_MS });
-    if (still) return;
-    const next = (i: number) => {
-      set({ frame: THINK_FRAMES[i % THINK_FRAMES.length], fade: STATE_FADE_MS });
-      after(THINK_STEP_MS, () => next(i + 1));
-    };
-    after(THINK_LONG_MS, () => next(1));
-  }, []);
+  // «Думает»: только точки, и долго тоже — без карандаша и блокнота (Матвей, 29.10)
+  const thinking = useSequence(mood === 'think', (set) => set({ frame: 'think', fade: STATE_FADE_MS }), []);
 
   if (mood === 'write') return write ?? { frame: 'write-read', fade: STATE_FADE_MS };
   if (mood === 'think') return thinking ?? { frame: 'think', fade: STATE_FADE_MS };
