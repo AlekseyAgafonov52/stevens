@@ -10,12 +10,17 @@
  * «стоп» / «отмена» последним словом — отмена: микрофон выключается, в final ничего не уходит.
  * Сразу — когда браузер закрепил это слово (isFinal), иначе по паузе: «отмена встречи» так не оборвётся.
  *
+ * Гибрид (кроме Safari, при stt в features): живой текст и «стоп» — от браузера, итоговый текст — от SpeechKit.
+ * Тот же звук пишется в память (capture.ts), а когда фраза кончилась — уходит на /api/stt. SpeechKit не ответил —
+ * в final уходит текст браузера. По имени пишем с запасом: в запись попадает и само имя, и начало просьбы.
+ *
  * Перебить по имени: пока Стивенс говорит, фоновая запись идёт дальше (кроме Safari), и «Стивс» обрывает озвучку.
  * Его собственный голос из динамиков тоже попадает в микрофон: если в его фразе есть имя, пока он говорит,
  * имя не ловим (setEcho), а после фразы перезапускаем фоновую запись, чтобы старый текст не сработал.
  */
 import { api } from '../api';
 import { serverHas } from '../config/server';
+import { beginTake, captureAvailable, closeCapture, dropTake, endTake, openCapture } from './capture';
 import { isCancel } from './edit';
 
 export type VoiceError = 'denied' | 'no-mic' | 'no-speech' | 'failed' | 'service' | 'network';
@@ -63,6 +68,11 @@ const SILENCE_MS = 1800;
 const WAKE_WORD = /(?:^|[\s,.!?])(стив[еи]н\S*|ст[иы][вф]е?[сзc]?(?![а-яё])|stevens?\S*|steven\S*|steve?s?(?![a-z])|stivs?(?![a-z]))[\s,.!?—-]*/i;
 /** Сказали только имя и молчат — ждём фразу столько, потом снова слушаем фоном */
 const WAKE_WAIT_MS = 6000;
+/** Гибрид: ждём текст SpeechKit столько, потом отдаём текст браузера */
+const HYBRID_WAIT_MS = 3000;
+/** Запас записи: по кнопке — на запуск распознавания; по имени — само имя и начало просьбы */
+const PREROLL_BUTTON_S = 0.3;
+const PREROLL_WAKE_S = 3;
 
 const ERRORS: Record<string, VoiceError> = {
   'not-allowed': 'denied',
@@ -212,6 +222,55 @@ function wakePiece(pieces: string[]): number {
   return -1;
 }
 
+/** Гибрид — там, где второй захват микрофона не сбивает распознавание (не Safari), и сервер распознаёт */
+function hybridReady(): boolean {
+  return serverHas('stt') && !isSafari() && captureAvailable();
+}
+
+/** Микрофон для записи держим, только пока он нужен: слушаем имя или идёт запись */
+function releaseCapture(): void {
+  if (!wantArmed && !recognition && !serverRec) closeCapture();
+}
+
+/** Фраза ждёт текст SpeechKit. Новая запись не ждёт: прошлой фразе сразу уходит текст браузера */
+let pending: { browserText: string; settle: (text: string | null) => void } | null = null;
+
+function finishHybrid(browserText: string, take: Blob, pick: (heard: string) => string | null): void {
+  let done = false;
+  const settle = (text: string | null) => {
+    if (done) return;
+    done = true;
+    if (pending?.settle === settle) pending = null;
+    if (text) emit('final', text);
+  };
+  pending = { browserText, settle };
+  api.stt(take, HYBRID_WAIT_MS)
+    .then((heard) => {
+      const text = heard.trim() ? pick(heard.trim()) : null;
+      log('SpeechKit:', JSON.stringify(heard.trim()), text ? '' : '— беру текст браузера');
+      settle(text || browserText);
+    })
+    .catch(() => {
+      log('SpeechKit не ответил — беру текст браузера');
+      settle(browserText);
+    });
+}
+
+/**
+ * Из текста SpeechKit — только сказанное после имени, которое позвало Стивенса. Имена в самой просьбе
+ * («напомни позвонить Стивенсу») есть и в тексте браузера, значит, позвавшее стоит перед ними.
+ * Имени не нашли — null: в запас могла попасть чужая речь, надёжнее текст браузера.
+ */
+function afterName(command: string): (heard: string) => string | null {
+  return (heard) => {
+    const hits = [...heard.matchAll(new RegExp(WAKE_WORD.source, 'gi'))];
+    const index = hits.length - countNames(command) - 1;
+    const hit = index >= 0 ? hits[index] : undefined;
+    if (!hit) return null;
+    return heard.slice((hit.index ?? 0) + hit[0].length).replace(/\s+/g, ' ').trim() || null;
+  };
+}
+
 /**
  * Safari может не дать запустить распознавание вне нажатия. Тогда не выключаем вызов по имени,
  * а ждём любого следующего касания страницы и запускаем фоновую запись прямо в нём.
@@ -237,6 +296,8 @@ function armOnNextGesture(): void {
 function arm(inGesture = false): void {
   const Ctor = ctor();
   if (!Ctor || !wantArmed || recognition || armedRec) return;
+  // Гибрид: пишем в кольцо, пока ждём имя, — чтобы в запись попали имя и начало просьбы
+  if (hybridReady()) void openCapture();
   const rec = new Ctor();
   rec.lang = 'ru-RU';
   rec.interimResults = true;
@@ -284,6 +345,7 @@ function arm(inGesture = false): void {
       interimText = '';
       emit('wake');
       emit('state', 'recording');
+      if (hybridReady()) beginTake(PREROLL_WAKE_S);
       maxTimer = setTimeout(finish, MAX_MS);
       silenceTimer = setTimeout(finish, WAKE_WAIT_MS);
       // Столбики — вторым захватом микрофона; Safari от этого сбивает распознавание
@@ -333,14 +395,22 @@ function arm(inGesture = false): void {
         recognition = null;
         cleanupAudio();
         emit('state', 'idle');
+        const take = endTake();
+        const command = finalText.trim();
         // Тишина после имени — без «Не расслышал»: просто снова слушаем фоном
-        if (!cancelled && finalText.trim() && !isCancel(finalText)) emit('final', finalText.trim());
+        if (!cancelled && command && !isCancel(command)) {
+          if (take) finishHybrid(command, take, afterName(command));
+          else emit('final', command);
+        }
       } else if (recognition !== null) {
         return; // уже отпустили сторожем, а следом началась новая запись — её не трогаем
       }
     }
     clearTimeout(rearmTimer);
-    if (!wantArmed) return;
+    if (!wantArmed) {
+      releaseCapture();
+      return;
+    }
     // Браузер раз за разом сразу закрывает запись (так бывает в Safari и в приложении на айфоне) —
     // перезапускаем всё реже, а после нескольких раз ждём касания: иначе страница зависает
     quickEnds = !woke && !heardAny && Date.now() - startedAt < QUICK_END_MS ? quickEnds + 1 : 0;
@@ -396,6 +466,7 @@ async function startServer(reason: string): Promise<void> {
   rec.onstop = () => {
     serverRec = null;
     cleanupAudio();
+    releaseCapture();
     emit('state', 'idle');
     if (cancelled) return;
     if (!spoke || !chunks.length) {
@@ -452,6 +523,7 @@ export const voice = {
   },
 
   async start(): Promise<void> {
+    pending?.settle(pending.browserText);
     const Ctor = ctor();
     if (!Ctor && serverSttReady()) {
       await startServer('no SpeechRecognition');
@@ -481,6 +553,11 @@ export const voice = {
         stream = media;
         startLevel(media);
       }).catch(() => undefined);
+      if (hybridReady()) {
+        void openCapture().then((ok) => {
+          if (ok && recognition === rec) beginTake(PREROLL_BUTTON_S);
+        });
+      }
     };
     rec.onresult = (event) => {
       if (cancelled || recognition !== rec) return;
@@ -508,9 +585,11 @@ export const voice = {
       if (event.error === 'no-speech') return; // сообщим в onend
       if (event.error === 'aborted') return;
       cancelled = true;
+      dropTake();
       if ((ERRORS[event.error] === 'service' || ERRORS[event.error] === 'network') && serverSttReady()) {
         // Safari отказал в русской речи — переходим на распознавание на сервере
         release(rec);
+        releaseCapture();
         try { rec.abort(); } catch { /* уже остановлена */ }
         void startServer(event.error);
         return;
@@ -519,14 +598,18 @@ export const voice = {
       // Не разрешили микрофон: запись не начнётся, а onend может и не прийти — отпускаем сразу,
       // иначе кнопка остаётся в записи и не выключается до перезагрузки страницы
       release(rec);
+      releaseCapture();
       try { rec.abort(); } catch { /* уже остановлена */ }
     };
     rec.onend = () => {
       if (!release(rec)) return;
+      const take = endTake();
+      releaseCapture();
       log('закончил, текст:', JSON.stringify((finalText + ' ' + interimText).trim()));
       if (cancelled) return;
       const text = (finalText + ' ' + interimText).trim();
       if (isCancel(text)) log('отмена голосом');
+      else if (text && take) finishHybrid(text, take, (heard) => heard);
       else if (text) emit('final', text);
       else emit('error', 'no-speech');
     };
@@ -559,6 +642,8 @@ export const voice = {
   /** Отменить: ничего не отдавать */
   cancel(): void {
     cancelled = true;
+    pending?.settle(null);
+    dropTake();
     if (serverRec) {
       if (serverRec.state !== 'inactive') serverRec.stop();
       return;
@@ -602,7 +687,7 @@ export const voice = {
     // Иначе с задержкой: сразу после записи уходит запрос, и включать фоновую запись на миг незачем
     if (on && inGesture) arm(true);
     else if (on) rearmTimer = setTimeout(arm, 400);
-    else void disarmAndWait();
+    else void disarmAndWait().then(releaseCapture);
   },
 
   on<K extends keyof Events>(name: K, listener: Events[K]): () => void {
