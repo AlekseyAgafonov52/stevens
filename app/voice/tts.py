@@ -32,7 +32,7 @@ TTS_URL = "https://tts.api.cloud.yandex.net/speech/v1/tts:synthesize"
 VOICE = os.getenv("STEVENS_TTS_VOICE", "filipp")
 # Скорость речи: 1.0 — обычная, меньше — медленнее.
 SPEED = os.getenv("STEVENS_TTS_SPEED", "0.9")
-# Поле speech короткое по контракту (раздел 6): список вслух не читаем.
+# Поле speech короткое: список вслух не читаем.
 TTS_MAX_CHARS = 1000
 # Шаблоны повторяются («К вашим услугам», «Готово: …»), поэтому держим готовый звук
 # в памяти: это снимает и задержку перед ответом, и плату за повторный синтез.
@@ -149,7 +149,7 @@ def stress_marks(text: str) -> str:
 
 
 def _fail(reason: str) -> JSONResponse:
-    """Пауза и контрактная ошибка. Наружу — только код, без трассировки и тела ответа."""
+    """Пауза и ошибка в общем формате API. Наружу — только код, без трассировки и тела ответа."""
     global _blocked_until
     _blocked_until = time.monotonic() + PAUSE_SECONDS
     logger.error("Yandex TTS: %s", reason)
@@ -158,7 +158,7 @@ def _fail(reason: str) -> JSONResponse:
  
 @router.post("/api/tts")
 async def synthesize(body: Speech, owner: Owner = Depends(get_owner)):
-    if not features.on("tts"):
+    if not features.tts_ready():
         return JSONResponse(status_code=503, content={"error": "tts_unavailable"})
     text = stress_marks(agree_numbers(expand_dates(" ".join(body.text.split()))))
     if not text:
@@ -188,7 +188,7 @@ async def synthesize(body: Speech, owner: Owner = Depends(get_owner)):
         # Код ответа отличает «нет прав, не тот каталог или кончилась квота» (4xx)
         # от сбоя службы (5xx). Тело не пишем — политика app/ai/provider.py.
         return _fail(f"HTTP {error.response.status_code}")
-    except Exception as error:  # noqa: BLE001 — наружу всегда контрактная ошибка
+    except Exception as error:  # noqa: BLE001 — наружу всегда ошибка в общем формате API
         return _fail(type(error).__name__)
  
     audio = response.content
