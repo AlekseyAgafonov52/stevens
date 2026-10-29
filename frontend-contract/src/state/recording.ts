@@ -74,6 +74,10 @@ voice.on('wake', () => {
   setTimeout(() => emitActivity('wake'), 0);
 });
 
+// Перебили голосом, пока он говорил: замолкает и слушает, как после своего вопроса.
+// Был кашель, а не просьба, — через AUTO_SILENCE_MS тихо выключится
+voice.on('bargeIn', () => startRecording({ auto: true }));
+
 voice.on('state', (state) => {
   if (state === 'asking') setHint('voice_permission');
   if (state === 'recording') {
@@ -116,6 +120,9 @@ voice.on('interim', (text) => {
 });
 
 voice.on('level', (level) => {
+  // На сервере слов по ходу нет — что человек говорит, видно только по громкости.
+  // Иначе Д13 выключает запись через 4 с, даже если он ещё говорит (Firefox)
+  if (voice.isServer() && level >= SOUND_LEVEL) heard = true;
   levelSeen = true;
   maxLevel = Math.max(maxLevel, level);
   recordingStore.set({ level });

@@ -33,6 +33,8 @@ type Events = {
   armed: (armed: boolean) => void;
   /** Фоновому прослушиванию закрыли микрофон */
   wakeDenied: () => void;
+  /** Пока он говорил, человек заговорил сам — перебили голосом */
+  bargeIn: () => void;
 };
 
 interface RecognitionResult { isFinal: boolean; 0: { transcript: string } }
@@ -95,7 +97,7 @@ function ctor(): RecognitionCtor | null {
 
 const listeners: { [K in keyof Events]: Set<Events[K]> } = {
   state: new Set(), interim: new Set(), final: new Set(), error: new Set(), level: new Set(),
-  wake: new Set(), armed: new Set(), wakeDenied: new Set(),
+  wake: new Set(), armed: new Set(), wakeDenied: new Set(), bargeIn: new Set(),
 };
 
 function emit<K extends keyof Events>(name: K, ...args: Parameters<Events[K]>): void {
@@ -364,6 +366,101 @@ function arm(inGesture = false): void {
   }
 }
 
+// ── Перебить голосом, пока он говорит ──
+// Распознавание браузера не отделяет его голос из колонок от человека: слышит только его фразу, и «Стивс»
+// тонет. Отдельная запись с эхоподавлением вычитает его голос, остаётся человек — по громкости и ловим.
+/** Громкость голоса поверх его речи (шкала как у столбиков) */
+const BARGE_LEVEL = 0.1;
+/** Речь прерывистая — между слогами тише. Поэтому не «громко подряд», а громко хотя бы 3 замера из 10
+*  (0,15 с из 0,5 с): одного «подожди» хватает даже в Firefox, где его голос глушит наш; стук короче */
+const BARGE_WINDOW = 10;
+const BARGE_LOUD_TICKS = 3;
+/** Первые мгновения эхоподавление подстраивается под его голос — не слушаем */
+const BARGE_SETTLE_MS = 600;
+/** Если эхоподавление не справилось (голос браузера играет мимо него), остаток его речи держится ровно:
+ *  человек должен быть заметно громче среднего за последние 1,5 с */
+const BARGE_OVER_AVERAGE = 2.5;
+const BARGE_TICK_MS = 50;
+const BARGE_HISTORY = 30;
+let bargeWanted = false;
+let bargeStream: MediaStream | null = null;
+let bargeContext: AudioContext | null = null;
+let bargeTimer: ReturnType<typeof setInterval> | undefined;
+let bargeGeneration = 0;
+/** Громче всего за фразу и порог — по ним подбирают BARGE_LEVEL, если перебивание срабатывает не так */
+let bargePeak = 0;
+let bargeThreshold = BARGE_LEVEL;
+
+function stopBargeWatch(): void {
+  if (bargeContext) log('перебивание голосом: громче всего было', bargePeak.toFixed(2), 'порог', bargeThreshold.toFixed(2));
+  bargeWanted = false;
+  bargeGeneration += 1;
+  clearInterval(bargeTimer);
+  bargeStream?.getTracks().forEach((t) => t.stop());
+  bargeStream = null;
+  void bargeContext?.close().catch(() => undefined);
+  bargeContext = null;
+}
+
+async function startBargeWatch(): Promise<void> {
+  if (bargeWanted) return;
+  bargeWanted = true;
+  const mine = bargeGeneration;
+  let media: MediaStream;
+  try {
+    // Без автоусиления: оно подтягивает остаток его голоса до громкости человека
+    media = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: false } });
+  } catch {
+    if (mine === bargeGeneration) bargeWanted = false;
+    return;
+  }
+  if (mine !== bargeGeneration) {
+    media.getTracks().forEach((t) => t.stop());
+    return;
+  }
+  try {
+    const ctx = new AudioContext();
+    const analyser = ctx.createAnalyser();
+    analyser.fftSize = 1024;
+    ctx.createMediaStreamSource(media).connect(analyser);
+    bargeStream = media;
+    bargeContext = ctx;
+    const data = new Uint8Array(analyser.fftSize);
+    const started = Date.now();
+    const history: number[] = [];
+    const recent: boolean[] = [];
+    bargePeak = 0;
+    bargeTimer = setInterval(() => {
+      analyser.getByteTimeDomainData(data);
+      let sum = 0;
+      for (const v of data) sum += ((v - 128) / 128) ** 2;
+      const level = Math.min(1, Math.sqrt(sum / data.length) * 4);
+      if (Date.now() - started < BARGE_SETTLE_MS) {
+        history.push(level);
+        return;
+      }
+      const average = history.length ? history.reduce((a, b) => a + b, 0) / history.length : 0;
+      const threshold = Math.max(BARGE_LEVEL, average * BARGE_OVER_AVERAGE);
+      bargeThreshold = threshold;
+      bargePeak = Math.max(bargePeak, level);
+      recent.push(level >= threshold);
+      if (recent.length > BARGE_WINDOW) recent.shift();
+      // Средний фон — только по явно тихим замерам: паузы между словами человека не поднимают порог
+      if (level < threshold / 2) {
+        history.push(level);
+        if (history.length > BARGE_HISTORY) history.shift();
+      }
+      if (recent.filter(Boolean).length < BARGE_LOUD_TICKS) return;
+      log('перебили голосом: громкость', level.toFixed(2), 'порог', threshold.toFixed(2));
+      stopBargeWatch();
+      emit('bargeIn');
+    }, BARGE_TICK_MS);
+  } catch {
+    media.getTracks().forEach((t) => t.stop());
+    bargeWanted = false;
+  }
+}
+
 // ── Распознавание на сервере (Ф4): браузер не умеет, а сервер умеет (stt в features) ──
 let serverRec: MediaRecorder | null = null;
 /** Уровень громкости выше этого — человек говорит; после речи 1,8 с тишины — конец фразы */
@@ -570,6 +667,12 @@ export const voice = {
     }
     rec.abort();
     watchEnd(rec);
+  },
+
+  /** Пока Стивенс говорит, слушать, не заговорил ли человек. Микрофон должен быть уже разрешён: не спрашиваем посреди фразы */
+  watchBargeIn(on: boolean): void {
+    if (on && permissionGranted && !isSafari() && !recognition && !serverRec) void startBargeWatch();
+    else if (!on) stopBargeWatch();
   },
 
   /** Перебивать по имени, пока Стивенс говорит: Safari при включённом микрофоне глушит и уводит звук в разговорный динамик */
