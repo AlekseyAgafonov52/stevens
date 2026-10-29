@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { busyDates, conflictIds, countByDate, dayLabel, dotsFor, gridRange } from './month';
+import { busyDates, conflictIds, countByDate, dayLabel, dotsByDate, dotsFor, gridRange } from './month';
 import type { RecordItem } from '../../api/types';
 
 const meeting = (id: number, time: string): RecordItem => ({
@@ -13,6 +13,15 @@ describe('calendar month', () => {
   });
   it('dots', () => {
     expect([0, 1, 2, 3, 7].map(dotsFor)).toEqual([0, 1, 2, 3, 3]);
+  });
+  it('keeps unfinished events visible when the day has more than three events', () => {
+    const records: RecordItem[] = [1, 2, 3].map((id) => ({ ...meeting(id, '10:00'), status: 'done' }));
+    records.push({ ...meeting(4, '17:00'), status: 'open' });
+    records.push({ ...meeting(5, '18:00'), status: 'open', marks: ['deleted'] });
+    records.push({ ...meeting(6, '19:00'), type: 'busy', status: null });
+    expect(dotsByDate(records).get('2026-10-24')).toEqual(['open', 'done', 'done']);
+    records[3] = { ...records[3], status: 'done' };
+    expect(dotsByDate(records).get('2026-10-24')).toEqual(['done', 'done', 'done']);
   });
   it('conflicts by same start time', () => {
     expect([...conflictIds([meeting(1, '10:00'), meeting(2, '10:00'), meeting(3, '11:00')])]).toEqual([1, 2]);

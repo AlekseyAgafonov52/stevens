@@ -126,10 +126,25 @@ function sayBrowser(text: string): void {
   say(text, voice);
 }
 
+
+const MONTH = '(?!(?:янв|фев|мар|апр|ма[йя]|июн|июл|авг|сен|окт|ноя|дек))';
+const ONE = (ending: string) => new RegExp(`(^|[^\\d.,:])1 ${MONTH}(?=[а-яё]*[${ending}](?![а-яё]))`, 'gi');
+
+/** Голос браузера читает «1 встречу» как «один встречу»: род числа по окончанию слова (у голоса сервера это делает бэкенд) */
+function agreeNumbers(text: string): string {
+  return text
+    .replace(ONE('ую'), '$1одну ')
+    .replace(ONE('ая'), '$1одна ')
+    .replace(ONE('ое'), '$1одно ')
+    .replace(/(^|[^\d.,:])2 (?=(?:встреч|задач|заметк|запис|недел|минут)[иы](?![а-яё]))/gi, '$1две ');
+}
+
+
 /** chosen = null — голос не задан, только язык: так Safari берёт системный голос, которого нет в списке */
 function say(text: string, chosen: SpeechSynthesisVoice | null): void {
   const synth = window.speechSynthesis;
-  const utterance = new SpeechSynthesisUtterance(text);
+  // Кавычки системный голос Safari читает вслух — убираем; числа согласуем со словом
+  const utterance = new SpeechSynthesisUtterance(agreeNumbers(text.replace(/[«»„“"]/g, '')));
   const name = chosen?.name ?? 'системный';
   if (chosen) {
     utterance.voice = chosen;
@@ -208,8 +223,9 @@ export function init(): void {
     stop('новая фраза');
     clearTimeout(startTimer);
     clearTimeout(endTimer);
-    // Сервер — только когда он это умеет и звук уже разрешён; иначе сразу браузером
-    if (serverHas('tts') && unlocked) void sayServer(text);
+    // Без нажатия браузер может не дать проиграть звук (Safari — пока не разрешено автовоспроизведение
+    // в настройках сайта). Пробуем всегда: откажет — та же фраза голосом браузера
+    if (serverHas('tts')) void sayServer(text);
     else sayBrowser(text);
   };
 

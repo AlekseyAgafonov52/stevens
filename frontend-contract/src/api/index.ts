@@ -143,7 +143,7 @@ export const api = {
     /** Озвучка на сервере (Ф9): фраза → готовый звук. Ждём недолго: не дождались — скажет браузер */
     async tts(text: string): Promise<Blob> {
       const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 2000);
+      const timer = setTimeout(() => controller.abort(), 4000);
       try {
         const response = await fetch(`${base}/api/tts`, {
           method: 'POST', body: JSON.stringify({ text }), signal: controller.signal,

@@ -99,7 +99,7 @@ class Parse:
     new_type: str | None = None  # edit: «сделай её напоминанием»
     note: str | None = None      # edit: «добавь к встрече с Машей заметку взять ноутбук»
     all: bool = False           # move: «перенеси все встречи» — все записи дня source
-    source: date | None = None  # move all: с какого дня переносим (по умолчанию сегодня)
+    source: date | None = None  # move: исходный день; у массового переноса по умолчанию сегодня
     repeat_days: list[int] | None = None  # create: «каждый вторник» → [1]; пн = 0
     until: date | None = None   # create: повтор «до конца года» — последний день; None — без конца
     series_all: bool = False    # delete: «убери планёрку вообще» — все предстоящие дни повтора
@@ -132,6 +132,23 @@ _HOUR_GEN = ("первого", "второго", "третьего", "четв[�
              "девятого", "десятого", "одиннадцатого", "двенадцатого")
 _HOUR_NOM = {"час": 1, "один": 1, "два": 2, "три": 3, "четыре": 4, "пять": 5, "шесть": 6, "семь": 7, "восемь": 8,
              "девять": 9, "десять": 10, "одиннадцать": 11, "двенадцать": 12}
+_CLOCK_SMALL = ("ноль", "один", "два", "три", "четыре", "пять", "шесть", "семь", "восемь", "девять",
+                "десять", "одиннадцать", "двенадцать", "тринадцать", "четырнадцать", "пятнадцать",
+                "шестнадцать", "семнадцать", "восемнадцать", "девятнадцать")
+_CLOCK_NUMBERS = {word: value for value, word in enumerate(_CLOCK_SMALL)}
+for _value, _word in ((20, "двадцать"), (30, "тридцать"), (40, "сорок"), (50, "пятьдесят")):
+    _CLOCK_NUMBERS[_word] = _value
+    _CLOCK_NUMBERS.update({f"{_word} {_CLOCK_SMALL[digit]}": _value + digit for digit in range(1, 10)})
+_CLOCK_NUMBERS.update({"нуль": 0, "одна": 1, "две": 2, "час": 1})
+_CLOCK_HOURS = "|".join(word.replace(" ", r"\s+") for word in sorted(_CLOCK_NUMBERS, key=len, reverse=True)
+                       if _CLOCK_NUMBERS[word] < 24)
+_CLOCK_MINUTES = "|".join(word.replace(" ", r"\s+") for word in sorted(_CLOCK_NUMBERS, key=len, reverse=True)
+                         if word != "час")
+_CLOCK_DIGITS = "|".join(_CLOCK_SMALL[:10]) + "|нуль"
+WORD_CLOCK_RE = re.compile(
+    rf"(?P<prefix>\b(?:в|на|к|ко)\s+|^)(?P<hour>{_CLOCK_HOURS}|\d{{1,2}})\b"
+    rf"(?:\s+час(?:а|ов)?)?(?:\s+(?P<minute>(?:ноль|нуль|0)\s+(?:{_CLOCK_DIGITS}|\d)|{_CLOCK_MINUTES}|\d{{1,2}})\b"
+    r"(?:\s+минут(?:а|ы)?)?)?(?:\s+(?P<part>утра|дня|вечера|ночи))?(?=\s|$|[,.!?])", I)
 _HOUR_GEN_ALT = "|".join(_HOUR_GEN) + r"|\d{1,2}-?го"
 _MIN_WORDS = {"двадцати пяти": 25, "пяти": 5, "десяти": 10, "пятнадцати": 15, "четверти": 15, "двадцати": 20}
 _MIN_ALT = "|".join(w.replace(" ", r"\s+") for w in _MIN_WORDS)
@@ -178,6 +195,24 @@ def _spoken_time(text: str) -> tuple[int, int, str, tuple[int, int], bool] | Non
 def _parse_time(text: str) -> tuple[str | None, bool, list[tuple[int, int]]]:
     """Время HH:MM, признак «утро или вечер — неясно» и куски фразы, где оно было."""
     spans: list[tuple[int, int]] = []
+    clock = next((match for match in WORD_CLOCK_RE.finditer(text)
+                  if (match["prefix"] or not text[match.end():].strip(" \t\n,.!?"))
+                  and (not match["hour"].isdigit() or (match["minute"] and not match["minute"].isdigit())
+                       or "минут" in match[0].lower())), None)
+    if clock:
+        hour = clock["hour"].lower()
+        hour = hour if hour.isdigit() else str(_CLOCK_NUMBERS[" ".join(hour.split())])
+        minute = " ".join((clock["minute"] or "ноль").lower().split())
+        if minute.startswith(("ноль ", "нуль ", "0 ")):
+            minute = minute.split(" ", 1)[1]
+        minute = int(minute) if minute.isdigit() else _CLOCK_NUMBERS[minute]
+        part = clock["part"] or ""
+        if not part and (word := TIME_WORDS.search(text)):
+            part = {"утром": "утра", "вечером": "вечера", "днём": "дня", "днем": "дня"}[word[1].lower()]
+        # Reuse numeric clock rules, but cut the complete original spoken phrase.
+        value, ambiguous, _ = _parse_time(f"в {hour}:{minute:02d} {part}")
+        if value:
+            return value, ambiguous, [clock.span()]
     spoken = _spoken_time(text)
     if spoken:
         h, mm, part, span, _ = spoken
@@ -869,7 +904,7 @@ SEARCH_RE = re.compile(rf"(\bнайди\b|\bнайти\b|\bпоищи\b|\bищи
                        # «Есть что-нибудь про бюджет?», «Есть задача про CRM?», «Где я обсуждал бюджет?», «Что у меня было про договор?»
                        rf"|^есть\s+(?:ли\s+)?(?:у\s+меня\s+)?(?:(?:что-нибудь|что-то|что|какая-нибудь|какие-нибудь|\w+)\s+)?(?:про|об?)\s"
                        rf"|^где\s+(?:я|мы|у\s+меня)\b|^что\s+(?:у\s+меня\s+)?(?:есть|было|было\s+у\s+меня)\s+(?:про|об?)\s)", I)
-LIST_RE = re.compile(rf"(что\s+у\s+меня|какие\s+(?:(?:у\s+меня|сегодня|завтра|послезавтра|ещё|еще)\s+)*(?:планы|дела|задачи|встречи|напоминания)|^покажи|что\s+(?:я\s+)?запланировано|есть\s+ли\s+у\s+меня|^что\s+(?:в|во|на)\s|^сколько\s+(?:у\s+меня\s+)?(?:дел|задач|встреч|напоминаний|записей)|^что\s+я\s+(?:делал|делала|делаю|буду\s+делать)|^что\s+(?:(?:мне|ещё|еще|у\s+меня)\s+)*осталось|^что\s+(?:сегодня|завтра|послезавтра)\b|что\s+(?:было|будет)|мо[её]\s+расписание|\bпланы\s+на\b|чем\s+я\s+занят)", I)
+LIST_RE = re.compile(rf"(что\s+у\s+меня|какие\s+(?:(?:у\s+меня|сегодня|завтра|послезавтра|ещё|еще|есть|мои)\s+)*(?:планы|дела|задачи|встречи|напоминания)|^покажи|что\s+(?:я\s+)?запланировано|есть\s+ли\s+у\s+меня|^что\s+(?:в|во|на)\s|^сколько\s+(?:у\s+меня\s+)?(?:дел|задач|встреч|напоминаний|записей)|^что\s+я\s+(?:делал|делала|делаю|буду\s+делать)|^что\s+(?:(?:мне|ещё|еще|у\s+меня)\s+)*осталось|^что\s+(?:сегодня|завтра|послезавтра)\b|что\s+(?:было|будет)|мо[её]\s+расписание|\bпланы\s+на\b|чем\s+я\s+занят)", I)
 OFFTOPIC_RE = re.compile(r"(погод|анекдот|шутк|курс\s+(?:доллар|евро|валют)|новост|рецепт|кто\s+так|переведи|столиц|сколько\s+будет|расскажи\s+(?:о|про)\s+себе|как\s+дела|фильм|музык|игр[ау]|стих)", I)
 CREATE_VERB_RE = re.compile(r"^(?:пожалуйста\s+)?(?:напомни(?:те)?|напоминай(?:те)?|поставь|запиши|добавь|создай|запланируй|назначь|внеси|заведи)(?:\s+мне)?\b", I)
 DONE_RE = re.compile(r"^(?:готово|сделано|выполнено|сделал|сделала)[\s.!]*$", I)
@@ -1500,6 +1535,28 @@ def parse(raw: str, now: datetime) -> Parse:
     if MOVE_RE.search(lower):
         result.intent = "move"
         result.filter_type = _filter_type(lower)
+        # In "репетитора завтра на послезавтра", the first day selects
+        # the existing record, while the day after на/по is the destination.
+        for destination in re.finditer(r"\b(?:на|по)\s+", text, I):
+            tail = text[destination.end():]
+            _, _, _, target_info = parse_when("на " + tail, now)
+            if not target_info.date:
+                continue
+            prefix = text[:destination.start()]
+            prefix = re.sub(r"\bзавтрашн\w*\s+д(?:ня|ень)\b", "завтра", prefix, flags=I)
+            prefix = re.sub(r"\bсегодняшн\w*\s+д(?:ня|ень)\b", "сегодня", prefix, flags=I)
+            _, _, source_times, source_info = parse_when(prefix, now)
+            if not source_info.date and (source_word := SOURCE_RE.search(prefix)):
+                word = source_word.group(1) or source_word.group(2)
+                if word and any(word.lower().startswith(stem) for stem in WEEKDAYS):
+                    source_info.date = now.date() + timedelta(days=(_weekday_index(word.lower()) - now.weekday()) % 7)
+                    source_info.spans.append(source_word.span())
+            if not source_info.date:
+                continue
+            result.source = source_info.date
+            text = _cut(prefix, source_info.spans + source_times) + " на " + tail
+            time, _, time_spans, info = parse_when(text, now)
+            break
         spans = info.spans + time_spans
         shift = SHIFT_RE.search(text)
         if shift:

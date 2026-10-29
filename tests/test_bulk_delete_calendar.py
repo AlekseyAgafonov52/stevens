@@ -118,6 +118,28 @@ class BulkDeleteCalendarTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.say("нет"))["kind"], "cancelled")
         self.assertEqual(len(await self.calendar()), 2)
 
+    async def test_delete_all_tomorrow_removes_done_and_open_after_calendar_reload(self):
+        self.ctx.now = datetime(2026, 10, 28, 10)
+        task = self.add_record(TaskType.task)
+        completed = self.add_record(TaskType.task)
+        reminder = self.add_record(TaskType.reminder)
+        for row in (completed, reminder):
+            result = await records.patch_record(row.id, {"status": "done"}, owner=self.owner, db=self.db)
+            self.assertIsInstance(result, dict)
+        before = await self.calendar()
+        self.assertEqual(len(before), 3)
+        self.assertEqual(sum(r["status"] == "done" for r in before), 2)
+        # A previous plans response omits done events; explicit "all" must not inherit it.
+        await self.say("Какие задачи на завтра?")
+        proposal = await self.say("Удали все задачи на завтра")
+        self.assertEqual((proposal["kind"], proposal["total"]), ("confirm", 3))
+        self.assertEqual({r["id"] for r in proposal["records"]}, {task.id, completed.id, reminder.id})
+        deleted = await self.say("Да, удалить все", {"id": "confirm_yes"})
+        self.assertEqual((deleted["kind"], deleted["total"]), ("deleted", 3))
+        for _ in range(2):
+            self.session.expire_all()
+            self.assertEqual(await self.calendar(), [])
+
     async def test_weekday_clarification_creates_month_of_reminders_in_calendar(self):
         first = await self.say("поставь напоминание репетитор по математике каждую неделю 13.00 вперед на месяц")
         self.assertEqual(first["kind"], "clarify")

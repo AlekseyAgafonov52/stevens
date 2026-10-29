@@ -29,13 +29,15 @@ def from_parse(p: nlu.Parse, today: date) -> Result:
     if intent == "list" and period is None:
         day = p.date or today
         values["period"] = Period(start=day.isoformat(), end=day.isoformat(), label=nlu.describe_period(day, day, today).label)
+    query_date = p.source if intent == "move" else p.date
     query = Query.model_validate(dict(keywords=p.keywords, person=p.person, ask=p.ask, tense=p.tense,
-                  type=p.filter_type, date=p.date.isoformat() if p.date else None))
+                  type=p.filter_type, date=query_date.isoformat() if query_date else None))
     if intent in ("search", "person", "notes"):
         values["query"] = query
     if intent in ("delete", "complete", "move", "edit"):
+        target_date = p.source if intent == "move" else p.date
         values["target"] = Target(ref="shown" if p.group else "focus" if p.ref else "query",
-            query=query if not (p.group or p.ref) else None, date=p.date.isoformat() if p.date else None,
+            query=query if not (p.group or p.ref) else None, date=target_date.isoformat() if target_date else None,
             time=p.time, all=p.bulk or p.all, count=p.group_count,
             index=p.ordinal - 1 if p.ordinal is not None and p.ordinal > 0 else p.ordinal,
             series="all" if p.series_all else "one" if p.series_one else None)
