@@ -1,4 +1,4 @@
-"""Single AI boundary: rules and provider return the same validated v1.6 Result."""
+"""Single AI boundary: rules and provider return the same validated Result."""
 import asyncio
 import os
 import time

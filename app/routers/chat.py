@@ -1192,7 +1192,7 @@ async def ai_context(ctx: Ctx, payload: ChatRequest, pending: Pending | None) ->
 
 async def llm_parse(text: str, now: datetime, *, context: AIInput | None = None,
                     trace: dict | None = None) -> nlu.Parse:
-    """Validated v1.6 result adapted to current dialogue logic; at most 10 seconds."""
+    """Validated result adapted to current dialogue logic; at most 10 seconds."""
     global _llm_down_until
     trace = trace if trace is not None else {}
     if clock.time() < _llm_down_until:
@@ -2929,7 +2929,7 @@ def pick_choice(raw: str, rows: list[Record], now: datetime) -> Record | None:
     return None
 
 
-# ── Контракт v1.5: удержание записи, «что поменять?», «перенести существующую», продолжения ──
+# ── Удержание записи, «что поменять?», «перенести существующую», продолжения ──
 
 HOLD_KINDS = ("draft", "new_time")
 HOLD_BLOCK = ("create", "note")          # новую запись не делаем, повторяем вопрос

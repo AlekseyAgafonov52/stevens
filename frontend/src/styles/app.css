@@ -1,4 +1,4 @@
-/* Первый вариант. Числа без токена — из этих документов. */
+/* Основные стили: каркас, шапка, лента, карточки, пилюли, строка ввода, вход. */
 
 /* ── Каркас ─────────────────────────────────── */
 .app { height: 100dvh; display: flex; flex-direction: column; padding: 0 env(safe-area-inset-right) 0 env(safe-area-inset-left); }

@@ -35,7 +35,7 @@ async def transcribe(
     owner: Owner = Depends(get_owner),
 ):
     content_type = request.headers.get("content-type", "").split(";")[0].strip().lower()
-    # Retain compatibility with older clients; v1.6 sends raw audio as the body.
+    # Retain compatibility with older clients; the current client sends raw audio as the body.
     if content_type == "multipart/form-data":
         form = await request.form()
         file = form.get("file")

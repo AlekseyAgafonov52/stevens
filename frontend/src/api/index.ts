@@ -245,7 +245,7 @@ export const api = {
     await request(`/api/records/${id}`, { method: 'DELETE' });
   },
 
-  /** Контракт v1.6: полные записи, каждый день повтора отдельной записью. */
+  /** Полные записи, каждый день повтора отдельной записью. */
   async exportRecords(): Promise<string> {
     const response = await request('/api/records/export', {});
     return JSON.stringify(await json(response), null, 2);

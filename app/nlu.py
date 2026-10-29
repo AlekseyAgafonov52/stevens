@@ -91,7 +91,7 @@ class Parse:
     duration: int = 60          # free: сколько минут нужно
     window: int = 30            # free: окна короче этого не показываем
     free_mode: str = "windows"
-    weekends: bool = True       # v1.6: weekends participate unless explicitly excluded
+    weekends: bool = True       # weekends participate unless explicitly excluded
     subject: str | None = None  # free: «Встреча с Ваней» для кнопок со временем
     person: str | None = None   # person: «Иваном» — с кем досье, в творительном падеже
     bulk: bool = False          # delete: «удали все дела на завтра» — много записей, с подтверждением

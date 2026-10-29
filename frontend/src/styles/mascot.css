@@ -1,5 +1,5 @@
-/* Персонаж Stevens (доп Д14). Подключать только при features.d14_mascot.
-   Описание. SVG — src/assets/mascot/*.svg, вставлять inline. */
+/* Персонаж Stevens (доп Д14).
+   SVG — src/assets/mascot/*.svg, вставлять inline. */
 
 /* ── Место на строке ввода ─────────────────────────────── */
 /* Контейнер строки ввода должен быть position: relative */

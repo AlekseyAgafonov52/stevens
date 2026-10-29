@@ -1,4 +1,4 @@
-"""Public v1.6 chat request plus a lightweight internal dialogue input."""
+"""Public chat request plus a lightweight internal dialogue input."""
 from typing import Literal, Optional
 
 from datetime import datetime
@@ -25,7 +25,7 @@ class ChatRequest(BaseModel):
 
 
 class ChatPayload(ChatRequest):
-    """Public v1.6 request; internal dialogue helpers may use ChatRequest defaults."""
+    """Public request; internal dialogue helpers may use ChatRequest defaults."""
     text: str = Field(max_length=300)
     source: Literal["voice", "text", "button"] = Field(...)
     client_time: str = Field(...)

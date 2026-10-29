@@ -1,4 +1,4 @@
-"""Rules entry point: the same v1.6 input/output as the LLM, with no storage access."""
+"""Rules entry point: the same input/output as the LLM, with no storage access."""
 from datetime import date
 from pydantic import ValidationError
 

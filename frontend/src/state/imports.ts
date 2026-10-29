@@ -1,4 +1,4 @@
-/** Результат импорта и его отмена в ленте (§9 Ф26). */
+/** Результат импорта и его отмена в ленте. */
 import { api, ApiFailure, errorKey } from '../api';
 import type { TransferResult } from '../api/types';
 import { T, fill } from '../content/texts';

@@ -4,7 +4,7 @@ import type { ChatRequest, ChatResponse, RecordItem } from '../api/types';
 
 export type UserMessage = { kind: 'user'; id: string; text: string; source: ChatRequest['source'] };
 export type AnswerMessage = {
-  /** Локальная кнопка отмены импорта v1.6: отдельный REST-стык import/undo. */
+  /** Локальная кнопка отмены импорта: отдельный REST-стык import/undo. */
   importUndo?: string;
   kind: 'answer';
   id: string;

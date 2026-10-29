@@ -1,4 +1,4 @@
-"""Контракт v1.6 §4.5: экспорт, предпросмотр, атомарный импорт и отмена."""
+"""Экспорт, предпросмотр, атомарный импорт и отмена."""
 from datetime import date, datetime, timedelta, timezone
 import json
 import os

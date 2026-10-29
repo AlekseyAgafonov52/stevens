@@ -1,4 +1,4 @@
-"""Планирование импорта v1.6: проверки без изменения ORM-объектов."""
+"""Планирование импорта: проверки без изменения ORM-объектов."""
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
@@ -100,7 +100,7 @@ def build(owner: Owner, existing: list[Record], items: list) -> Plan:
                 if repeat.get("until"):
                     repeat_text += ";" + repeat["until"]
                 trial.repeat = repeat_text
-                # Импортирует один день, не создает и не меняет серию целиком (§7 Ф26).
+                # Импортирует один день, не создает и не меняет серию целиком.
         body = {k: item[k] for k in ("text", "date", "time", "end_time", "status", "remind_before")
                 if k in item and (current is None or item[k] != getattr(current, k))}
         if trial.type not in (TaskType.task, TaskType.reminder) and body.get("status") is None:

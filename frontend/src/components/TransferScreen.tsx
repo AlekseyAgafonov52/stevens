@@ -1,4 +1,4 @@
-/** Импорт и выгрузка v1.6 §9 Ф26: вкладки, файл календаря или ответ нейросети, предпросмотр, отмена в ленте. */
+/** Импорт и выгрузка: вкладки, файл календаря или ответ нейросети, предпросмотр, отмена в ленте. */
 import { Check, Copy, Download, Upload, X } from 'lucide-react';
 import { useEffect, useRef, useState, type DragEvent } from 'react';
 import { createPortal } from 'react-dom';

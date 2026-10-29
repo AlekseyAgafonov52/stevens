@@ -1,4 +1,4 @@
-"""Input and output of the AI layer: contract v1.6, section 5."""
+"""Input and output of the AI layer."""
 from datetime import date, datetime
 from typing import Annotated, Literal
 
