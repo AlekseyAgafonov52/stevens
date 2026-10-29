@@ -139,6 +139,19 @@ export type ActionId =
 export interface Action {
   id: ActionId | (string & {});
   record_id?: number;
+  /** edit_draft: какой черновик (по порядку карточек без id) и поля из формы */
+  index?: number;
+  values?: DraftValues;
+}
+
+/** «Исправить» под «Верно?»: черновик, поправленный в форме */
+export interface DraftValues {
+  type: 'task' | 'reminder' | 'meeting' | 'busy';
+  text: string;
+  date: string | null;
+  time: string | null;
+  end_time: string | null;
+  remind_before: number | null;
 }
 
 // ── Вход и песочница ──

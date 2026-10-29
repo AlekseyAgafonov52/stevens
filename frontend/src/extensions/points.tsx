@@ -16,6 +16,7 @@ const CalendarToggle = lazy(() => calendar().then((m) => ({ default: m.CalendarT
 const CalendarPanel = lazy(() => calendar().then((m) => ({ default: m.CalendarPanel })));
 const EditButton = lazy(() => edit().then((m) => ({ default: m.EditButton })));
 const FeedEditForm = lazy(() => edit().then((m) => ({ default: m.FeedEditForm })));
+const DraftEditForm = lazy(() => edit().then((m) => ({ default: m.DraftEditForm })));
 const MascotPerch = lazy(() => mascot().then((m) => ({ default: m.MascotPerch })));
 const MascotTitle = lazy(() => mascot().then((m) => ({ default: m.MascotTitle })));
 const TourBar = lazy(() => tour().then((m) => ({ default: m.TourBar })));
@@ -57,6 +58,19 @@ export function cardEditHandler(message: AnswerMessage, record: RecordItem, acti
 export function RecordCardOverride({ message, record, editing }: { message: AnswerMessage; record: RecordItem; editing: boolean }) {
   if (!editing) return null;
   return wrap(<FeedEditForm message={message} record={record} />);
+}
+
+/** «Исправить» под «Верно?»: в ответе есть кнопка edit_draft — черновики правятся формой */
+export const hasDraftEdit = (message: AnswerMessage) =>
+  message.response.buttons.some((b) => 'action' in b.send && b.send.action.id === 'edit_draft');
+
+export function openDraftEdit(message: AnswerMessage, index: number) {
+  store.set({ editing: { messageId: message.id, recordId: null, draft: index } });
+}
+
+/** Форма на месте черновика под «Верно?» */
+export function DraftCardOverride({ message, record, index }: { message: AnswerMessage; record: RecordItem; index: number }) {
+  return wrap(<DraftEditForm message={message} record={record} index={index} />);
 }
 
 /** Состояние «Удалено» (Д2 или Д10): подпись в мете */

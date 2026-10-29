@@ -147,7 +147,32 @@ async def propose(ctx: Ctx, result: Result, selected: list[Record] | None = None
         template = "confirm_ai_delete_series"
     return chat.reply("confirm", *ctx.say(template, {"count": len(rows)}), total=len(rows), awaiting=True,
                       records=[r.to_contract() for r in rows[:chat.FOUND_LIMIT]] + previews[:chat.FOUND_LIMIT],
-                      buttons=[chat.button_action("Да, верно", "confirm_yes"), chat.button_action("Нет", "cancel", style="secondary")])
+                      buttons=[chat.button_action("Да, верно", "confirm_yes"), no_button(data)])
+
+
+def no_button(data: dict) -> dict:
+    """Перенос и правка: «Исправить» открывает форму с предложенным видом записи; удаление и отметка — «Нет»."""
+    from app.routers import chat
+    if Result.model_validate(data["result"]).intent in ("move", "edit", "fix"):
+        return chat.button_action("Исправить", "edit_draft", style="secondary")
+    return chat.button_action("Нет", "cancel", style="secondary")
+
+
+async def execute_edited(ctx: Ctx, index: int, fixed: dict) -> dict:
+    """«Исправить» под «Верно?» от ИИ: человек сам поправил предложенную запись в форме — сохраняем его вариант."""
+    from app.routers import chat
+    data = ctx.conv.pending.draft
+    if Result.model_validate(data["result"]).intent not in ("move", "edit", "fix") or index >= len(data["ids"]):
+        return chat.reply("clarify", *ctx.say("clarify_generic"), buttons=[chat.CANCEL])
+    rid = data["ids"][index]
+    key = next((k for k in data["updates"] if str(k) == str(rid)), rid)
+    before = next((v for k, v in data["before"].items() if str(k) == str(rid)), {})
+    values = {k: v for k, v in fixed.items() if (k != "remind_before" or v is not None) and (k != "type" or v != before.get("type"))}
+    data["updates"] = {k: v for k, v in data["updates"].items() if str(k) == str(rid)}
+    data["updates"][key] = values
+    data["ids"] = [rid]
+    ctx.conv.pending = chat.Pending("ai_confirm", data)
+    return await execute(ctx)
 
 
 async def execute(ctx: Ctx) -> dict:

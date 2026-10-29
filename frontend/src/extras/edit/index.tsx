@@ -2,7 +2,7 @@
 import type { RecordItem } from '../../api/types';
 import { Pill } from '../../components/Pill';
 import { T } from '../../content/texts';
-import { applyEdit } from '../../state/chat';
+import { applyEdit, send } from '../../state/chat';
 import { emitActivity, emitRecordsChanged } from '../../state/events';
 import { store, useApp, type AnswerMessage } from '../../state/store';
 import { EditForm } from './EditForm';
@@ -25,6 +25,23 @@ export function EditButton({ message, isLast }: { message: AnswerMessage; isLast
     >
       {T.btn_edit}
     </Pill>
+  );
+}
+
+/** «Исправить» под «Верно?»: форма на месте черновика, «Сохранить» отправляет поправленный черновик в чат */
+export function DraftEditForm({ message, record, index }: { message: AnswerMessage; record: RecordItem; index: number }) {
+  const close = () => store.set({ editing: null });
+  const button = message.response.buttons.findIndex((b) => 'action' in b.send && b.send.action.id === 'edit_draft');
+  return (
+    <EditForm
+      record={record}
+      onCancel={close}
+      onSaved={close}
+      onDraft={(values) => {
+        emitActivity('edit-saved');
+        send(T.edit_save, 'button', { action: { id: 'edit_draft', index, values }, fromId: message.id, buttonIndex: button });
+      }}
+    />
   );
 }
 

@@ -2,7 +2,7 @@
 import { CircleAlert, Trash2 } from 'lucide-react';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { api, ApiFailure, errorKey } from '../../api';
-import type { RecordCreate, RecordItem, RecordType } from '../../api/types';
+import type { DraftValues, RecordCreate, RecordItem, RecordType } from '../../api/types';
 import { Dots } from '../../components/Dots';
 import { Pill } from '../../components/Pill';
 import { T, fill } from '../../content/texts';
@@ -19,6 +19,8 @@ type Props = {
   onDelete?: () => void;
   /** Новая запись из календаря: сохранение — POST /api/records, без «Заметки» */
   create?: boolean;
+  /** Черновик под «Верно?»: форма ничего не сохраняет сама, поля уходят в чат */
+  onDraft?: (values: DraftValues) => void;
 };
 
 type CreateType = RecordCreate['type'];
@@ -40,7 +42,7 @@ const remindOptions = (current: number | null | undefined) =>
   current != null && !REMIND_CHOICES.includes(current) ? [...REMIND_CHOICES, current].sort((a, b) => a - b) : REMIND_CHOICES;
 const remindLabel = (m: number) => (m === 60 ? T.edit_remind_hour : fill(T.edit_remind_minutes, { n: m }));
 
-export function EditForm({ record: initial, onSaved, onCancel, onDelete, create = false }: Props) {
+export function EditForm({ record: initial, onSaved, onCancel, onDelete, create = false, onDraft }: Props) {
   // Тип меняется на лету: поля других типов в форме не стираются, а спрятанные на сервере (stash) подставляются
   const [type, setType] = useState(initial.type);
   const record: RecordItem = { ...initial, type };
@@ -58,6 +60,9 @@ export function EditForm({ record: initial, onSaved, onCancel, onDelete, create 
 
   useEffect(() => {
     textRef.current?.focus();
+    // В ленте под «Верно?» форма открывается у нижнего края — показываем её целиком
+    if (onDraft) textRef.current?.closest('.edit-form')?.scrollIntoView?.({ block: 'center', behavior: 'smooth' });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useLayoutEffect(() => {
@@ -93,6 +98,13 @@ export function EditForm({ record: initial, onSaved, onCancel, onDelete, create 
     const found = validate(record, values);
     setErrors(found);
     if (found.text || found.datetime) return;
+    if (onDraft) {
+      onDraft({
+        type: type as CreateType, text: text.trim(), date: date || null, time: date && time ? time : null,
+        end_time: interval && end ? end : null, remind_before: type === 'meeting' ? Number(remind) : null,
+      });
+      return;
+    }
     if (create) {
       await submit(() => api.createRecord({
         type: type as CreateType, text: text.trim(), date: date || null, time: date && time ? time : null,
@@ -138,7 +150,7 @@ export function EditForm({ record: initial, onSaved, onCancel, onDelete, create 
       <div className="edit-form__field">
           <span className="edit-form__label">{T.edit_type}</span>
           <div className="edit-form__types" role="radiogroup" aria-label={T.edit_type}>
-            {(create ? CREATE_TYPES : ALL_TYPES).map((t) => (
+            {(create || onDraft ? CREATE_TYPES : ALL_TYPES).map((t) => (
               <Pill
                 key={t}
                 role="radio"
