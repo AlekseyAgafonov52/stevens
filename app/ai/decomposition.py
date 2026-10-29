@@ -33,6 +33,13 @@ COUNT_HEADER = re.compile(
     r"(?P<noun>занят(?:ия|ий)|встреч[и]|дел[а]|задач[и]|напоминани[яй])\b"
     r"(?P<when>[^:;]{0,90}):\s*(?P<body>.+)$", I,
 )
+# "..., напомни за полчаса" / "..., напомни завтра" only adds a reminder to the
+# same record; "в 10 а нет в 11" is a correction, not a second event.
+REMIND_TAIL = re.compile(
+    r"^напомни(?:ть|те)?(?:\s+(?:мне|об?\s+этом|про\s+это|за\s+\S+(?:\s+\S+)?|завтра|сегодня|послезавтра|"
+    r"утром|вечером|дн[её]м|(?:в|во)\s+\S+))*\s*$", I,
+)
+CORRECTION = re.compile(r"\bа\s+нет\b|\bне\s+в\s+\S+,?\s+а\s+в\b|\bнет,?\s+(?:в|во|на)\s", I)
 SEPARATOR = re.compile(r",\s*(?:а\s+)?|\s+(?:и|а\s+также)\s+", I)
 WORD_HOURS = {
     "час": "1", "два": "2", "две": "2", "три": "3", "четыре": "4",
@@ -59,6 +66,8 @@ def _independent_right(left: str, right: str, *, comma: bool) -> bool:
     """A conjunction can also join names or shopping items: refuse those."""
     right = right.lstrip(" ,;:.—-")
     if not right:
+        return False
+    if REMIND_TAIL.match(right.rstrip(" .!")):
         return False
     if ACTION_START.match(right):
         # A second explicit action is independent, except a generic object
@@ -180,6 +189,6 @@ def suspected_multiple(text: str) -> bool:
         return True
     # Two separate time anchors with a conjunction are not automatically two
     # events, but the merged parse is unsafe without a model/clarification.
-    if len(CLOCK.findall(body)) >= 2 and re.search(r"\s+(?:и|а)\s+|,", body, I):
+    if len(CLOCK.findall(body)) >= 2 and not CORRECTION.search(body) and re.search(r"\s+(?:и|а)\s+|,", body, I):
         return True
     return False
