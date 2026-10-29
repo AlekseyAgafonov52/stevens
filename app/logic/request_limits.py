@@ -8,6 +8,10 @@ import time
 
 from starlette.responses import JSONResponse
 
+# За nginx все посетители приходят с одного адреса, поэтому лимиты на IP общие — держим их с запасом.
+# Личные лимиты (по аккаунту или песочнице) остаются прежними.
+SHARED_IP = 5
+
 
 class RequestLimits:
     """Один процесс: лимиты IP + владельца; за кластером нужен общий edge-limiter."""
@@ -50,12 +54,12 @@ class RequestLimits:
         group, limit = ("auth", 30) if auth else ("import", 20) if "/import" in path or path.endswith("/export") else (
             ("stt", 30) if path == "/api/stt" else ("reset", 10) if path in ("/api/sandbox/reset", "/api/sandbox/clear") else ("api", 180))
         if os.getenv("STEVENS_RATE_LIMIT", "1") != "0":
-            wait = self.hit((ip, group), limit)
+            wait = self.hit((ip, group), limit * SHARED_IP)
             client_id = headers.get(b"x-client-id") if not headers.get(b"authorization") else None
             if client_id and not wait:
                 key = (ip, hashlib.sha256(client_id).digest())
                 if key not in self.clients:
-                    wait = self.hit((ip, "new_sandbox"), 10)
+                    wait = self.hit((ip, "new_sandbox"), 10 * SHARED_IP)
                 if not wait:
                     self.clients.pop(key, None)
                     self.clients[key] = time.monotonic()
