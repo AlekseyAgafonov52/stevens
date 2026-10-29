@@ -5,6 +5,7 @@ from pydantic import ValidationError
 from app import nlu
 from app.ai.schema import Change, Free, Input, Item, Period, Query, Repeat, Result, Target
 from app.ai.contextual import refine
+from app.ai.decomposition import suspected_multiple, requested_count
 
 
 def from_parse(p: nlu.Parse, today: date) -> Result:
@@ -58,7 +59,11 @@ def parse(request: Input) -> Result:
         result = from_parse(nlu.parse(request.text, request.now), request.now.date())
         if result.intent == "create":
             many = nlu.parse_many(request.text, request.now)
-            if many and len(many) > 1:
+            if many and requested_count(request.text) and len(many) != requested_count(request.text):
+                # An explicit number of events is a hard constraint; never
+                # silently create only part of a requested batch.
+                result = Result(intent="unknown", layer="rules", confidence=0.0)
+            elif many and len(many) > 1:
                 # Re-evaluate confidence on the individual events. A single-item
                 # parse of "... в 14 и ... в 17" appears uncertain because
                 # it retains the second time inside the title. After a safe
@@ -68,6 +73,10 @@ def parse(request: Input) -> Result:
                 result.confidence = min(piece.confidence for piece in pieces)
                 result.doubts = [doubt for piece in pieces for doubt in piece.doubts]
                 result._rule_parses = many
+            elif suspected_multiple(request.text):
+                # A compound request that we cannot safely split must not
+                # become one merged calendar record when the provider is off.
+                result = Result(intent="unknown", layer="rules", confidence=0.0)
         return refine(request, result)
     except ValidationError:
         # A rule result is subject to the same validation as a provider result.

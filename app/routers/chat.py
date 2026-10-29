@@ -3486,7 +3486,9 @@ async def respond(ctx: Ctx, payload: ChatRequest) -> dict:
     if p.intent == "unknown" and ctx.conv.pending is None:
         if answer := await answer_did(ctx, raw):
             return answer
-    refine = nlu.needs_llm_review(p)
+    # Complex commands that cannot be split safely require an LLM parse,
+    # never a single guessed calendar record.
+    refine = nlu.needs_llm_review(p) or (rule_result.intent == "create" and rule_result.confidence < 0.8)
     if refine and not any(d.get("why") == "unclear" for d in p.doubt):
         p.doubt.append({"why": "unclear"})
     if (p.intent == "unknown" or refine) and llm_enabled():

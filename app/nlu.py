@@ -1955,6 +1955,9 @@ def parse_many(raw: str, now: datetime) -> list[Parse] | None:
     text = strip_lead(" ".join(raw.strip().split()))
     if coordinated := _coordinated_meetings(text, now):
         return coordinated
+    from app.ai.decomposition import decompose
+    if structured := decompose(text, now):
+        return structured
     parts = [part.strip(" ,.") for part in MULTI_SPLIT_RE.split(text) if part and part.strip(" ,.")]
     if len(parts) < 2 or len(parts) > 5:
         return None
