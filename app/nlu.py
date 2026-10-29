@@ -634,7 +634,7 @@ NICKNAMES = {
     "ксюша": "ксения", "галя": "галина", "валя": "валентина", "витя": "виктор",
     "вася": "василий", "гена": "геннадий", "толя": "анатолий", "тоня": "антонина",
     "стас": "станислав", "юра": "юрий", "федя": "федор", "сева": "всеволод",
-    "зина": "зинаида", "люда": "людмила",
+    "зина": "зинаида", "люда": "людмила", "наталия": "наталья",
 }
 # Полные имена, которые можно поднимать до заглавной. Только по списку: морфология считает
 # именем и «ноя» (ноябрь), «пол», «хакатон» — для них заглавная была бы ошибкой.
@@ -1310,10 +1310,26 @@ def _doubts(result: "Parse", now: datetime) -> None:
     result.text = capitalize(capitalize_names(body)) if body else None
 
 
+# «Удали на завтра все встречи», искажённое распознаванием в «у долина, завтра все встречи»:
+# правила видят создание дела «У долина, все встречи». Группа записей в названии без глагола
+# в начале — это просьба про уже существующие записи, а не новое дело.
+BULK_TITLE_RE = re.compile(r"\bвсе\s+(?:встреч|задач|дел|напоминани|заметк|запис)", I)
+
+
+def _starts_with_verb(text: str) -> bool:
+    """«Перенести все встречи» — законное дело, «У долина, все встречи» — обрывок команды."""
+    first = re.match(r"[А-Яа-яЁё]+", text)
+    if not first or _MORPH is None:
+        return False
+    return _MORPH.parse(first.group(0))[0].tag.POS in ("INFN", "VERB")
+
+
 def needs_llm_review(result: Parse) -> bool:
     """Review incomplete creations, without sending clear rule matches to the provider."""
     if result.intent != "create" or result.type not in ("task", "meeting", "reminder"):
         return False
+    if BULK_TITLE_RE.search(result.text or "") and not _starts_with_verb(result.text or ""):
+        return True
     return (any(d.get("why") == "unclear" for d in result.doubt)
             or re.search(r"\b(?:в|к|ко|на)\s+\d{1,2}(?:[:.]\d{2})?\b(?!\s*(?:минут\w*|час\w*|дн\w*|недел\w*))|^(?:будь(?:те)?\s+добр[аы]?|помоги(?:те)?|организуй(?:те)?)\b|[,;]\s*организуй(?:те)?\b",
                          result.text or "", I) is not None)

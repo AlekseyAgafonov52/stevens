@@ -1,6 +1,7 @@
 """Серверное распознавание речи через Yandex SpeechKit (контракт v1.6, раздел 4.3)."""
 import logging
 import os
+import re
 
 import httpx
 from fastapi import APIRouter, Depends, Request
@@ -13,6 +14,14 @@ from app.owner import Owner, get_owner
 
 logger = logging.getLogger(__name__)
 
+# Латинские сокращения SpeechKit в русском режиме пишет кириллицей наугад:
+# «CRM» → «си роям», «си рэ эм», а с предлогом и вовсе «посираем».
+# Возвращаем исходное написание — оно есть в демо-данных и тестовых фразах.
+_CRM_RE = re.compile(r"\b(по)?си[\s-]*(?:ар|эр|рэ|ре|ра|ро|р)[\s-]*(?:эм|ем|ям|ам|м)\b", re.I)
+
+
+def fix_latin(text: str) -> str:
+    return _CRM_RE.sub(lambda m: ("по " if m.group(1) else "") + "CRM", text)
 router = APIRouter()
 
 STT_URL = "https://stt.api.cloud.yandex.net/speech/v1/stt:recognize"
@@ -61,7 +70,7 @@ async def transcribe(
         async with httpx.AsyncClient(timeout=12) as client:
             response = await client.post(STT_URL, params=params, content=audio, headers=headers)
         response.raise_for_status()
-        return {"text": (response.json().get("result") or "").strip()}
+        return {"text": fix_latin((response.json().get("result") or "").strip())}
     except httpx.HTTPStatusError as error:
         # Код ответа отличает «нет прав или не тот каталог» (4xx) от сбоя службы (5xx).
         # Тело не пишем — та же политика, что в app/ai/provider.py.

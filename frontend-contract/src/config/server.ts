@@ -5,7 +5,7 @@
  */
 import { createStore } from '../state/store';
 
-export type ServerFeature = `f${number}` | 'stt';
+export type ServerFeature = `f${number}` | 'stt' | 'tts';
 
 export const serverFeatures = createStore<{ list: string[] | null }>({ list: null });
 
@@ -16,6 +16,6 @@ export function setServerFeatures(list: string[] | null): void {
 
 export function serverHas(key: ServerFeature): boolean {
   const { list } = serverFeatures.get();
-  if (key === 'stt') return !!list?.includes('stt');
+  if (key === 'stt' || key === 'tts') return !!list?.includes(key);
   return list === null || list.includes(key);
 }

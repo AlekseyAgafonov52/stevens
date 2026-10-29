@@ -140,6 +140,24 @@ export const api = {
     }
   },
 
+    /** Озвучка на сервере (Ф9): фраза → готовый звук. Ждём недолго: не дождались — скажет браузер */
+    async tts(text: string): Promise<Blob> {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 2000);
+      try {
+        const response = await fetch(`${base}/api/tts`, {
+          method: 'POST', body: JSON.stringify({ text }), signal: controller.signal,
+          headers: { ...modeHeaders, 'Content-Type': 'application/json' },
+        });
+        if (!response.ok) throw new ApiFailure({ type: 'server' });
+        return await response.blob();
+      } catch (error) {
+        throw error instanceof ApiFailure ? error : new ApiFailure({ type: 'network' });
+      } finally {
+        clearTimeout(timer);
+      }
+    },
+    
   /** Ответ не прошёл схему: есть text — ответ из одного текста, нет — err_server */
   async chat(body: ChatRequest, timeout: number): Promise<ChatResponse> {
     const list = backendFeatures();
