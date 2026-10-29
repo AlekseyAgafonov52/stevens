@@ -44,7 +44,7 @@ async def transcribe(
         audio = await file.read(STT_MAX_BYTES + 1)
     else:
         audio = await request.body()
-    if content_type not in ("audio/ogg", "audio/webm"):
+    if content_type not in ("audio/ogg", "audio/webm", "audio/wav"):
         return JSONResponse(status_code=415, content={"error": "unsupported_audio"})
     
     if len(audio) > STT_MAX_BYTES:

@@ -1,4 +1,4 @@
-"""Ограниченное преобразование Ogg/WebM в одноканальный Ogg Opus для SpeechKit."""
+"""Ограниченное преобразование Ogg/WebM/WAV в одноканальный Ogg Opus для SpeechKit."""
 import asyncio
 import math
 from pathlib import Path
@@ -28,8 +28,12 @@ async def run(*args: str) -> bytes:
     return stdout
 
 
+# Гибрид шлёт WAV 16 кГц моно: Chrome пишет его сам, без MediaRecorder
+CONTAINERS = {"audio/webm": "matroska", "audio/ogg": "ogg", "audio/wav": "wav"}
+
+
 async def ogg_opus(audio: bytes, kind: str) -> bytes:
-    if kind not in ("audio/webm", "audio/ogg"):
+    if kind not in CONTAINERS:
         raise AudioError(415, "unsupported_audio")
     if len(audio) > 1024 * 1024:
         raise AudioError(413, "audio_too_long")
@@ -38,7 +42,7 @@ async def ogg_opus(audio: bytes, kind: str) -> bytes:
         source.write_bytes(audio)
         try:
             await run("ffmpeg", "-nostdin", "-v", "error", "-protocol_whitelist", "file,pipe", "-threads", "1",
-                      "-f", "matroska" if kind == "audio/webm" else "ogg", "-i", str(source),
+                      "-f", CONTAINERS[kind], "-i", str(source),
                       "-map", "0:a:0", "-vn", "-t", "30.1", "-ac", "1", "-ar", "16000",
                       "-map_metadata", "-1", "-c:a", "libopus", "-b:a", "24k", "-f", "ogg", str(result))
             duration = float((await run("ffprobe", "-v", "error", "-show_entries", "format=duration",
