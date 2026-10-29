@@ -11,6 +11,7 @@ from starlette.datastructures import UploadFile
 from app.voice.audio import AudioError, ogg_opus
 from app import features
 from app.owner import Owner, get_owner
+from app.nlu import capitalize_names
 
 logger = logging.getLogger(__name__)
 
@@ -70,7 +71,7 @@ async def transcribe(
         async with httpx.AsyncClient(timeout=12) as client:
             response = await client.post(STT_URL, params=params, content=audio, headers=headers)
         response.raise_for_status()
-        return {"text": fix_latin((response.json().get("result") or "").strip())}
+        return {"text": capitalize_names(fix_latin((response.json().get("result") or "").strip()))}
     except httpx.HTTPStatusError as error:
         # Код ответа отличает «нет прав или не тот каталог» (4xx) от сбоя службы (5xx).
         # Тело не пишем — та же политика, что в app/ai/provider.py.
