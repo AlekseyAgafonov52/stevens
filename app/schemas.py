@@ -10,6 +10,8 @@ from pydantic import BaseModel, Field, field_validator
 class Action(BaseModel):
     id: str
     record_id: Optional[int] = None
+    index: Optional[int] = None      # edit_draft: какой черновик в ответе (по порядку карточек без id)
+    values: Optional[dict] = None    # edit_draft: поля из формы правки
 
 
 class ChatRequest(BaseModel):

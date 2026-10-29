@@ -5,7 +5,7 @@ import { T, fill } from '../content/texts';
 import { dayTitle, groupByDay, groupByTense, splitPast } from '../lib/dates';
 import { pressButton } from '../state/chat';
 import { useApp, type AnswerMessage } from '../state/store';
-import { AnswerExtraButtons, RecordCardOverride, cardEditHandler } from '../extensions/points';
+import { AnswerExtraButtons, DraftCardOverride, RecordCardOverride, cardEditHandler, hasDraftEdit, openDraftEdit } from '../extensions/points';
 import { NotifyOffer } from './NotifyOffer';
 import { OverdueActions } from './OverdueActions';
 import { ReminderActions } from './ReminderActions';
@@ -34,8 +34,17 @@ export function Answer({ message, isLast }: Props) {
   const visible = records.slice(0, shown);
   const rest = records.length - visible.length;
 
+  // «Исправить» под «Верно?»: черновики (карточки без id) по порядку — их номер уходит на сервер
+  const draftEdit = isLast && fresh && message.pressed === null && hasDraftEdit(message);
+  const drafts = response.records.filter((r) => r.id === null);
+  const draftOpen = !!editing && editing.messageId === message.id && editing.draft !== undefined;
+
   const card = (record: RecordItem, withDate: boolean, index: number) => {
-    const isEditing = !!editing && editing.messageId === message.id && editing.recordId === record.id;
+    const draftIndex = draftEdit && record.id === null ? drafts.indexOf(record) : -1;
+    if (draftOpen && draftIndex >= 0 && editing.draft === draftIndex) {
+      return <DraftCardOverride key={`d-${index}`} message={message} record={record} index={draftIndex} />;
+    }
+    const isEditing = !!editing && editing.draft === undefined && editing.messageId === message.id && editing.recordId === record.id;
     const flash = message.flash && message.flash.id === record.id;
     if (isEditing) {
       return <RecordCardOverride key={`${record.id}-${index}`} message={message} record={record} editing />;
@@ -46,7 +55,9 @@ export function Answer({ message, isLast }: Props) {
         record={flash ? { ...record, marks: [...record.marks, 'new'] } : record}
         withDate={withDate}
         isNew={(fresh && record.marks.includes('new')) || !!flash}
-        onClick={cardEditHandler(message, record, isLast && !message.restored && !waiting && !editing)}
+        onClick={draftIndex >= 0 && !waiting && !editing
+          ? () => openDraftEdit(message, draftIndex)
+          : cardEditHandler(message, record, isLast && !message.restored && !waiting && !editing)}
       />
     );
     if (response.kind !== 'overdue' && response.kind !== 'reminder') return view;
@@ -125,7 +136,15 @@ export function Answer({ message, isLast }: Props) {
               key={index}
               variant={buttonVariant(index, button.style)}
               className={examples ? 'pill--example' : ''}
-              onClick={() => pressButton(message.id, button, index)}
+              disabled={draftOpen && 'action' in button.send && button.send.action.id === 'edit_draft'}
+              onClick={() => {
+                // «Исправить» под «Верно?» не уходит на сервер — открывает форму на первом черновике
+                if (draftEdit && 'action' in button.send && button.send.action.id === 'edit_draft') {
+                  if (drafts.length > 0 && !waiting) openDraftEdit(message, 0);
+                  return;
+                }
+                pressButton(message.id, button, index);
+              }}
             >
               {button.label}
             </Pill>

@@ -46,8 +46,8 @@ export type AppState = {
   /** Ошибка сброса песочницы, 6 с */
   resetError: { key: string; until: number } | null;
   calendarOpen: boolean;
-  /** Открытая форма правки в ленте: id сообщения и записи */
-  editing: { messageId: string; recordId: number } | null;
+  /** Открытая форма правки в ленте: id сообщения и записи; draft — номер черновика под «Верно?» (recordId тогда null) */
+  editing: { messageId: string; recordId: number | null; draft?: number } | null;
   /** Счётчик «пришло новое, пока человек выше» */
   unseen: number;
 };

@@ -435,7 +435,7 @@ async def process_draft(ctx: Ctx, draft: dict) -> dict:
             text, speech = ctx.say("confirm", values, speech_values)
         return reply("confirm", text, speech, records=[draft_record(draft, ["draft"])], awaiting=True, buttons=[
             button_action("Да, верно", "confirm_yes"),
-            button_action("Нет", "confirm_no", style="secondary"),
+            button_action("Исправить", "edit_draft", style="secondary"),
         ])
 
     # Занятость на занятость: такая же уже есть — не дублируем; пересекается — спрашиваем, как со встречами
@@ -732,7 +732,7 @@ async def answer_many(ctx: Ctx, parses: list[nlu.Parse]) -> dict | None:
     text, speech = ctx.say("multi_confirm", {"count": len(drafts)})
     return reply("confirm", text, speech, records=[draft_record(d, ["draft"]) for d in drafts], awaiting=True,
                  buttons=[button_action("Да, записать все", "confirm_yes"),
-                          button_action("Нет", "multi_no", style="secondary")])
+                          button_action("Исправить", "edit_draft", style="secondary")])
 
 
 async def save_many(ctx: Ctx, drafts: list[dict]) -> dict:
@@ -2597,6 +2597,55 @@ async def owned_record(ctx: Ctx, record_id: int | None) -> Record | None:
     return record if record and ctx.owner.owns(record) else None
 
 
+EDIT_TYPES = ("task", "reminder", "meeting", "busy")
+HHMM_RE = re.compile(r"(?:[01]\d|2[0-3]):[0-5]\d")
+
+
+def form_values(values: dict | None) -> dict | None:
+    """Поля из формы «Исправить» под вопросом «Верно?»: только то, что форма умеет, и только в верном виде."""
+    if not isinstance(values, dict) or values.get("type") not in EDIT_TYPES:
+        return None
+    text = " ".join(str(values.get("text") or "").split())[:300]
+    day, time, end = values.get("date") or None, values.get("time") or None, values.get("end_time") or None
+    if not text or (day is not None and parse_date(day) is None):
+        return None
+    if any(v is not None and not (isinstance(v, str) and HHMM_RE.fullmatch(v)) for v in (time, end)):
+        return None
+    if values["type"] == "busy" and not (time and end and end > time):
+        return None
+    out = {"type": values["type"], "text": text[0].upper() + text[1:], "date": day, "time": time if day else None,
+           "end_time": end if day and time and values["type"] in ("meeting", "busy") else None}
+    remind = values.get("remind_before")
+    if values["type"] == "meeting" and isinstance(remind, int) and 0 < remind <= 1440:
+        out["remind_before"] = remind
+    return out
+
+
+async def edit_draft(ctx: Ctx, index: int | None, values: dict | None) -> dict:
+    """«Исправить» вместо «Нет»: человек поправил черновик в форме — записываем так, как он ввёл."""
+    pending, fixed = ctx.conv.pending, form_values(values)
+    if pending is None or fixed is None or not isinstance(index, int) or index < 0:
+        return reply("clarify", *ctx.say("clarify_generic"), buttons=[CANCEL])
+    if pending.kind == "ai_confirm":
+        return await ai_actions.execute_edited(ctx, index, fixed)
+    exact = {"date_kind": "exact" if fixed["date"] else "none", "ambiguous": False, "doubt": [], "confirmed": True,
+             "part_word": None, "busy_clash": False}
+    if pending.kind == "confirm" and index == 0:
+        ctx.conv.pending = None
+        draft = {k: v for k, v in pending.draft.items() if k not in ("remind_before",)}
+        if pending.draft.get("type") == fixed["type"] and pending.draft.get("remind_before") is not None:
+            draft["remind_before"] = pending.draft["remind_before"]
+        return await process_draft(ctx, {**draft, **fixed, **exact})
+    if pending.kind in ("multi", "multi_fix") and index < len(pending.draft["drafts"]):
+        drafts = list(pending.draft["drafts"])
+        drafts[index] = {**drafts[index], **fixed, **exact}
+        ctx.conv.pending = Pending("multi", {**pending.draft, "drafts": drafts})
+        text, speech = ctx.say("multi_confirm", {"count": len(drafts)})
+        return reply("confirm", text, speech, awaiting=True, records=[draft_record(d, ["draft"]) for d in drafts],
+                     buttons=[button_action("Да, записать все", "confirm_yes"), button_action("Исправить", "edit_draft", style="secondary")])
+    return reply("clarify", *ctx.say("clarify_generic"), buttons=[CANCEL])
+
+
 async def handle_action(ctx: Ctx, action_id: str, record_id: int | None) -> dict | None:
     """Ответ на нажатие. None — действие не наше или доп выключен: разбираем текст."""
     pending = ctx.conv.pending
@@ -3226,7 +3275,8 @@ async def respond(ctx: Ctx, payload: ChatRequest) -> dict:
     choices, ctx.conv.choices = ctx.conv.choices, None
     await series.extend(ctx.db, ctx.owner, ctx.today)
     if payload.action:
-        answer = await handle_action(ctx, payload.action.id, payload.action.record_id)
+        answer = (await edit_draft(ctx, payload.action.index, payload.action.values) if payload.action.id == "edit_draft"
+                  else await handle_action(ctx, payload.action.id, payload.action.record_id))
         if answer:
             return answer
 
@@ -3260,7 +3310,7 @@ async def respond(ctx: Ctx, payload: ChatRequest) -> dict:
         if YES_RE.match(raw):
             return await ai_actions.execute(ctx)
         return reply("clarify", *ctx.say("yes_no_again"), awaiting=True,
-                     buttons=[button_action("Да, верно", "confirm_yes"), button_action("Нет", "cancel", style="secondary")])
+                     buttons=[button_action("Да, верно", "confirm_yes"), ai_actions.no_button(pending.draft)])
     if cancellation := whole_series_cancellation(raw, ctx.now):
         return await ai_actions.propose(ctx, cancellation)
     if cancelled := await cancel_named_occurrence(ctx, raw):
@@ -3416,7 +3466,7 @@ async def respond(ctx: Ctx, payload: ChatRequest) -> dict:
                 return reply("confirm", text, speech, awaiting=True,
                              records=[draft_record(d, ["draft"]) for d in drafts],
                              buttons=[button_action("Да, записать все", "confirm_yes"),
-                                      button_action("Нет", "multi_no", style="secondary")])
+                                      button_action("Исправить", "edit_draft", style="secondary")])
         ctx.conv.pending = pending
         return reply("clarify", *ctx.say("confirm_no"), awaiting=True,
                      records=[draft_record(d, ["draft"]) for d in drafts], buttons=[CANCEL])
@@ -3554,9 +3604,8 @@ async def respond(ctx: Ctx, payload: ChatRequest) -> dict:
     if p.intent == "unknown" and asked and asked.kind in ("multi", "confirm", "bulk_delete"):
         ctx.conv.pending = asked
         text, speech = ctx.say("yes_no_again")
-        no = "confirm_no" if asked.kind == "confirm" else "cancel"
-        return reply("clarify", text, speech, awaiting=True, buttons=[
-            button_action("Да", "confirm_yes"), button_action("Нет", no, style="secondary")])
+        no = button_action("Нет", "cancel", style="secondary") if asked.kind == "bulk_delete" else button_action("Исправить", "edit_draft", style="secondary")
+        return reply("clarify", text, speech, awaiting=True, buttons=[button_action("Да", "confirm_yes"), no])
 
     if (feature := features.BY_INTENT.get(p.intent)) and not features.on(feature):
         p.intent = "unknown"  # фича выключена на сервере (STEVENS_FEATURES) — как будто её нет
