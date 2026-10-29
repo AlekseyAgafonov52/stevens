@@ -52,13 +52,49 @@ _COUNT_RE = re.compile(r"\b(\d+)\s+([А-Яа-яЁё]+)")
 _PREV_WORD_RE = re.compile(r"([А-Яа-яЁё]+)\s*$")
  
 _cache: OrderedDict[str, bytes] = OrderedDict()
+# Одно соединение на все фразы: без него каждая платит за TLS, а первая не успевает за 2–4 с
+_client = httpx.AsyncClient(timeout=10)
 _blocked_until = 0.0
  
  
 class Speech(BaseModel):
     model_config = ConfigDict(extra="forbid")
     text: str = Field(min_length=1, max_length=TTS_MAX_CHARS)
- 
+
+_DAYS = {"пн": "понедельник", "вт": "вторник", "ср": "среду", "чт": "четверг", "пт": "пятницу", "сб": "субботу", "вс": "воскресенье"}
+_MONTHS = {"янв": "января", "фев": "февраля", "мар": "марта", "апр": "апреля", "ма": "мая", "июн": "июня",
+           "июл": "июля", "авг": "августа", "сен": "сентября", "окт": "октября", "ноя": "ноября", "дек": "декабря"}
+_ORD = ["перв", "втор", "трет", "четвёрт", "пят", "шест", "седьм", "восьм", "девят", "десят", "одиннадцат", "двенадцат",
+        "тринадцат", "четырнадцат", "пятнадцат", "шестнадцат", "семнадцат", "восемнадцат", "девятнадцат", "двадцат"]
+_DAY_RE = re.compile(r"(?<![а-яё])(пн|вт|ср|чт|пт|сб|вс)(?=,?\s*\d)", re.I)
+# «на 1 ноя», «на вс, 1 ноя» — винительный («на первое»); иначе родительный («встреча первого ноября», «с первого»)
+_DATE_RE = re.compile(
+    r"(?:(?<![а-яё])(на|(?:понедельник|вторник|среду|четверг|пятницу|субботу|воскресенье),)\s+)?(?<![\d.:])(\d{1,2})\s+"
+    r"(январ[яь]|феврал[яь]|марта?|апрел[яь]|ма[яй]|июн[яь]|июл[яь]|августа?|сентябр[яь]|октябр[яь]|ноябр[яь]|декабр[яь]|"
+    r"янв|фев|мар|апр|июн|июл|авг|сен|окт|ноя|дек)(?:\.(?=\s+[а-яё]))?(?![а-яё])", re.I)
+
+
+def _ordinal(n: int, accusative: bool) -> str:
+    tens, unit = ("", n) if n <= 20 else (("двадцать ", n - 20) if n < 30 else ("тридцать ", n - 30))
+    if unit == 0:
+        return "тридцатое" if accusative else "тридцатого"
+    stem = _ORD[unit - 1]
+    if stem == "трет":
+        return tens + ("третье" if accusative else "третьего")
+    return tens + stem + ("ое" if accusative else "ого")
+
+
+def _date(match: re.Match) -> str:
+    before, day, month = match.group(1), int(match.group(2)), match.group(3).lower()
+    if not 1 <= day <= 31:
+        return match.group(0)
+    full = _MONTHS["ма" if month in ("мая", "май") else month[:3]]
+    return (f"{before} " if before else "") + f"{_ordinal(day, bool(before))} {full}"
+
+
+def expand_dates(text: str) -> str:
+    """Даты для голоса: «на вс, 1 ноя» → «на воскресенье, первое ноября». Цифрой Яндекс читает «один ноября»."""
+    return _DATE_RE.sub(_date, _DAY_RE.sub(lambda m: _DAYS[m.group(1).lower()], text))
  
 def agree_numbers(text: str) -> str:
     """«1 дело» → «одно дело», «2 встречи» → «две встречи», «Нашёл 1 запись» → «Нашёл одну запись».
@@ -124,7 +160,7 @@ def _fail(reason: str) -> JSONResponse:
 async def synthesize(body: Speech, owner: Owner = Depends(get_owner)):
     if not features.on("tts"):
         return JSONResponse(status_code=503, content={"error": "tts_unavailable"})
-    text = stress_marks(agree_numbers(" ".join(body.text.split())))
+    text = stress_marks(agree_numbers(expand_dates(" ".join(body.text.split()))))
     if not text:
         return JSONResponse(status_code=422, content={"error": "invalid_request"})
  
@@ -146,8 +182,7 @@ async def synthesize(body: Speech, owner: Owner = Depends(get_owner)):
     }
     headers = {"Authorization": f"Api-Key {os.getenv('YANDEX_API_KEY')}"}
     try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            response = await client.post(TTS_URL, data=form, headers=headers)
+        response = await _client.post(TTS_URL, data=form, headers=headers)
         response.raise_for_status()
     except httpx.HTTPStatusError as error:
         # Код ответа отличает «нет прав, не тот каталог или кончилась квота» (4xx)
