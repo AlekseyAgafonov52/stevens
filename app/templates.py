@@ -644,6 +644,18 @@ TEMPLATES: dict[str, tuple[list[str], str | None]] = {
 
 COUNT_RE = re.compile(r"\{count:([^}]+)\}")
 VAR_RE = re.compile(r"\{(\w+)\}")
+# После глагола число стоит в винительном: «Удалил 1 встречу», а не «1 встреча».
+# Меняется только форма для единицы у слов на -а/-я; «дело», «напоминание», «запись» не меняются.
+ACCUSATIVE_BEFORE_RE = re.compile(
+    r"(?:удалил|убрал|отметил|перен[её]с|записал|записать|удалить|нашёл|нашел|вернул)(?:\s+выполненн\w*)?\s*$", re.I)
+
+
+def _accusative_one(word: str) -> str:
+    if word.endswith("а"):
+        return word[:-1] + "у"
+    if word.endswith("я"):
+        return word[:-1] + "ю"
+    return word
 
 
 def _fill(template: str, values: dict, count_forms: tuple[str, str, str] | None) -> str:
@@ -651,8 +663,11 @@ def _fill(template: str, values: dict, count_forms: tuple[str, str, str] | None)
         spec = match.group(1)
         # <forms> или «дело|дела|дел» в list_some — подставляются формы типа
         forms = count_forms if count_forms and spec in ("<forms>", "дело|дела|дел") else tuple(spec.split("|"))
+        if ACCUSATIVE_BEFORE_RE.search(template[:match.start()]):
+            forms = (_accusative_one(forms[0]), *forms[1:])
         return plural(int(values.get("count", 0)), *forms)
-
+    
+    
     def var(match: re.Match) -> str:
         name = match.group(1)
         value = values.get(name.lower())
