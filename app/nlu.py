@@ -1288,6 +1288,10 @@ def needs_llm_review(result: Parse) -> bool:
 
 def parse(raw: str, now: datetime) -> Parse:
     text, typos = fix_typos(strip_lead(" ".join(raw.strip().split())))
+    # «Составь встречу ...» is a colloquial creation command, not part of
+    # the event title. Do not extend this alias to «составь список/план».
+    text = re.sub(r"^(?:составь|составьте)\s+(?=(?:мне\s+)?(?:встреч[уа]|созвон)\b)",
+                  "поставь ", text, flags=I)
     # A self-correction inside a fresh create command is still a creation,
     # not a reply to a previous question. Keep the last time mentioned.
     # Example: «напомни завтра не в 10, а в 11 позвонить маме».
@@ -1803,10 +1807,48 @@ MULTI_SPLIT_RE = re.compile(
 )
 
 
+def _coordinated_meetings(text: str, now: datetime) -> list[Parse] | None:
+    """Resolve an omitted shared subject in two *explicitly timed* meetings.
+
+    «Встреча завтра с репетитором по математике в 14 и по физике в 17»
+    = «Встреча ... с репетитором по математике в 14» +
+      «Встреча ... с репетитором по физике в 17».
+
+    Don't infer multiple events from a plain «математика и физика» without
+    two independently specified times: that could be one combined lesson.
+    """
+    for conjunction in re.finditer(r"\s+(?:и|а\s+также)\s+(?=(?:по|с|со)\s+\S)", text, I):
+        left = text[:conjunction.start()].strip(" ,.;")
+        right = text[conjunction.end():].strip(" ,.;")
+        first = parse(left, now)
+        if first.intent != "create" or first.type != "meeting" or not first.text or not first.time:
+            continue
+        # Identify the repeated grammatical complement, not a random 'и'.
+        prep = re.match(r"^(по|с|со)\s+", right, I)
+        if not prep:
+            continue
+        preposition = prep.group(1).lower()
+        base = re.match(r"^(.+?)\s+по\s+[^,;]+$", first.text, I) if preposition == "по" else re.match(
+            r"^(.+?)\s+(?:с|со)\s+[^,;]+$", first.text, I)
+        if not base:
+            continue
+        # All other fields come from the existing parser; only the omitted
+        # shared meeting subject is expanded. Never guess the second hour.
+        second = parse(f"поставь {base.group(1)} {right}", now)
+        if second.intent != "create" or second.type != "meeting" or not second.text or not second.time:
+            continue
+        if not second.date and first.date:
+            second.date, second.date_kind = first.date, first.date_kind
+        return [first, second]
+    return None
+
+
 def parse_many(raw: str, now: datetime) -> list[Parse] | None:
     """«Завтра в 10 созвон с Иваном, потом отправить договор Маше» → два создания.
     None — фраза про одно дело. Дата без явного дня берётся из предыдущей части."""
     text = strip_lead(" ".join(raw.strip().split()))
+    if coordinated := _coordinated_meetings(text, now):
+        return coordinated
     parts = [part.strip(" ,.") for part in MULTI_SPLIT_RE.split(text) if part and part.strip(" ,.")]
     if len(parts) < 2 or len(parts) > 5:
         return None

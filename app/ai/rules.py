@@ -57,7 +57,14 @@ def parse(request: Input) -> Result:
         if result.intent == "create":
             many = nlu.parse_many(request.text, request.now)
             if many and len(many) > 1:
-                result.items = [item for p in many for item in from_parse(p, request.now.date()).items]
+                # Re-evaluate confidence on the individual events. A single-item
+                # parse of "... в 14 и ... в 17" appears uncertain because
+                # it retains the second time inside the title. After a safe
+                # split, that uncertainty no longer applies.
+                pieces = [from_parse(item, request.now.date()) for item in many]
+                result.items = [item for piece in pieces for item in piece.items]
+                result.confidence = min(piece.confidence for piece in pieces)
+                result.doubts = [doubt for piece in pieces for doubt in piece.doubts]
                 result._rule_parses = many
         return refine(request, result)
     except ValidationError:
