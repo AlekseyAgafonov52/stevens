@@ -7,6 +7,10 @@
 
 /* ── Шапка (02, 2.1) ────────────────────────────────── */
 .header {
+  /* sticky: iOS 26 (Safari и PWA) иначе размывает зону под Dynamic Island */
+  position: sticky;
+  top: 0;
+  z-index: 35;
   height: var(--header-h);
   flex-shrink: 0;
   background: var(--c-header);
