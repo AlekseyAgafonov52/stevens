@@ -26,6 +26,7 @@ from app.schemas import ChatPayload, ChatRequest
 from app.ai.schema import Awaiting as AIAwaiting, Input as AIInput, Result as AIResult
 from app.logic import ai_actions, ai_replies
 from app.ai.adapter import query_context, supported as ai_supported, to_parses
+from app.ai.contextual import whole_series_cancellation
 from app.ai.provider import InvalidResponse, Unavailable
 from app.ai.understanding import understand
 from app.ai.search import rank as rank_records
@@ -353,9 +354,7 @@ async def process_draft(ctx: Ctx, draft: dict) -> dict:
     if not draft.get("text") and kind == "busy":
         return clarify(ctx, "clarify_busy_what", draft)
     if not draft.get("text"):
-        ctx.conv.pending = None
-        text, speech = ctx.say("clarify_generic")
-        return reply("clarify", text, speech, awaiting=True, buttons=[CANCEL])
+        return clarify(ctx, "clarify_generic", draft)
     # An adapter/LLM may omit has_subject even though "Встреча с Машей"
     # already contains an explicit participant. Never ask "С кем встреча?"
     # when the title answers that question.
@@ -1079,6 +1078,12 @@ def merge_reply(pending: Pending, raw: str, now: datetime) -> dict | None:
     repeat_spans = repeat.spans if repeat else []
     rest = " ".join(nlu._cut(raw, info.spans + time_spans + repeat_spans).split()).strip(" ,.!?")
     changed = False
+    if not draft.get("text"):
+        parsed = nlu.parse(raw, now)
+        if answers_subject(pending, raw, parsed):
+            draft["text"] = parsed.text
+            draft["has_subject"] = parsed.has_subject
+            changed = True
     if repeat:
         until = repeat.until.isoformat() if repeat.until else (
             draft.get("repeat", {}).get("until") or draft.get("repeat_until"))
@@ -1770,7 +1775,7 @@ async def answer_delete(ctx: Ctx, p: nlu.Parse) -> dict:
         return reply("clarify", text, speech, awaiting=True, buttons=[CANCEL])
     found = clear_matches(await find(ctx, p), p)
     if p.time:
-        found = [r for r in found if r.time == p.time] or found
+        found = [r for r in found if r.time == p.time]
     if not found:
         text, speech = ctx.say("found_none")
         return reply("found", text, speech, total=0)
@@ -1779,14 +1784,11 @@ async def answer_delete(ctx: Ctx, p: nlu.Parse) -> dict:
     # Process explicit "всё/вообще" before ambiguous matching of separate days.
     if one := only_series(ctx, candidates):
         return await delete_record(ctx, one, p)
-    # Несколько встреч «с Иваном» на разные дни — нельзя удалять последнюю по фокусу.
-    if not (p.date or p.time or p.ref) and len({(r.date, r.time) for r in candidates}) > 1:
-        return which_one(ctx, candidates, "delete")
-    if one := only_series(ctx, candidates):
-        return await delete_record(ctx, one, p)
-    if one := single(ctx, candidates):
-        return await delete_record(ctx, one, p)
-    return which_one(ctx, found, "delete")
+    # An explicit search must not silently prefer the last discussed record.
+    # Pronouns/ordinals are handled above; one recurring series is handled separately.
+    if len(candidates) == 1:
+        return await delete_record(ctx, candidates[0], p)
+    return which_one(ctx, candidates, "delete")
 
 
 def only_series(ctx: Ctx, rows: list[Record]) -> Record | None:
@@ -2127,7 +2129,10 @@ async def answer_move(ctx: Ctx, p: nlu.Parse) -> dict:
         text, speech = ctx.say("edit_ask", {"text": one.text})
         return reply("clarify", text, speech, records=[one.to_contract()], awaiting=True, buttons=[CANCEL])
     if not found and p.keywords:
-        found = await find(ctx, nlu.Parse(keywords=p.keywords, required=p.required, filter_type=p.filter_type))
+        found = await find(ctx, nlu.Parse(keywords=p.keywords, required=p.required,
+                                        filter_type=p.filter_type, date=p.source))
+    if p.source:
+        found = [r for r in found if r.date == p.source.isoformat()]
     if not found:
         if p.ref:
             text, speech = ctx.say("clarify_generic")
@@ -2738,6 +2743,14 @@ async def undo_series(ctx: Ctx, record: Record) -> dict:
 INFINITIVE_RE = re.compile(r"\b[а-яё]{3,}(?:ть|ться|тись|чь)\b", re.I)
 
 
+def answers_subject(pending: Pending, raw: str, p: nlu.Parse) -> bool:
+    """A title supplied after an empty-title prompt belongs to that draft."""
+    return bool(pending.kind == "draft" and not pending.draft.get("text")
+                and p.intent == "create" and p.text and not p.only_when
+                and not ACK_RE.match(raw.strip()) and not QUESTION_RE.match(raw.strip())
+                and not nlu.CREATE_VERB_RE.search(raw.strip().lower()))
+
+
 def answers_time(pending: Pending, raw: str, now: datetime, p: nlu.Parse | None = None) -> bool:
     """Ждём время, а в ответе оно есть без глагола «запиши/напомни»: «не слушай 13:00» — это ответ, мусор отбросим."""
     if pending.kind == "multi_ask":
@@ -3248,6 +3261,8 @@ async def respond(ctx: Ctx, payload: ChatRequest) -> dict:
             return await ai_actions.execute(ctx)
         return reply("clarify", *ctx.say("yes_no_again"), awaiting=True,
                      buttons=[button_action("Да, верно", "confirm_yes"), button_action("Нет", "cancel", style="secondary")])
+    if cancellation := whole_series_cancellation(raw, ctx.now):
+        return await ai_actions.propose(ctx, cancellation)
     if cancelled := await cancel_named_occurrence(ctx, raw):
         return cancelled
     if pending is None and not choices and (corrected := await correct_series_until(ctx, raw)):
@@ -3448,7 +3463,8 @@ async def respond(ctx: Ctx, payload: ChatRequest) -> dict:
         if answer := ask_again(ctx, pending):
             return answer
     if pending and pending.kind in ("draft", "new_time", "confirm_no", "multi_ask") and (
-            not is_new_request(p, raw) or answers_time(pending, raw, ctx.now, p)):
+            not is_new_request(p, raw) or answers_time(pending, raw, ctx.now, p)
+            or answers_subject(pending, raw, p)):
         if pending.kind == "multi_ask":
             answer = await answer_multi_ask(ctx, pending, raw)
         else:

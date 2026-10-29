@@ -1,8 +1,26 @@
 """Contract JSON for contextual replies and named lesson cancellations."""
 import re
+from datetime import datetime
 
 from app import nlu
 from app.ai.schema import Input, Period, Query, Reply, Result, Target
+
+
+def whole_series_cancellation(raw: str, now: datetime) -> Result | None:
+    """An explicit permanent cancellation names a series, not its focused day."""
+    match = re.fullmatch(
+        r"(?P<subject>.+?)\s+больше\s+не\s+будет\s*[,;.!—–-]?\s*"
+        r"(?:убери(?:те)?|удали(?:те)?|отмени(?:те)?|вычеркни(?:те)?)\s+"
+        r"вс[её]\s+(?:занятия|уроки|встречи|напоминания|задачи)[.!?]*", raw.strip(), re.I)
+    if not match:
+        return None
+    subject = match["subject"]
+    time, _, _, info = nlu.parse_when(subject, now)
+    keys = nlu.keywords(subject)
+    if not keys or time or info.date or info.period:
+        return None  # A dated exception must not silently cancel an entire series.
+    return Result(intent="delete", layer="rules", confidence=0.99,
+                  target=Target(ref="query", query=Query(keywords=keys), series="all"))
 
 
 def refine(request: Input, result: Result) -> Result:
