@@ -44,6 +44,8 @@ REMIND_TAIL = re.compile(
     r"утром|вечером|дн[её]м|(?:в|во)\s+\S+))*\s*$", I,
 )
 CORRECTION = re.compile(r"\bа\s+нет\b|\bне\s+в\s+\S+,?\s+а\s+в\b|\bнет,?\s+(?:в|во|на)\s", I)
+# «… по понедельникам с 19 до 21 и по воскресеньям с 12 до 13» — второй повтор со своим временем
+WEEKLY_RIGHT = re.compile(r"^(?:по|каждый|каждую|каждое|в|во)\s+(?:понедельник|вторник|сред|четверг|пятниц|суббот|воскресень|будн|выходн)", I)
 # Своя команда во второй части: «…, а потом запиши задачу …» — тип не наследуем
 OWN_COMMAND = re.compile(r"^(?:напомни(?:ть|те)?|запиши|поставь|назначь|создай|добавь|запланируй|задач[аи]|встреч[ау]|созвон)\b", I)
 # Часть без своего названия: «напомни завтра в 9 и в 18 выпить таблетку» — у первой осталось только «Напомни»
@@ -67,6 +69,12 @@ def _has_clock(text: str) -> bool:
     return bool(CLOCK.search(text))
 
 
+def _has_any_time(text: str) -> bool:
+    """Час или интервал «с 19 до 21»."""
+    from app import nlu
+    return _has_clock(text) or nlu.parse_interval(_normalized_hours(text)) is not None
+
+
 def _has_time_hint(text: str) -> bool:
     return _has_clock(text) or bool(DAYPART.search(text))
 
@@ -81,6 +89,8 @@ def _independent_right(left: str, right: str, *, comma: bool) -> bool:
         return False
     if REMIND_TAIL.match(right.rstrip(" .!")):
         return False
+    if WEEKLY_RIGHT.match(right) and _has_any_time(left) and _has_any_time(right):
+        return True
     if ACTION_START.match(right):
         # A second explicit action is independent, except a generic object
         # without a time following 'и' ("купить молоко и хлеб").
@@ -156,13 +166,18 @@ def decompose(text: str, now: datetime):
             if not parsed or parsed[-1].type != "meeting":
                 return None
             normalized = "встреча " + normalized
+        # «Поставь занятость по понедельникам … и по воскресеньям …» — вторая часть тоже занятость
+        if index > 0 and parsed and parsed[0].type == "busy" and not OWN_COMMAND.match(normalized):
+            normalized = "занятость " + normalized
         if index == 0 and noun.startswith("встреч") and not re.search(nlu.MEETING_WORD_RE, normalized, I):
             normalized = "встреча " + normalized
         item = nlu.parse(normalized, now)
-        if item.intent != "create" or not item.text:
+        if item.intent != "create" or (not item.text and item.type != "busy"):
             item = nlu.parse("запиши " + normalized, now)
-        if item.intent != "create" or not item.text:
+        if item.intent != "create" or (not item.text and item.type != "busy"):
             return None
+        if item.type == "busy" and not item.text:
+            item.text = "Занятость"  # сказали просто «занятость» — так и называем
         # A shortened second clause inherits the command kind unless it
         # explicitly introduces a different kind of event: «напомни купить молоко и позвонить маме» — два напоминания
         if index and parsed and parsed[0].type == "reminder" and item.type == "task" and not OWN_COMMAND.match(normalized):

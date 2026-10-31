@@ -720,8 +720,8 @@ async def answer_multi_ask(ctx: Ctx, pending: Pending, raw: str) -> dict | None:
 async def answer_many(ctx: Ctx, parses: list[nlu.Parse]) -> dict | None:
     """Несколько дел: показываем все карточки и спрашиваем «Записать все?». None — не вышло, разбираем как одно."""
     drafts = [draft_from(p, ctx.today) for p in parses]
-    if any(d.get("repeat") for d in drafts):
-        return None  # повтор записываем по одному
+    if any(d.get("repeat") for d in drafts) and not features.on("f15"):
+        return None  # повторы выключены — записываем по одному
     for d in drafts:
         d["has_subject"] = True  # «созвон и напомни…»: в списке дел «Созвон» без «с кем» — уже название, не переспрашиваем
     if not all(ready_draft(ctx, d) for d in drafts):
@@ -739,6 +739,11 @@ async def save_many(ctx: Ctx, drafts: list[dict]) -> dict:
     ctx.conv.pending = None
     saved = []
     for draft in drafts:
+        if draft.get("repeat"):
+            # «По понедельникам с 19 до 21 и по воскресеньям с 12 до 13»: каждое — своя серия, в ответе ближайший день
+            _, records = await series.create(ctx.db, ctx.owner, draft, ctx.today, commit=False)
+            saved.extend(records[:1])
+            continue
         record = ctx.owner.new_record(
             type=TaskType(draft["type"]), text=draft["text"][:300], date=draft.get("date"), time=draft.get("time"),
             date_kind=DateKind(draft["date_kind"]),

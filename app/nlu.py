@@ -304,6 +304,8 @@ def minutes_of(hhmm: str) -> int:
 
 def parse_interval(text: str) -> tuple[str, str, bool, tuple[int, int]] | None:
     """«с 9 до 18» → начало, конец, «утро или вечер — неясно» и кусок фразы. Не интервал — None."""
+    # «с 12 до часу», «с часа до трёх» — час дня. Та же длина строки: куски фразы не съезжают
+    text = re.sub(r"\b((?:с|со|до|от)\s+)час([уа])\b", lambda m: m.group(1) + "1   ", text, flags=I)
     for regex in INTERVAL_RES:
         m = regex.search(text)
         if not m:
@@ -328,7 +330,10 @@ def parse_interval(text: str) -> tuple[str, str, bool, tuple[int, int]] | None:
         start, end = f"{sh:02d}:{sm:02d}", f"{eh:02d}:{em:02d}"
         if start == end:
             continue
-        return start, end, ambiguous, m.span()
+        stop = m.end()
+        while stop < len(text) and text[stop] == " " and text[stop - 1] in "1 " and stop - m.end() < 3:
+            stop += 1  # хвост от «часу» тоже часть интервала
+        return start, end, ambiguous, (m.start(), stop)
     return None
 
 
