@@ -1953,9 +1953,10 @@ def parse_many(raw: str, now: datetime) -> list[Parse] | None:
     """«Завтра в 10 созвон с Иваном, потом отправить договор Маше» → два создания.
     None — фраза про одно дело. Дата без явного дня берётся из предыдущей части."""
     text = strip_lead(" ".join(raw.strip().split()))
-    if coordinated := _coordinated_meetings(text, now):
+    from app.ai.decomposition import decompose, requested_count
+    # «Запиши две встречи: с Иваном в 10 и с Петей в 14» — сначала разбор с заголовком, иначе он попадёт в названия
+    if not requested_count(text) and (coordinated := _coordinated_meetings(text, now)):
         return coordinated
-    from app.ai.decomposition import decompose
     if structured := decompose(text, now):
         return structured
     parts = [part.strip(" ,.") for part in MULTI_SPLIT_RE.split(text) if part and part.strip(" ,.")]

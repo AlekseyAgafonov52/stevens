@@ -27,8 +27,12 @@ ACTION_START = re.compile(
     r"провести|заказать|обсудить|отметить)\b", I,
 )
 STARTS_PARTICIPANT = re.compile(r"^(?:с|со)\s+[А-ЯЁ][а-яё-]+\b")
+# «…, а в 12 с Петей» — та же встреча с другим человеком, время впереди
+TIMED_PARTICIPANT = re.compile(r"^(?:(?:в|во)\s+\S+(?:\s+(?:утра|дня|вечера|ночи))?\s+)(?:с|со)\s+[А-ЯЁ][а-яё-]+\b")
 COUNT_HEADER = re.compile(
     r"^\s*(?:поставь|запиши|создай|запланируй|назначь|добавь|составь)\s+"
+    # «Запиши на понедельник две встречи: …» — день может стоять и до числа
+    r"(?:(?:на|в|во)\s+[^:;\d]{2,30}?\s+)?"
     r"(?P<number>дв[ае]|три|четыре|пять|\d+)\s+"
     r"(?P<noun>занят(?:ия|ий)|встреч[и]|дел[а]|задач[и]|напоминани[яй])\b"
     r"(?P<when>[^:;]{0,90}):\s*(?P<body>.+)$", I,
@@ -40,7 +44,12 @@ REMIND_TAIL = re.compile(
     r"утром|вечером|дн[её]м|(?:в|во)\s+\S+))*\s*$", I,
 )
 CORRECTION = re.compile(r"\bа\s+нет\b|\bне\s+в\s+\S+,?\s+а\s+в\b|\bнет,?\s+(?:в|во|на)\s", I)
-SEPARATOR = re.compile(r",\s*(?:а\s+)?|\s+(?:и|а\s+также)\s+", I)
+# Своя команда во второй части: «…, а потом запиши задачу …» — тип не наследуем
+OWN_COMMAND = re.compile(r"^(?:напомни(?:ть|те)?|запиши|поставь|назначь|создай|добавь|запланируй|задач[аи]|встреч[ау]|созвон)\b", I)
+# Часть без своего названия: «напомни завтра в 9 и в 18 выпить таблетку» — у первой осталось только «Напомни»
+COMMAND_TITLES = {"напомни", "напомнить", "напомните", "запиши", "поставь", "назначь", "создай", "добавь", "запланируй"}
+# Запятая, «и», «а также» и конец предложения: «Завтра в 10 созвон. В 12 обед.»
+SEPARATOR = re.compile(r",\s*(?:а\s+)?|\s+(?:и|а\s+также)\s+|[.!?;]\s+", I)
 WORD_HOURS = {
     "час": "1", "два": "2", "две": "2", "три": "3", "четыре": "4",
     "пять": "5", "шесть": "6", "семь": "7", "восемь": "8",
@@ -66,6 +75,9 @@ def _independent_right(left: str, right: str, *, comma: bool) -> bool:
     """A conjunction can also join names or shopping items: refuse those."""
     right = right.lstrip(" ,;:.—-")
     if not right:
+        return False
+    # «в 12, а нет, в 13» — поправка того же дела, а не второе
+    if re.match(r"^нет\b", right, I):
         return False
     if REMIND_TAIL.match(right.rstrip(" .!")):
         return False
@@ -140,7 +152,7 @@ def decompose(text: str, now: datetime):
     parsed = []
     for index, clause in enumerate(parts):
         normalized = _normalized_hours(clause)
-        if index > 0 and STARTS_PARTICIPANT.match(normalized):
+        if index > 0 and (STARTS_PARTICIPANT.match(normalized) or TIMED_PARTICIPANT.match(normalized)):
             if not parsed or parsed[-1].type != "meeting":
                 return None
             normalized = "встреча " + normalized
@@ -152,8 +164,8 @@ def decompose(text: str, now: datetime):
         if item.intent != "create" or not item.text:
             return None
         # A shortened second clause inherits the command kind unless it
-        # explicitly introduces a different kind of event.
-        if index and parsed and parsed[0].type == "reminder" and item.type == "task" and not ACTION_START.match(normalized):
+        # explicitly introduces a different kind of event: «напомни купить молоко и позвонить маме» — два напоминания
+        if index and parsed and parsed[0].type == "reminder" and item.type == "task" and not OWN_COMMAND.match(normalized):
             item.type = "reminder"
         if not item.date:
             item.date = parent_date or (parsed[-1].date if parsed else None)
@@ -163,7 +175,7 @@ def decompose(text: str, now: datetime):
         # remain a meeting after its omitted verb is restored.
         if item.text.lower() in ("это", "и", "а", "встреча", "созвон"):
             return None
-        if index > 0 and parts[index].lstrip().lower().startswith(("с ", "со ")) and item.type != "meeting":
+        if index > 0 and (parts[index].lstrip().lower().startswith(("с ", "со ")) or TIMED_PARTICIPANT.match(normalized)) and item.type != "meeting":
             return None
         if (part := DAYPART.search(clause)) and item.time is None:
             # Existing Stevens convention: morning=09:00, day=13:00,
@@ -174,6 +186,13 @@ def decompose(text: str, now: datetime):
             item.time_guess = "day_part"
             item.doubt.append({"why": "unclear"})
         parsed.append(item)
+    # Общее дело на два времени: название берём у следующей части
+    for index, item in enumerate(parsed):
+        if (item.text or "").lower() in COMMAND_TITLES:
+            donor = next((later for later in parsed[index + 1:] if (later.text or "").lower() not in COMMAND_TITLES), None)
+            if donor is None:
+                return None
+            item.text = donor.text
     if count is not None and count != len(parsed):
         return None
     return parsed

@@ -257,3 +257,35 @@ def test_model_cannot_change_explicit_reminder_to_task(modules):
     ])
     with pytest.raises(provider.InvalidResponse, match="multi_action_type_changed"):
         validate_candidate(request, candidate)
+
+
+@pytest.mark.parametrize("phrase, expected", [
+    # Поправка того же дела — одно дело, последнее время
+    ("Поставь встречу с Машей на завтра в 12, а нет, в 13",
+     [("meeting", "Встреча с Машей", date(2026, 10, 22), "13:00")]),
+    # Одно дело на два времени: название общее
+    ("Напомни завтра в 9 и в 18 выпить таблетку",
+     [("reminder", "Выпить таблетку", date(2026, 10, 22), "09:00"),
+      ("reminder", "Выпить таблетку", date(2026, 10, 22), "18:00")]),
+    # «Напомни … и …» — оба напоминания
+    ("Напомни завтра купить молоко и позвонить маме",
+     [("reminder", "Купить молоко", date(2026, 10, 22), None),
+      ("reminder", "Позвонить маме", date(2026, 10, 22), None)]),
+    # День до числа в заголовке не попадает в названия
+    ("Запиши на понедельник две встречи: с Иваном в 10 и с Петей в 14",
+     [("meeting", "Встреча с Иваном", date(2026, 10, 26), "10:00"),
+      ("meeting", "Встреча с Петей", date(2026, 10, 26), "14:00")]),
+    # «а в 12 с Петей» — тоже встреча
+    ("Завтра в 10 встреча с Иваном, а в 12 с Петей",
+     [("meeting", "Встреча с Иваном", date(2026, 10, 22), "10:00"),
+      ("meeting", "Встреча с Петей", date(2026, 10, 22), "12:00")]),
+    # Дела отдельными предложениями
+    ("Завтра в 10 созвон с Иваном. В 12 обед с Петей.",
+     [("meeting", "Созвон с Иваном", date(2026, 10, 22), "10:00"),
+      ("task", "Обед с Петей", date(2026, 10, 22), "12:00")]),
+])
+def test_split_keeps_titles_types_and_corrections(phrase, expected):
+    pieces = nlu.parse_many(phrase, NOW)
+    got = [(p.type, p.text, p.date, p.time) for p in pieces] if pieces else [
+        (p.type, p.text, p.date, p.time) for p in [nlu.parse(phrase, NOW)]]
+    assert got == expected
